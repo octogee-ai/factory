@@ -17,11 +17,19 @@ function expectJobs(paths: string[], expected: JobKey[]) {
 
 describe("resolveScope — ownership", () => {
   it("checks the consuming chart contracts for the maintained VM bridge image", () => {
-    expectJobs(["infra/vm-bridge/Dockerfile"], ["tests"]);
+    expectJobs(["platform/infra/vm-bridge/Dockerfile"], ["tests"]);
   });
   it("runs broker adapter behavioral coverage for installed extension changes", () => {
-    expect(resolveScope(["infra/gateway/extensions/platform/octogee-broker-tools/catalog.ts"]).jobs).toContain("octogee-broker-tools");
-    expect(UNIT_PACKAGES.find(pkg => pkg.name === "octogee-broker-tools")?.dir).toBe("infra/gateway/extensions/platform/octogee-broker-tools");
+    expect(resolveScope(["platform/infra/gateway/extensions/platform/octogee-broker-tools/catalog.ts"]).jobs).toContain("octogee-broker-tools");
+    expect(UNIT_PACKAGES.find(pkg => pkg.name === "octogee-broker-tools")?.dir).toBe("platform/infra/gateway/extensions/platform/octogee-broker-tools");
+  });
+  it("scopes a product package path like the platform package it overlays", () => {
+    expect(resolveScope(["product/gateway-edge/src/routes/billing.ts"]).jobs)
+      .toEqual(resolveScope(["platform/gateway-edge/src/routes/billing.ts"]).jobs);
+    expect(resolveScope(["product/core/src/index.ts"]).jobs).toEqual(resolveScope(["platform/core/src/index.ts"]).jobs);
+  });
+  it("owns product files outside any platform package", () => {
+    expectJobs(["product/README.md"], ["scripts", "tests"]);
   });
   it("empty diff runs nothing (not everything)", () => {
     const r = resolveScope([]);
@@ -31,21 +39,21 @@ describe("resolveScope — ownership", () => {
 
   it("octogee-api owns its emulator suite too", () => {
     expectJobs(
-      ["octogee-api/src/routes/projects.ts"],
-      // + the octogee-api/ edge pulls tests (byok-provider-registry-parity,
+      ["platform/octogee-api/src/routes/projects.ts"],
+      // + the platform/octogee-api/ edge pulls tests (byok-provider-registry-parity,
       // helm-octogee-api-ingress, model-credential-snapshot-projection specs
-      // all read octogee-api/src source directly).
+      // all read platform/octogee-api/src source directly).
       ["octogee-api", "octogee-api-emulator", "tests"],
     );
   });
 
   it("gateway-edge owns its emulator suite too", () => {
     expectJobs(
-      ["gateway-edge/src/routes/gateway-access.ts"],
-      // + the gateway-edge/src edge pulls octogee-api + its emulator suite
+      ["platform/gateway-edge/src/routes/gateway-access.ts"],
+      // + the platform/gateway-edge/src edge pulls octogee-api + its emulator suite
       // (octogee-api compiles AND mounts gateway-edge route Routers; the
       // octogee-api emulator specs drive createApp() which mounts them) + tests
-      // (byok-provider-registry-parity.spec.ts imports gateway-edge/src/billing
+      // (byok-provider-registry-parity.spec.ts imports platform/gateway-edge/src/billing
       // directly).
       [
         "gateway-edge",
@@ -59,9 +67,9 @@ describe("resolveScope — ownership", () => {
 
   it("scripts owns the user-lifecycle emulator suite", () => {
     expectJobs(
-      ["scripts/ops/fleet.ts"],
-      // + the scripts/ edge pulls tests (internal-routing-guard.spec.ts walks
-      // the entire scripts/ tree; several specs also read specific scripts/
+      ["platform/scripts/ops/fleet.ts"],
+      // + the platform/scripts/ edge pulls tests (internal-routing-guard.spec.ts walks
+      // the entire platform/scripts/ tree; several specs also read specific platform/scripts/
       // root files directly).
       ["scripts", "customer-lifecycle-emulator", "tests"],
     );
@@ -77,66 +85,66 @@ describe("resolveScope — ownership", () => {
   });
 
   it("glm-controller owns its Firestore emulator suite too", () => {
-    // + the glm-controller/ edge pulls tests: firebase-admin-major-alignment.spec.ts
-    // sweeps glm-controller/package.json's firebase-admin range — the exact
+    // + the platform/glm-controller/ edge pulls tests: firebase-admin-major-alignment.spec.ts
+    // sweeps platform/glm-controller/package.json's firebase-admin range — the exact
     // regression (#1521) that spec exists to catch.
     expectJobs(
-      ["glm-controller/src/index.ts"],
+      ["platform/glm-controller/src/index.ts"],
       ["glm-controller", "glm-controller-emulator", "tests"],
     );
   });
 
   it("octogee-chat-tools resolves to its own job (sibling extension dir)", () => {
     expectJobs(
-      ["infra/gateway/extensions/product/octogee-chat-tools/src/tools.ts"],
+      ["platform/infra/gateway/extensions/product/octogee-chat-tools/src/tools.ts"],
       ["octogee-chat-tools"],
     );
   });
 
   it("octogee-access-tools resolves to its own job", () => {
     expectJobs(
-      ["infra/gateway/extensions/platform/octogee-access-tools/access-client.ts"],
+      ["platform/infra/gateway/extensions/platform/octogee-access-tools/access-client.ts"],
       ["octogee-access-tools"],
     );
   });
 
   it("octogee-activity-tools resolves to its behavioral suite", () => {
     expectJobs(
-      ["infra/gateway/extensions/product/octogee-activity-tools/plugin-runtime-native.ts"],
+      ["platform/infra/gateway/extensions/product/octogee-activity-tools/plugin-runtime-native.ts"],
       ["octogee-activity-tools"],
     );
     const unitPackage = UNIT_PACKAGES.find(({ name }) => name === "octogee-activity-tools");
     expect(unitPackage).toEqual({
       name: "octogee-activity-tools",
-      dir: "infra/gateway/extensions/product/octogee-activity-tools",
+      dir: "platform/infra/gateway/extensions/product/octogee-activity-tools",
       typecheck: "npm run typecheck --silent",
     });
   });
 
   it("octogee-connector-tools resolves to its own job and cross-package contracts", () => {
     expectJobs(
-      ["infra/gateway/extensions/product/octogee-connector-tools/connector-client.ts"],
+      ["platform/infra/gateway/extensions/product/octogee-connector-tools/connector-client.ts"],
       ["octogee-connector-tools", "tests"],
     );
   });
 
   it("octogee-web-tools resolves to its own job", () => {
     expectJobs(
-      ["infra/gateway/extensions/product/octogee-web-tools/web-client.ts"],
+      ["platform/infra/gateway/extensions/product/octogee-web-tools/web-client.ts"],
       ["octogee-web-tools"],
     );
   });
 
   it("octogee-board-tools resolves to its own job", () => {
     expectJobs(
-      ["infra/gateway/extensions/product/octogee-board-tools/board-client.ts"],
+      ["platform/infra/gateway/extensions/product/octogee-board-tools/board-client.ts"],
       ["octogee-board-tools"],
     );
   });
 
   it("octogee-project-tools resolves to its own job", () => {
     expectJobs(
-      ["infra/gateway/extensions/product/octogee-project-tools/project-client.ts"],
+      ["platform/infra/gateway/extensions/product/octogee-project-tools/project-client.ts"],
       ["octogee-project-tools"],
     );
   });
@@ -172,14 +180,14 @@ describe("unit package gates", () => {
 });
 
 describe("resolveScope — cross-package hazard edges", () => {
-  it("core/ change runs the core job + every consumer (they compile its re-export shims)", () => {
-    // @octogee/core is consumed (via scripts/lib shims today) by scripts +
+  it("platform/core/ change runs the core job + every consumer (they compile its re-export shims)", () => {
+    // @octogee/core is consumed (via platform/scripts/lib shims today) by scripts +
     // octogee-api + gateway-edge + glm-controller. Editing core must re-run
     // them all, plus the core job itself (which also guards committed dist/)
-    // + tests (tests/specs' readSrc() helpers fall back to core/src directly
-    // for logic that moved out of scripts/lib, e.g. model-credential-materializer).
+    // + tests (tests/specs' readSrc() helpers fall back to platform/core/src directly
+    // for logic that moved out of platform/scripts/lib, e.g. model-credential-materializer).
     expectJobs(
-      ["core/src/workspace-slugs.ts"],
+      ["platform/core/src/workspace-slugs.ts"],
       [
         "core",
         "scripts",
@@ -194,12 +202,12 @@ describe("resolveScope — cross-package hazard edges", () => {
     );
   });
 
-  it("test-helpers/ change runs the test-helpers job + its emulator-spec consumers", () => {
+  it("platform/test-helpers/ change runs the test-helpers job + its emulator-spec consumers", () => {
     // @octogee/test-helpers (firestore-emulator) is consumed by the
     // gateway-edge, octogee-api, and functions emulator specs, + tests (its
     // package.json's firebase-admin range is swept by firebase-admin-major-alignment.spec.ts).
     expectJobs(
-      ["test-helpers/src/firestore-emulator.ts"],
+      ["platform/test-helpers/src/firestore-emulator.ts"],
       [
         "test-helpers",
         "gateway-edge",
@@ -213,47 +221,47 @@ describe("resolveScope — cross-package hazard edges", () => {
     );
   });
 
-  it("scripts/lib change runs scripts + tests — octogee-api/gateway-edge/glm-controller no longer compile it, but tests/specs still imports it directly", () => {
+  it("platform/scripts/lib change runs scripts + tests — octogee-api/gateway-edge/glm-controller no longer compile it, but tests/specs still imports it directly", () => {
     // octogee-api, gateway-edge, and glm-controller all import @octogee/core
-    // directly now, so scripts/lib no longer feeds them. But tests/specs (e.g.
+    // directly now, so platform/scripts/lib no longer feeds them. But tests/specs (e.g.
     // byot-sync-state.spec.ts, model-credential-materializer.spec.ts) imports
-    // scripts/lib source directly, so a scripts/lib edit must also run tests.
+    // platform/scripts/lib source directly, so a platform/scripts/lib edit must also run tests.
     expectJobs(
-      ["scripts/lib/admin-fleet-router.ts"],
+      ["platform/scripts/lib/admin-fleet-router.ts"],
       ["scripts", "customer-lifecycle-emulator", "tests"],
     );
   });
 
   it("third-party license plugin changes run both production web surfaces", () => {
     expectJobs(
-      ["scripts/lib/vite-third-party-licenses.mjs"],
+      ["platform/scripts/lib/vite-third-party-licenses.mjs"],
       ["app", "site", "scripts", "customer-lifecycle-emulator", "tests"],
     );
   });
 
   it("records ownership and edge reasons for diagnostics", () => {
-    const result = resolveScope(["gateway-edge/src/routes/git.ts"]);
+    const result = resolveScope(["platform/gateway-edge/src/routes/git.ts"]);
 
     expect(result.reasons).toEqual([
-      "owner:gateway-edge/",
-      "edge:gateway-edge/",
+      "owner:platform/gateway-edge/",
+      "edge:platform/gateway-edge/",
     ]);
   });
 
   it("a scripts change outside lib/ does NOT pull octogee-api/gateway-edge, but DOES pull tests", () => {
     // The octogee-api/gateway-edge compile-time edges are still lib/-agnostic
-    // (they never applied to scripts/); the scripts/ → tests edge is
+    // (they never applied to platform/scripts/); the platform/scripts/ → tests edge is
     // whole-directory though, since internal-routing-guard.spec.ts walks all
-    // of scripts/, not just lib/.
+    // of platform/scripts/, not just lib/.
     expectJobs(
-      ["scripts/ops/audit-coverage.ts"],
+      ["platform/scripts/ops/audit-coverage.ts"],
       ["scripts", "customer-lifecycle-emulator", "tests"],
     );
   });
 
   it("the shared emulator runner change exercises every package emulator suite", () => {
     expectJobs(
-      ["scripts/ops/run-emulator-vitest.mjs"],
+      ["platform/scripts/ops/run-emulator-vitest.mjs"],
       [
         "scripts",
         "customer-lifecycle-emulator",
@@ -266,12 +274,12 @@ describe("resolveScope — cross-package hazard edges", () => {
     );
   });
 
-  it("gateway-edge/src change ALSO runs octogee-api + its emulator suite (route imports + mounts)", () => {
+  it("platform/gateway-edge/src change ALSO runs octogee-api + its emulator suite (route imports + mounts)", () => {
     expectJobs(
-      ["gateway-edge/src/routes/git.ts"],
-      // + the gateway-edge/src/ edge also pulls tests
+      ["platform/gateway-edge/src/routes/git.ts"],
+      // + the platform/gateway-edge/src/ edge also pulls tests
       // (byok-provider-registry-parity.spec.ts imports
-      // gateway-edge/src/model-credentials/provider-key-format.js directly).
+      // platform/gateway-edge/src/model-credentials/provider-key-format.js directly).
       [
         "gateway-edge",
         "gateway-edge-emulator",
@@ -299,15 +307,15 @@ describe("resolveScope — cross-package hazard edges", () => {
 });
 
 describe("resolveScope — consumer scoping", () => {
-  it("a shared/ change runs its consumers, not desktop, Obsidian or gateway extension packages", () => {
-    const r = resolveScope(["shared/types/openclaw-wire.ts"]);
+  it("a platform/shared/ change runs its consumers, not desktop, Obsidian or gateway extension packages", () => {
+    const r = resolveScope(["platform/shared/types/openclaw-wire.ts"]);
     expect(r.everything).toBe(false);
     expect(r.jobs).toEqual(expect.arrayContaining(["shared", "app", "gateway-edge", "octogee-api-emulator", "tests"]));
     expect(r.jobs.some(job => job === "desktop" || job === "obsidian-connect" || job === "firestore-rules" || (job.startsWith("octogee-") && job.endsWith("-tools")))).toBe(false);
   });
 
   it("a gateway image change runs the packages that read gateway files, not app, site or emulators", () => {
-    expectJobs(["infra/gateway/Dockerfile"], ["acceptance", "core", "gateway-edge", "octogee-api", "scripts", "tests"]);
+    expectJobs(["platform/infra/gateway/Dockerfile"], ["acceptance", "core", "gateway-edge", "octogee-api", "scripts", "tests"]);
   });
 
   it("the artifact worker runs its own suite and the specs that read it", () => {
@@ -315,7 +323,7 @@ describe("resolveScope — consumer scoping", () => {
   });
 
   it("files no test reads run no test jobs", () => {
-    expectJobs(["infra/mattermost/Dockerfile", ".github/ISSUE_TEMPLATE/bug.yml", ".gitleaksignore"], []);
+    expectJobs(["platform/infra/mattermost/Dockerfile", ".github/ISSUE_TEMPLATE/bug.yml", ".gitleaksignore"], []);
   });
 });
 
@@ -331,7 +339,7 @@ describe("resolveScope — repo-wide changes run everything", () => {
   });
 
   it("editing the resolver itself runs everything", () => {
-    expect(resolveScope(["scripts/lib/scope/manifest.ts"]).everything).toBe(true);
+    expect(resolveScope(["platform/scripts/lib/scope/manifest.ts"]).everything).toBe(true);
   });
 });
 
@@ -341,7 +349,7 @@ describe("resolveScope — ownership is required", () => {
   });
 
   it("every tracked path has a CI owner", () => {
-    const root = fileURLToPath(new URL("../..", import.meta.url));
+    const root = fileURLToPath(new URL("../../..", import.meta.url));
     const tracked = execFileSync("/usr/bin/git", ["ls-files"], { cwd: root, encoding: "utf8" }).split("\n").filter(Boolean);
     expect(() => resolveScope(tracked)).not.toThrow();
   });
@@ -363,9 +371,9 @@ describe("resolveScope — inert paths run nothing", () => {
 
 describe("toGhaOutputs", () => {
   it("emits a matrix with full package metadata for changed unit packages", () => {
-    const out = toGhaOutputs(resolveScope(["octogee-api/src/x.ts"]));
+    const out = toGhaOutputs(resolveScope(["platform/octogee-api/src/x.ts"]));
     expect(out.any).toBe(true);
-    // + tests, via the octogee-api/ edge.
+    // + tests, via the platform/octogee-api/ edge.
     expect(out.test_matrix.map((p) => p.name).sort()).toEqual(["octogee-api", "tests"]);
     expect(out.run_app).toBe(false);
     expect(out.run_functions_emulator).toBe(false);
@@ -439,7 +447,7 @@ describe("resolveScope — deleted paths", () => {
   });
 
   it("still runs the owner of a deleted file", () => {
-    const removed = "gateway-edge/src/retired.ts";
+    const removed = "platform/gateway-edge/src/retired.ts";
     expect(resolveScope([removed], new Set([removed])).jobs).toContain("gateway-edge");
   });
 });

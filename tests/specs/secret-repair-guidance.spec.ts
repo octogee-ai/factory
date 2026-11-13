@@ -6,21 +6,21 @@ const repoRoot = path.resolve(__dirname, "../..");
 
 describe("secret repair guidance", () => {
   it("directs standard environments to the idempotent setup-secrets repair", () => {
-    const script = readFileSync(path.join(repoRoot, "scripts/verify-secrets.sh"), "utf8");
+    const script = readFileSync(path.join(repoRoot, "platform/scripts/verify-secrets.sh"), "utf8");
 
     expect(script).toContain('Quick fix: ./scripts/setup-secrets.sh --env=${ENV}');
     expect(script).not.toContain('Quick fix: ./scripts/bootstrap-env.sh');
   });
 
   it("does not retain the unused legacy Activity approval secret", () => {
-    const script = readFileSync(path.join(repoRoot, "scripts/verify-secrets.sh"), "utf8");
+    const script = readFileSync(path.join(repoRoot, "platform/scripts/verify-secrets.sh"), "utf8");
 
     expect(script).not.toContain('"approval-signing"');
     expect(script).not.toContain('"approval-signing:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"');
   });
 
   it("retains the tracked Mattermost PAT during launch", () => {
-    const script = readFileSync(path.join(repoRoot, "scripts/setup-secrets.sh"), "utf8");
+    const script = readFileSync(path.join(repoRoot, "platform/scripts/setup-secrets.sh"), "utf8");
 
     expect(script).toContain('if [[ "$SECRET_SETUP_PHASE" == "launch" ]]; then');
     for (const [variable, key] of [
@@ -39,14 +39,14 @@ describe("secret repair guidance", () => {
   });
 
   it("does not materialize the unused legacy Activity approval secret", () => {
-    const script = readFileSync(path.join(repoRoot, "scripts/setup-secrets.sh"), "utf8");
+    const script = readFileSync(path.join(repoRoot, "platform/scripts/setup-secrets.sh"), "utf8");
 
     expect(script).not.toContain('APPROVAL_SIGNING_SECRET');
     expect(script).not.toContain('ksecret approval-signing');
   });
 
   it("requires an explicit WEST platform-migration ceremony before rotating restored Mattermost credentials", () => {
-    const script = readFileSync(path.join(repoRoot, "scripts/setup-mattermost.sh"), "utf8");
+    const script = readFileSync(path.join(repoRoot, "platform/scripts/setup-mattermost.sh"), "utf8");
 
     expect(script).toContain("--rotate-platform-credentials");
     expect(script).toContain("--confirm-platform-migration=*");
@@ -59,7 +59,7 @@ describe("secret repair guidance", () => {
   });
 
   it("uses the rotated credential to bootstrap a fresh Mattermost admin", () => {
-    const script = readFileSync(path.join(repoRoot, "scripts/setup-mattermost.sh"), "utf8");
+    const script = readFileSync(path.join(repoRoot, "platform/scripts/setup-mattermost.sh"), "utf8");
 
     expect(script).toContain('/mattermost/bin/mmctl --local user search "$MM_ADMIN_USER"');
     expect(script).toContain("Fresh Mattermost admin is not present");

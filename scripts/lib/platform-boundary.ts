@@ -27,7 +27,8 @@ const SPECIFIER_RES = [
   /\bimport\s*["']([^"']+)["']/g,
   /\bimport\(\s*["']([^"']+)["']\s*\)/g,
 ];
-const MANIFEST_PATH = "scripts/lib/platform-boundary.json";
+const PLATFORM_DIR = "platform/";
+const MANIFEST_PATH = `${PLATFORM_DIR}scripts/lib/platform-boundary.json`;
 const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts"];
 
 export function loadPlatformBoundaryManifest(repoRoot: string): PlatformBoundaryManifest {
@@ -67,16 +68,17 @@ function resolveSourceFile(candidate: string): string | null {
 export function resolveImport(specifier: string, fromFile: string, repoRoot: string): string | null {
   if (specifier.startsWith(".")) return resolveSourceFile(resolve(dirname(fromFile), specifier));
   if (specifier.startsWith("@octogee/core/")) {
-    return resolveSourceFile(join(repoRoot, "core/src", specifier.slice("@octogee/core/".length)));
+    return resolveSourceFile(join(repoRoot, PLATFORM_DIR, "core/src", specifier.slice("@octogee/core/".length)));
   }
   if (specifier.startsWith("@octogee/shared/")) {
-    return resolveSourceFile(join(repoRoot, "shared", specifier.slice("@octogee/shared/".length)));
+    return resolveSourceFile(join(repoRoot, PLATFORM_DIR, "shared", specifier.slice("@octogee/shared/".length)));
   }
   if (specifier.startsWith("@shared/")) {
-    return resolveSourceFile(join(repoRoot, "shared", specifier.slice("@shared/".length)));
+    return resolveSourceFile(join(repoRoot, PLATFORM_DIR, "shared", specifier.slice("@shared/".length)));
   }
   if (specifier.startsWith("@/")) {
-    const pkg = relative(realpathSync(repoRoot), fromFile).split("/")[0];
+    const segments = relative(realpathSync(repoRoot), fromFile).split("/");
+    const pkg = segments[0] === "platform" ? segments.slice(0, 2).join("/") : segments[0]!;
     return resolveSourceFile(join(repoRoot, pkg, "src", specifier.slice(2)));
   }
   return null;
@@ -191,11 +193,13 @@ export function productReferencesOf(
   const referenced = new Set<string>();
   for (const entry of productAssetEntries(manifest)) {
     const repoPath = entry.replace(/\/$/u, "");
+    const platformPath = repoPath.startsWith(PLATFORM_DIR) ? repoPath.slice(PLATFORM_DIR.length) : null;
     const fromFile = relative(dirname(file), repoPath);
     const sharedRoot = manifest.platformRoots.find((root) => file.startsWith(root) && entry.startsWith(root));
     const fromRoot = sharedRoot ? entry.slice(sharedRoot.length).replace(/\/$/u, "") : null;
     if (
       mentionsRepoPath(source, repoPath)
+      || (platformPath !== null && mentionsRepoPath(source, platformPath))
       || (fromFile.startsWith("../") && mentionsRelativePath(source, fromFile))
       || (fromRoot !== null && mentionsRootPath(source, fromRoot))
     ) {

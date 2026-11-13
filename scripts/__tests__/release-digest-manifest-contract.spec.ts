@@ -1,7 +1,7 @@
 import { gzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createReleaseDigestManifest } from "../../.github/actions/release-digest-manifest/release-digest-manifest.mjs";
+import { createReleaseDigestManifest } from "../../../.github/actions/release-digest-manifest/release-digest-manifest.mjs";
 import { createCentralReleaseAuthority } from "../lib/artifact-registry.js";
 
 /**

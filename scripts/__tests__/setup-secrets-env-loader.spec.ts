@@ -8,7 +8,7 @@ const repoRoot = path.resolve(__dirname, "../..");
 const helperPath = path.join(repoRoot, "scripts/lib/shell-env.sh");
 const setupSecretsPath = path.join(repoRoot, "scripts/setup-secrets.sh");
 const verifySecretsPath = path.join(repoRoot, "scripts/verify-secrets.sh");
-const envExamplePath = path.join(repoRoot, ".env.example");
+const envExamplePath = path.join(repoRoot, "../.env.example");
 
 function runLoader(envFile: string, env: Record<string, string> = {}): string {
   const script = [

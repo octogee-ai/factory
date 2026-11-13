@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildGatewayImages, gatewayBakePlan } from "../ci/gateway-bake.mjs";
 
@@ -7,8 +10,9 @@ const base = `inputs-${"b".repeat(64)}`;
 const isolatedBase = `${base}-builder-123456789abc`;
 const toolchain = { lockSha256: "c".repeat(64), groupsSha256: "d".repeat(64) };
 const images = ["gateway-edge", "octogee-gateway", "octogee-gateway-builder"];
-const plan = (build: { base: boolean; isolatedBase: boolean; images: string[] }) =>
-  gatewayBakePlan({ repository, sha, base, isolatedBase, toolchain, build });
+const platformOnly = mkdtempSync(join(tmpdir(), "gateway-bake-"));
+const plan = (build: { base: boolean; isolatedBase: boolean; images: string[] }, root = platformOnly) =>
+  gatewayBakePlan({ repository, sha, base, isolatedBase, toolchain, build }, root);
 const baseRef = `${repository}/octogee-gateway-base:${base}`;
 const isolatedBaseRef = `${repository}/octogee-gateway-builder-base:${isolatedBase}`;
 
@@ -98,10 +102,20 @@ describe("gateway bake plan", () => {
     const { target } = plan({ base: true, isolatedBase: true, images });
     for (const name of [...images, "octogee-gateway-base", "octogee-gateway-builder-base"]) {
       expect(target[name]).toMatchObject({
-        context: ".", platforms: ["linux/amd64"], output: ["type=registry"],
+        context: "platform", platforms: ["linux/amd64"], output: ["type=registry"],
         attest: ["type=provenance,disabled=true", "type=sbom,disabled=true"],
       });
     }
+  });
+
+  it("passes the product overlay of gateway-edge and the product tree to the gateway images when they exist", () => {
+    const root = mkdtempSync(join(tmpdir(), "gateway-bake-product-"));
+    mkdirSync(join(root, "product/gateway-edge"), { recursive: true });
+    const { target } = plan({ base: false, isolatedBase: false, images }, root);
+    expect(target["gateway-edge"].contexts).toEqual({ overlay: "product/gateway-edge" });
+    expect(target["octogee-gateway"].contexts).toMatchObject({ product: "product" });
+    expect(target["octogee-gateway-builder"].contexts).toMatchObject({ product: "product" });
+    expect(plan({ base: false, isolatedBase: false, images }).target["gateway-edge"]).not.toHaveProperty("contexts");
   });
 
   it("is empty when everything is already published", () => {
@@ -130,7 +144,7 @@ describe("gateway image family build", () => {
     return {
       calls,
       bakes,
-      run: () => buildGatewayImages({ repository, sha, base, isolatedBase, toolchain }, {
+      run: () => buildGatewayImages({ repository, sha, base, isolatedBase, toolchain, root: platformOnly }, {
         exists: async (ref: string) => existing.includes(ref),
         script: async (file: string, args: string[]) => {
           calls.push([file, ...args]);
@@ -146,8 +160,8 @@ describe("gateway image family build", () => {
       }),
     };
   };
-  const scriptCalls = (calls: string[][], script: string) => calls.filter(call => call[0] === `scripts/lib/${script}`);
-  const sizeCheck = ["scripts/lib/assert-artifact-image-size.sh", `${repository}/octogee-gateway-builder:${short}`, "3100000000", "octogee"];
+  const scriptCalls = (calls: string[][], script: string) => calls.filter(call => call[0] === `platform/scripts/lib/${script}`);
+  const sizeCheck = ["platform/scripts/lib/assert-artifact-image-size.sh", `${repository}/octogee-gateway-builder:${short}`, "3100000000", "octogee"];
 
   it("builds the whole unpublished chain in one bake, then checks size, records fingerprints and publishes full-SHA tags", async () => {
     const { calls, bakes, run } = harness();
@@ -198,7 +212,7 @@ describe("gateway image family build", () => {
     await run();
     expect(bakes).toEqual([]);
     expect(calls.findIndex(call => call.join(" ") === sizeCheck.join(" "))).toBeLessThan(
-      calls.findIndex(call => call[0] === "scripts/lib/publish-full-sha-image-tag.sh" && call[1] === "octogee-gateway-builder"),
+      calls.findIndex(call => call[0] === "platform/scripts/lib/publish-full-sha-image-tag.sh" && call[1] === "octogee-gateway-builder"),
     );
     expect(scriptCalls(calls, "assert-artifact-image-size.sh")).toEqual([sizeCheck]);
   });

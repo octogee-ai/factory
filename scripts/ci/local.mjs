@@ -15,7 +15,7 @@ try {
   if (!process.env.OCTOGEE_CI_IMAGE) execFileSync(docker, [
     'build', '--platform=linux/amd64', '--file=ci/Dockerfile', `--tag=${image}`, 'ci',
   ], { cwd: copy.source, stdio: 'inherit' });
-  const result = spawnSync(docker, ['run', '--rm', '--platform=linux/amd64', '--env=CI_EMULATED=true', '--mount', `type=bind,src=${copy.source},dst=/workspace`, '--workdir=/workspace', image, '-euc', 'npm ci --prefix scripts --no-audit --no-fund; scripts/node_modules/.bin/tsx scripts/ops/ci-checks.ts "$@"', '--', ...process.argv.slice(2)], { stdio: 'inherit' });
+  const result = spawnSync(docker, ['run', '--rm', '--platform=linux/amd64', '--env=CI_EMULATED=true', '--mount', `type=bind,src=${copy.source},dst=/workspace`, '--workdir=/workspace', image, '-euc', 'npm ci --prefix platform/scripts --no-audit --no-fund; platform/scripts/node_modules/.bin/tsx platform/scripts/ops/ci-checks.ts "$@"', '--', ...process.argv.slice(2)], { stdio: 'inherit' });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`Local checks exited with ${result.status ?? result.signal}`);
 } finally { copy.remove(); }

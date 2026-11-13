@@ -18,8 +18,8 @@ if (local) {
     watch: id => awaitRun(id),
     build: () => dispatchWorkflow('build-main.yml', { source_sha: sha, force: String(force) }),
   });
-  run(['scripts/ci/deploy.mjs', ...releaseArgs, '--local']);
-  run(['scripts/ci/end-to-end-tests.mjs'], { ...process.env, CI_LIVE_RESTART: 'true' });
+  run(['platform/scripts/ci/deploy.mjs', ...releaseArgs, '--local']);
+  run(['platform/scripts/ci/end-to-end-tests.mjs'], { ...process.env, CI_LIVE_RESTART: 'true' });
 } else {
   await dispatchWorkflow('ship-test.yml', { source_sha: sha, force: String(force), actor: options.actor, log_level: options.logLevel });
 }

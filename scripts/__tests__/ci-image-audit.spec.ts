@@ -23,7 +23,7 @@ if [[ "\${@: -1}" = "\${AUDIT_VULNERABLE:-}" ]]; then exit 1; fi
 `, { mode: 0o755 });
   try {
     let error: unknown;
-    try { execFileSync('bash', ['scripts/ci/audit.sh', 'trivy-images'], { cwd: resolve(import.meta.dirname, '../..'), env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, AUDIT_OUTPUT: output, AUDIT_REPOSITORIES: repositories, ...environment }, stdio: 'pipe' }); }
+    try { execFileSync('bash', ['platform/scripts/ci/audit.sh', 'trivy-images'], { cwd: resolve(import.meta.dirname, '../../..'), env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, AUDIT_OUTPUT: output, AUDIT_REPOSITORIES: repositories, ...environment }, stdio: 'pipe' }); }
     catch (failure) { error = failure; }
     const lines = (file: string) => existsSync(file) ? readFileSync(file, 'utf8').trim().split('\n') : [];
     return { error, scans: lines(output), repositories: lines(repositories) };

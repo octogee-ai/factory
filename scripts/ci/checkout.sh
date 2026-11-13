@@ -3,7 +3,7 @@ set -euo pipefail
 [[ "${CI_SOURCE_SHA:?source SHA required}" =~ ^[a-f0-9]{40}$ ]]
 export GIT_CONFIG_COUNT=2
 export GIT_CONFIG_KEY_0=credential.helper
-export GIT_CONFIG_VALUE_0="!bash $(pwd)/scripts/ci/git-credential.sh"
+export GIT_CONFIG_VALUE_0="!bash $(pwd)/platform/scripts/ci/git-credential.sh"
 export GIT_CONFIG_KEY_1=safe.directory
 export GIT_CONFIG_VALUE_1="$(pwd)"
 if [ ! -d .git ]; then git init; fi

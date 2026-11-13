@@ -6,24 +6,24 @@ import { parseAllDocuments } from "yaml";
 
 const root = resolve(__dirname, "../..");
 const setupMonitoring = readFileSync(
-  resolve(root, "scripts/setup-monitoring.sh"),
+  resolve(root, "platform/scripts/setup-monitoring.sh"),
   "utf8",
 );
 const verifyMonitoring = readFileSync(
-  resolve(root, "scripts/verify-monitoring.sh"),
+  resolve(root, "platform/scripts/verify-monitoring.sh"),
   "utf8",
 );
 const setupMonitoringSecrets = readFileSync(
-  resolve(root, "scripts/setup-monitoring-secrets.sh"),
+  resolve(root, "platform/scripts/setup-monitoring-secrets.sh"),
   "utf8",
 );
 const setupMonitoringIap = readFileSync(
-  resolve(root, "scripts/setup-monitoring-iap.sh"),
+  resolve(root, "platform/scripts/setup-monitoring-iap.sh"),
   "utf8",
 );
 
 function chart(path: string): string {
-  return readFileSync(resolve(root, "helm/monitoring", path), "utf8");
+  return readFileSync(resolve(root, "platform/helm/monitoring", path), "utf8");
 }
 
 function renderedDeployment(name: string): Record<string, unknown> {
@@ -32,7 +32,7 @@ function renderedDeployment(name: string): Record<string, unknown> {
     [
       "template",
       "grafana",
-      resolve(root, "helm/monitoring"),
+      resolve(root, "platform/helm/monitoring"),
       "--namespace",
       "monitoring",
     ],
@@ -55,7 +55,7 @@ describe("monitoring setup", () => {
     expect(chart("Chart.yaml")).toContain('version: "13.0.1"');
     expect(chart("Chart.yaml")).toContain('repository: "https://grafana-community.github.io/helm-charts"');
     expect(chart("Chart.lock")).toContain("grafana");
-    expect(readFileSync(resolve(root, "helm/monitoring/charts/grafana-13.0.1.tgz")).length).toBeGreaterThan(0);
+    expect(readFileSync(resolve(root, "platform/helm/monitoring/charts/grafana-13.0.1.tgz")).length).toBeGreaterThan(0);
 
     expect(setupMonitoring).toContain('helm upgrade --install grafana "$REPO_DIR/helm/monitoring"');
     expect(setupMonitoring).toContain("--take-ownership");
@@ -82,7 +82,7 @@ describe("monitoring setup", () => {
       expect(script).not.toContain("octogee_preflight_monitoring_platform_compute_class");
       expect(script).not.toContain("monitoring-platform-preflight.sh");
     }
-    expect(existsSync(resolve(root, "scripts/lib/monitoring-platform-preflight.sh"))).toBe(false);
+    expect(existsSync(resolve(root, "platform/scripts/lib/monitoring-platform-preflight.sh"))).toBe(false);
     const iapSecretMaterialization = setupMonitoringIap.indexOf(
       '"$SCRIPT_DIR/setup-monitoring-secrets.sh"',
     );
@@ -134,7 +134,7 @@ describe("monitoring setup", () => {
       [
         "template",
         "grafana",
-        resolve(root, "helm/monitoring"),
+        resolve(root, "platform/helm/monitoring"),
         "--namespace",
         "monitoring",
       ],
@@ -205,7 +205,7 @@ describe("monitoring setup", () => {
       [
         "template",
         "grafana",
-        resolve(root, "helm/monitoring"),
+        resolve(root, "platform/helm/monitoring"),
         "--namespace",
         "monitoring",
         "--set",
@@ -247,7 +247,7 @@ describe("monitoring setup", () => {
       [
         "template",
         "grafana",
-        resolve(root, "helm/monitoring"),
+        resolve(root, "platform/helm/monitoring"),
         "--namespace",
         "monitoring",
       ],
@@ -326,7 +326,7 @@ describe("monitoring setup", () => {
       [
         "template",
         "grafana",
-        resolve(root, "helm/monitoring"),
+        resolve(root, "platform/helm/monitoring"),
         "--namespace",
         "monitoring",
       ],

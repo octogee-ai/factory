@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_ROOT = path.resolve(SCRIPT_DIR, "..", "..");
@@ -203,13 +203,18 @@ function isLocalDirectorySpec(spec) {
   return spec.startsWith("file:") && !spec.endsWith(".tgz");
 }
 
-function topLevelPackageDirs(rootDir) {
-  return fs.readdirSync(rootDir, { withFileTypes: true })
+function packageDirsIn(dir) {
+  return fs.readdirSync(dir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .filter((entry) => !SKIP_DIRS.has(entry.name))
     .filter((entry) => !entry.name.startsWith("."))
-    .map((entry) => path.join(rootDir, entry.name))
-    .filter((dir) => fs.existsSync(path.join(dir, "package.json")));
+    .map((entry) => path.join(dir, entry.name))
+    .filter((packageDir) => fs.existsSync(path.join(packageDir, "package.json")));
+}
+
+function topLevelPackageDirs(rootDir) {
+  const platformDir = path.join(rootDir, "platform");
+  return [...packageDirsIn(rootDir), ...(fs.existsSync(platformDir) ? packageDirsIn(platformDir) : [])];
 }
 
 export function fileDepInstallArgs(specs, preserveLock) {
@@ -385,7 +390,7 @@ function parseArgs(argv) {
   return args;
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href) {
   try {
     const result = syncLocalFileDeps(parseArgs(process.argv.slice(2)));
     if (result.staleCount > 0 && result.syncedConsumers.length === 0) process.exitCode = 1;

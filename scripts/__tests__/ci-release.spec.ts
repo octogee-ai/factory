@@ -116,7 +116,7 @@ it.each([
 
   expect(storeDependencies).toHaveBeenCalledWith('test');
   expect(stage).toHaveBeenCalledWith(label, 'node', ['--import', './node_modules/tsx/dist/loader.mjs', ...script], {
-    cwd: 'scripts',
+    cwd: 'platform/scripts',
     env: expect.objectContaining({ PLATFORM_DB_HOST: '127.0.0.1', PLATFORM_DB_PORT: '15432', PLATFORM_DB_NAME: 'platform', PLATFORM_DB_USER: 'runtime', PLATFORM_DB_PASSWORD: 'runtime-password', PLATFORM_DB_SSLMODE: 'require' }),
   });
   expect(close.mock.invocationCallOrder[0]).toBeGreaterThan(stage.mock.invocationCallOrder[0]);

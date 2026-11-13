@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const scriptPath = fileURLToPath(import.meta.url);
-const repoRoot = path.resolve(path.dirname(scriptPath), "../..");
+const repoRoot = path.resolve(path.dirname(scriptPath), "../../..");
 const defaultConfigPath = path.join(repoRoot, "site/firestore.indexes.json");
 
 function collectionGroup(index) {

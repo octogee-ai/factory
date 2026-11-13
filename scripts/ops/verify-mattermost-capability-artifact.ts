@@ -11,7 +11,7 @@ function json(pathname: string): unknown {
 }
 
 export function runVerifyMattermostCapabilityArtifact(
-  repoRoot = path.resolve(import.meta.dirname, "../.."),
+  repoRoot = path.resolve(import.meta.dirname, "../../.."),
 ): number {
   const evidenceDirectory = path.join(repoRoot, ".github/evidence/mattermost");
   const evidencePath = path.join(evidenceDirectory, "mattermost-cce485f-evidence.json");

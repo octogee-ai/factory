@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export function readNativeModules({ packageRoot, read = readFileSync }) {
   const manifest = JSON.parse(read(path.join(packageRoot, "package.json"), "utf8"));
@@ -92,6 +92,6 @@ function main({ packageRoot }) {
   process.exit(1);
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   main({ packageRoot: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..") });
 }

@@ -77,6 +77,7 @@ const skippedDirectories = new Set([
   ".astro",
   ".firebase",
   ".next",
+  ".overlay",
   ".turbo",
   ".vite",
   "build",

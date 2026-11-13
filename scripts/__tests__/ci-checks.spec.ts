@@ -13,7 +13,7 @@ function fakeNode(version: string): string {
   return `${bin}:${process.env.PATH}`;
 }
 import { ALL_JOBS, UNIT_PACKAGES } from "../lib/scope/manifest.js";
-import { CHECK_LANES, checkPlan, checkSeconds, executeChecks, jobLabel, jobSeconds, nodeVersionCheck, selectCheckLane, dependencyInstaller, vitestOptions } from "../lib/ci-checks.js";
+import { CHECK_LANES, OVERLAY_COMMAND, checkPlan, checkSeconds, executeChecks, jobLabel, jobSeconds, nodeVersionCheck, selectCheckLane, dependencyInstaller, vitestOptions } from "../lib/ci-checks.js";
 
 describe("portable Linux PR checks", () => {
   it("runs every registered test on a global change, leaving installer construction out of default CI", () => {
@@ -29,7 +29,7 @@ describe("portable Linux PR checks", () => {
   });
 
   it("requires real PostgreSQL before core unit tests, which may depend on the qualified catalog", () => {
-    const commands = checkPlan(["core/src/agent-store-credentials.ts"], "tests").find(job => job.name === "core")!.commands;
+    const commands = checkPlan(["platform/core/src/agent-store-credentials.ts"], "tests").find(job => job.name === "core")!.commands;
     expect(commands.indexOf("node ../scripts/ci/core-postgres.mjs")).toBeGreaterThan(0);
     expect(commands.indexOf("node ../scripts/ci/core-postgres.mjs")).toBeLessThan(commands.indexOf("npm test"));
   });
@@ -62,22 +62,22 @@ describe("portable Linux PR checks", () => {
   });
 
   it("keeps scoped checks and cross-package installs", () => {
-    const plan = checkPlan(["gateway-edge/src/index.ts"], "tests");
+    const plan = checkPlan(["platform/gateway-edge/src/index.ts"], "tests");
     expect(plan.map(job => job.name)).toContain("octogee-api-emulator");
     expect(plan.map(job => job.name)).not.toContain("app");
-    expect(plan.find(job => job.name === "octogee-api")?.installs).toContain("gateway-edge");
+    expect(plan.find(job => job.name === "octogee-api")?.installs).toContain("platform/gateway-edge");
     expect(plan.find(job => job.name === "glm-controller-emulator")).toBeUndefined();
     expect(checkPlan(["docs/INDEX.md"], "tests")).toEqual([]);
   });
 
   it("runs the acceptance specs when the deployment-target registry changes, because acceptance imports it directly", () => {
-    expect(checkPlan(["core/src/deployment-targets.json"], "tests").map(job => job.name)).toContain("acceptance");
+    expect(checkPlan(["platform/core/src/deployment-targets.json"], "tests").map(job => job.name)).toContain("acceptance");
   });
 
   it("runs every quality gate on a full run without deployment commands", () => {
     const plan = checkPlan(["docs/INDEX.md"], "quality", false, true);
     expect(plan.map(job => job.name)).toEqual(["eslint", "knip", "gitleaks", "osv-scanner", "trivy", "cargo-audit"]);
-    expect(plan.map(job => job.commands)).toEqual(["eslint", "knip", "gitleaks", "osv-scanner", "trivy", "cargo-audit"].map(name => [`bash scripts/ci/quality.sh ${name}`]));
+    expect(plan.map(job => job.commands)).toEqual(["eslint", "knip", "gitleaks", "osv-scanner", "trivy", "cargo-audit"].map(name => [`bash platform/scripts/ci/quality.sh ${name}`]));
     expect(JSON.stringify(plan)).not.toMatch(/firebase deploy|helm upgrade|desiredRelease/);
   });
 
@@ -87,35 +87,35 @@ describe("portable Linux PR checks", () => {
   });
 
   it("scans only the diff for secrets on a docs-only pull request", () => {
-    expect(checkPlan(["docs/INDEX.md"], "quality").map(job => job.commands)).toEqual([["bash scripts/ci/quality.sh gitleaks"]]);
+    expect(checkPlan(["docs/INDEX.md"], "quality").map(job => job.commands)).toEqual([["bash platform/scripts/ci/quality.sh gitleaks"]]);
   });
 
   it("lints changed sources and audits changed lockfiles without repo-wide lint or knip", () => {
     const plan = checkPlan(["app/src/App.tsx", "app/src/index.css", "app/package-lock.json", "docs/INDEX.md"], "quality");
     expect(plan.map(job => job.name)).toEqual(["eslint", "gitleaks", "osv-scanner"]);
-    expect(plan[0].commands).toEqual(["bash scripts/ci/quality.sh eslint -- 'app/src/App.tsx'"]);
-    expect(plan[2].commands).toEqual(["bash scripts/ci/quality.sh osv-scanner -- 'app/package-lock.json'"]);
+    expect(plan[0].commands).toEqual(["bash platform/scripts/ci/quality.sh eslint -- 'app/src/App.tsx'"]);
+    expect(plan[2].commands).toEqual(["bash platform/scripts/ci/quality.sh osv-scanner -- 'app/package-lock.json'"]);
   });
 
   it("runs the design-token scan for style-only changes without passing them to ESLint", () => {
-    expect(checkPlan(["site/src/styles/global.css"], "quality")[0].commands).toEqual(["bash scripts/ci/quality.sh eslint --"]);
+    expect(checkPlan(["site/src/styles/global.css"], "quality")[0].commands).toEqual(["bash platform/scripts/ci/quality.sh eslint --"]);
   });
 
   it("quotes changed paths so a file name cannot inject shell", () => {
-    expect(checkPlan(["scripts/odd '$(touch x)'.ts"], "quality")[0].commands)
-      .toEqual(["bash scripts/ci/quality.sh eslint -- 'scripts/odd '\\''$(touch x)'\\''.ts'"]);
+    expect(checkPlan(["platform/scripts/odd '$(touch x)'.ts"], "quality")[0].commands)
+      .toEqual(["bash platform/scripts/ci/quality.sh eslint -- 'platform/scripts/odd '\\''$(touch x)'\\''.ts'"]);
   });
 
   it("runs repo-wide checks when their configuration changes", () => {
-    expect(checkPlan(["eslint.config.mjs"], "quality")[0].commands).toEqual(["bash scripts/ci/quality.sh eslint"]);
+    expect(checkPlan(["eslint.config.mjs"], "quality")[0].commands).toEqual(["bash platform/scripts/ci/quality.sh eslint"]);
     expect(checkPlan(["knip.json"], "quality").map(job => job.name)).toContain("knip");
-    expect(checkPlan(["osv-scanner.toml"], "quality").find(job => job.name === "osv-scanner")?.commands).toEqual(["bash scripts/ci/quality.sh osv-scanner"]);
+    expect(checkPlan(["osv-scanner.toml"], "quality").find(job => job.name === "osv-scanner")?.commands).toEqual(["bash platform/scripts/ci/quality.sh osv-scanner"]);
     expect(checkPlan(["package.json"], "quality").map(job => job.name)).toEqual(["eslint", "knip", "gitleaks", "osv-scanner", "trivy", "cargo-audit"]);
   });
 
   it("scans infrastructure configuration only when it changes", () => {
-    expect(checkPlan(["helm/octogee/values.yaml"], "quality").map(job => job.name)).toContain("trivy");
-    expect(checkPlan(["infra/gateway/Dockerfile"], "quality").map(job => job.name)).toContain("trivy");
+    expect(checkPlan(["platform/helm/octogee/values.yaml"], "quality").map(job => job.name)).toContain("trivy");
+    expect(checkPlan(["platform/infra/gateway/Dockerfile"], "quality").map(job => job.name)).toContain("trivy");
     expect(checkPlan(["app/src/App.tsx"], "quality").map(job => job.name)).not.toContain("trivy");
     expect(checkPlan(["artifact-worker/renderer/Cargo.lock"], "quality").map(job => job.name)).toEqual(["gitleaks", "cargo-audit"]);
   });
@@ -131,10 +131,10 @@ describe("portable Linux PR checks", () => {
 
   it("runs the artifact worker suite with its shared types installed", () => {
     expect(checkPlan(["artifact-worker/src/worker.ts"], "tests").find(job => job.name === "artifact-worker"))
-      .toMatchObject({ directory: "artifact-worker", installs: ["shared", "artifact-worker"], commands: ["npm run typecheck", "npm test"] });
+      .toMatchObject({ directory: "artifact-worker", installs: ["platform/shared", "artifact-worker"], commands: ["npm run typecheck", "npm test"] });
   });
 
-  it.each(["package-lock.json", "gateway-edge/src/index.ts", "docs/INDEX.md"])("partitions every required check exactly once: %s", path => {
+  it.each(["package-lock.json", "platform/gateway-edge/src/index.ts", "docs/INDEX.md"])("partitions every required check exactly once: %s", path => {
     const jobs = checkPlan([path]);
     const lanes = CHECK_LANES.flatMap(lane => selectCheckLane(jobs, lane));
     expect(lanes.map(jobLabel).sort()).toEqual(jobs.map(jobLabel).sort());
@@ -165,9 +165,45 @@ describe("portable Linux PR checks", () => {
   });
 
   it("spreads a partial plan's unit checks across separate lanes", () => {
-    const jobs = checkPlan(["glm-controller/src/index.ts"], "tests");
+    const jobs = checkPlan(["platform/glm-controller/src/index.ts"], "tests");
     const occupied = unitLanes.filter(lane => selectCheckLane(jobs, lane).length > 0);
     expect(occupied).toHaveLength(2);
+  });
+
+  it("adds a product check in the overlay for a platform package that has a product package", () => {
+    const jobs = checkPlan(["platform/glm-controller/src/index.ts"], "tests", false, false, { products: new Set(["glm-controller", "scripts"]) });
+    const platform = jobs.find(job => job.name === "glm-controller")!;
+    expect(platform).toMatchObject({ directory: "platform/glm-controller", installs: ["platform/scripts", "platform/glm-controller"] });
+    expect(platform.setup).toBeUndefined();
+    expect(jobs.find(job => job.name === "glm-controller-product")).toEqual({
+      ...platform,
+      name: "glm-controller-product",
+      directory: ".overlay/glm-controller",
+      setup: [OVERLAY_COMMAND],
+      installs: [".overlay/scripts", ".overlay/glm-controller"],
+    });
+    expect(unitLanes.filter(lane => selectCheckLane(jobs, lane).some(job => job.name === "glm-controller-product"))).toHaveLength(1);
+    expect(jobSeconds(jobs.find(job => job.name === "glm-controller-product")!)).toBe(checkSeconds("glm-controller"));
+  });
+
+  it("runs a product package's emulator suite in the overlay, where the product specs live", () => {
+    const jobs = checkPlan(["platform/glm-controller/src/index.ts"], "tests", false, false, { products: new Set(["glm-controller"]) });
+    expect(jobs.filter(job => job.name === "glm-controller-emulator")).toEqual([expect.objectContaining({
+      directory: ".overlay/glm-controller",
+      setup: [OVERLAY_COMMAND],
+      installs: ["platform/scripts", ".overlay/glm-controller"],
+      commands: ["npm run test:emulator"],
+    })]);
+    expect(selectCheckLane(jobs, "emulators").map(job => job.name)).toContain("glm-controller-emulator");
+  });
+
+  it("checks a product package change against both its platform package and the overlay", () => {
+    const names = checkPlan(["product/glm-controller/src/main.ts"], "tests", false, false, { products: new Set(["glm-controller"]) }).map(job => job.name);
+    expect(names).toEqual(expect.arrayContaining(["glm-controller", "glm-controller-product", "glm-controller-emulator"]));
+  });
+
+  it("plans no overlay when no product package exists", () => {
+    expect(checkPlan(["package-lock.json"], "tests").filter(job => job.setup || job.directory.startsWith(".overlay/"))).toEqual([]);
   });
 
   it("rejects an unknown lane instead of returning a green empty plan", () => {
@@ -181,7 +217,7 @@ describe("portable Linux PR checks", () => {
     const job = jobs.find(value => value.name === "gateway-edge")!;
     prepare(job, install);
     prepare(job, install);
-    expect(install.mock.calls.map(call => call[0])).toEqual(["shared", "gateway-edge"]);
+    expect(install.mock.calls.map(call => call[0])).toEqual(["platform/shared", "platform/gateway-edge"]);
     prepare({ ...job, matchGatewayImageNpm: true }, install);
     expect(install).toHaveBeenCalledTimes(4);
     const fail = vi.fn().mockImplementationOnce(() => { throw new Error("registry unavailable"); });
@@ -211,9 +247,9 @@ describe("scoped quality script", () => {
 
   function workspace(): { root: string; calls: string; env: NodeJS.ProcessEnv } {
     const root = mkdtempSync(join(tmpdir(), "quality-sh-"));
-    mkdirSync(join(root, "scripts/ci"), { recursive: true });
-    copyFileSync(source, join(root, "scripts/ci/quality.sh"));
-    writeFileSync(join(root, "scripts/ds-tokens.mjs"), "");
+    mkdirSync(join(root, "platform/scripts/ci"), { recursive: true });
+    copyFileSync(source, join(root, "platform/scripts/ci/quality.sh"));
+    writeFileSync(join(root, "platform/scripts/ds-tokens.mjs"), "");
     const bin = join(root, "bin");
     mkdirSync(bin);
     const calls = join(root, "calls");
@@ -224,7 +260,7 @@ describe("scoped quality script", () => {
     return { root, calls, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } };
   }
   const run = (root: string, env: NodeJS.ProcessEnv, args: string[]) =>
-    execFileSync("/bin/bash", ["scripts/ci/quality.sh", ...args], { cwd: root, env, encoding: "utf8" });
+    execFileSync("/bin/bash", ["platform/scripts/ci/quality.sh", ...args], { cwd: root, env, encoding: "utf8" });
 
   it("lints only changed files that still exist, and skips ESLint when none remain", () => {
     const { root, calls, env } = workspace();

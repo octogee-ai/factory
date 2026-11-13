@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const specifications = ["src/agent-store-postgres.integration.spec.ts", "src/agent-store-recovery.integration.spec.ts", "src/agent-store-handoff.integration.spec.ts", "src/agent-store-credential-retirement.integration.spec.ts", "src/platform-state/postgres/__tests__/migrate.integration.spec.ts", "src/platform-state/postgres/__tests__/neutral-stored-names.integration.spec.ts", "src/platform-state/postgres/__tests__/transaction.integration.spec.ts", "src/platform-state/postgres/__tests__/records.integration.spec.ts", "src/platform-state/postgres/__tests__/journal.integration.spec.ts", "src/platform-state/postgres/__tests__/watch.integration.spec.ts", "src/platform-state/postgres/__tests__/expiry.integration.spec.ts", "src/platform-state/postgres/__tests__/users.integration.spec.ts", "src/platform-state/postgres/__tests__/user-fences.integration.spec.ts", "src/platform-state/postgres/__tests__/user-queries.integration.spec.ts", "src/platform-state/postgres/__tests__/user-subcollections.integration.spec.ts", "src/platform-state/postgres/__tests__/users-watch.integration.spec.ts", "src/platform-state/postgres/__tests__/workspaces.integration.spec.ts", "src/platform-state/postgres/__tests__/secrets.integration.spec.ts", "src/platform-state/postgres/__tests__/runtime-secret-store.integration.spec.ts", "src/platform-state/postgres/__tests__/jobs.integration.spec.ts", "src/platform-state/postgres/__tests__/gateways.integration.spec.ts", "src/platform-state/postgres/__tests__/fleet-registry.integration.spec.ts", "src/platform-state/postgres/__tests__/controller-state.integration.spec.ts", "src/platform-state/postgres/__tests__/migration-tasks.integration.spec.ts", "src/platform-state/postgres/__tests__/config.integration.spec.ts"];
@@ -71,4 +71,4 @@ export function runCorePostgresChecks() {
   }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) runCorePostgresChecks();
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) runCorePostgresChecks();

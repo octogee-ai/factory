@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { delimiter, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkPlan, executeChecks, jobLabel, nodeVersionCheck, selectCheckLane, dependencyInstaller, vitestOptions, type CheckJob } from "../lib/ci-checks.js";
 
-const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+const root = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
 const args = process.argv.slice(2);
 const value = (name: string) => args.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
 const group = value("group") ?? "all";
@@ -23,7 +23,9 @@ if (!value("head")) {
   for (const path of changed("--diff-filter=D", "HEAD")) deleted.add(path);
 }
 const full = args.includes("--all");
-const jobs = selectCheckLane(checkPlan(paths, group as "all" | "tests" | "quality", value("check") === "desktop-package", full, deleted), value("lane")).filter(job => !value("check") || job.name === value("check"));
+const productRoot = resolve(root, "product");
+const products = new Set(existsSync(productRoot) ? readdirSync(productRoot, { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name) : []);
+const jobs = selectCheckLane(checkPlan(paths, group as "all" | "tests" | "quality", value("check") === "desktop-package", full, { deleted, products }), value("lane")).filter(job => !value("check") || job.name === value("check"));
 if (value("check") && !jobs.length) throw new Error(`Check ${value("check")} is not in scope`);
 if (args.includes("--plan")) {
   console.log(JSON.stringify(jobs, null, 2));
@@ -37,11 +39,12 @@ if (args.includes("--plan")) {
     const run = (command: string, directory = root) => execFileSync("/bin/bash", ["-euc", command], { cwd: directory, env, stdio: "inherit" });
     run(nodeVersionCheck(job.nodeVersion));
     if (job.matchGatewayImageNpm) {
-      const npmVersion = readFileSync(resolve(root, "infra/gateway/Dockerfile.base"), "utf8").match(/^ARG NPM_VERSION=([\d.]+)$/m)?.[1];
+      const npmVersion = readFileSync(resolve(root, "platform/infra/gateway/Dockerfile.base"), "utf8").match(/^ARG NPM_VERSION=([\d.]+)$/m)?.[1];
       if (!npmVersion) throw new Error("Gateway npm version is missing");
       run(`npm install --prefix /tmp/octogee-ci-npm-${job.nodeVersion} npm@${npmVersion} --ignore-scripts --no-audit --no-fund`);
       env.PATH = `/tmp/octogee-ci-npm-${job.nodeVersion}/node_modules/.bin${delimiter}${path}`;
     }
+    for (const command of job.setup ?? []) run(command);
     prepare(job, directory => run("npm ci --no-audit --no-fund", resolve(root, directory)));
     for (const command of job.commands) {
       const script = command === "npm test" ? JSON.parse(readFileSync(resolve(root, job.directory, "package.json"), "utf8")).scripts?.test : "";

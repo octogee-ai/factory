@@ -2,7 +2,7 @@
 
 Container image for the OpenClaw gateway + Firestore provisioner. Deployed to GKE Autopilot via Helm.
 
-> **Architecture docs:** [docs/architecture/GATEWAY-PLATFORM-SPEC.md](../../docs/architecture/GATEWAY-PLATFORM-SPEC.md) · [docs/operations/RUNBOOK.md](../../docs/operations/RUNBOOK.md)
+> **Architecture docs:** [docs/architecture/GATEWAY-PLATFORM-SPEC.md](../../../docs/architecture/GATEWAY-PLATFORM-SPEC.md) · [docs/operations/RUNBOOK.md](../../../docs/operations/RUNBOOK.md)
 
 ---
 
@@ -84,6 +84,6 @@ cd infra/gateway && ./setup.sh
 
 ## See also
 
-- [docs/architecture/GATEWAY-PLATFORM-SPEC.md](../../docs/architecture/GATEWAY-PLATFORM-SPEC.md) — gateway platform model
-- [docs/operations/RUNBOOK.md](../../docs/operations/RUNBOOK.md) — operations runbook (cluster map, deploy, troubleshooting)
-- [docs/operations/MATTERMOST.md](../../docs/operations/MATTERMOST.md) — gateway-edge + Mattermost architecture
+- [docs/architecture/GATEWAY-PLATFORM-SPEC.md](../../../docs/architecture/GATEWAY-PLATFORM-SPEC.md) — gateway platform model
+- [docs/operations/RUNBOOK.md](../../../docs/operations/RUNBOOK.md) — operations runbook (cluster map, deploy, troubleshooting)
+- [docs/operations/MATTERMOST.md](../../../docs/operations/MATTERMOST.md) — gateway-edge + Mattermost architecture

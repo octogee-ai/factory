@@ -6,7 +6,7 @@ import {
   verifyMattermostCapabilityEvidence,
 } from "../lib/mattermost-capability-artifact.js";
 
-const repoRoot = path.resolve(import.meta.dirname, "../..");
+const repoRoot = path.resolve(import.meta.dirname, "../../..");
 const provenancePath = path.join(
   repoRoot,
   ".github/evidence/mattermost/mattermost-cce485f-slsa.json",

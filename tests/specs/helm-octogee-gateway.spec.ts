@@ -7,7 +7,7 @@ import * as fs from "node:fs";
 import { parseDocument } from "yaml";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
-const CHART_PATH = path.join(REPO_ROOT, "helm/octogee-gateway");
+const CHART_PATH = path.join(REPO_ROOT, "platform/helm/octogee-gateway");
 
 beforeAll(() => {
   if (!fs.existsSync(CHART_PATH)) {
@@ -122,7 +122,7 @@ function gatewayImageLabel(dep: string): string {
   return match[1];
 }
 
-describe("helm/octogee-gateway/ — single-instance rendering", () => {
+describe("platform/helm/octogee-gateway/ — single-instance rendering", () => {
   it.each([
     ["shared", "/home/node/.openclaw/openclaw.json"],
     ["builder", "/home/node/.openclaw/system_config/openclaw.json"],
@@ -832,7 +832,7 @@ const out = helmTemplate();
   });
 });
 
-describe("helm/octogee-gateway/ — bundle image-tag inheritance", () => {
+describe("platform/helm/octogee-gateway/ — bundle image-tag inheritance", () => {
   it("inherits gateway + gateway-edge images from one imageTag field by default", () => {
     const out = helmTemplate("octogee-gw-default", { imageTag: "cafef00d" });
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
@@ -871,7 +871,7 @@ describe("helm/octogee-gateway/ — bundle image-tag inheritance", () => {
   });
 });
 
-describe("helm/octogee-gateway/ — gateway-edge sidecar (chat-proxy folded in)", () => {
+describe("platform/helm/octogee-gateway/ — gateway-edge sidecar (chat-proxy folded in)", () => {
   it("renders gateway + gateway-edge containers; no separate chat-proxy container", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
@@ -955,7 +955,7 @@ describe("helm/octogee-gateway/ — gateway-edge sidecar (chat-proxy folded in)"
   });
 });
 
-describe("helm/octogee-gateway/ — gateway container required env", () => {
+describe("platform/helm/octogee-gateway/ — gateway container required env", () => {
   it("threads APP_URL into the gateway container for environment-correct app links", () => {
     const out = helmTemplate("octogee-gw-default", {
       "gatewayEdge.env.APP_URL": "https://app-test.octogee.com",
@@ -1242,7 +1242,7 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
   });
 });
 
-describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
+describe("platform/helm/octogee-gateway/ — profile-aware credential injection", () => {
   it("routes the shared (default) gateway's anthropic through the broker with NO pod-level platform key", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default");
     expect(dep).not.toBeNull();
@@ -1441,7 +1441,7 @@ const cattleDep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default
   });
 });
 
-describe("helm/octogee-gateway/ — per-instance Service annotations", () => {
+describe("platform/helm/octogee-gateway/ — per-instance Service annotations", () => {
   it("does not attach public NEG or BackendConfig annotations to per-instance Services", () => {
     const out = helmTemplate();
     const gatewaySvc = findDoc(out, "Service", "octogee-gateway-default") ?? "";
@@ -1461,7 +1461,7 @@ describe("helm/octogee-gateway/ — per-instance Service annotations", () => {
   });
 });
 
-describe("helm/octogee-gateway/ — per-instance persistence + security knobs", () => {
+describe("platform/helm/octogee-gateway/ — per-instance persistence + security knobs", () => {
   it.each(["x11", "omarchy"])("refuses to render a %s user as a Kubernetes Deployment", (computerDesktop) => {
     expect(() => helmTemplate("octogee-gw-hobby", { gatewayId: "hobby", gatewayClass: "builder", sizingTier: "s", computerDesktop, runtimeKind: "cluster" }))
       .toThrow(/renders only as a GCE VM bundle/);
@@ -1547,7 +1547,7 @@ function networkPolicyIngressRules(np: string): Array<Record<string, any>> {
   return parsed.spec?.ingress ?? [];
 }
 
-describe("helm/octogee-gateway/ — gateway ingress policy", () => {
+describe("platform/helm/octogee-gateway/ — gateway ingress policy", () => {
   function ingressPolicy(values: Record<string, string> = {}): string {
     return findDoc(
       helmTemplate("octogee-gw-default", values),
@@ -1595,7 +1595,7 @@ describe("helm/octogee-gateway/ — gateway ingress policy", () => {
   });
 });
 
-describe("helm/octogee-gateway/ - personal gateway metadata boundary", () => {
+describe("platform/helm/octogee-gateway/ - personal gateway metadata boundary", () => {
   const policyName = "octogee-gateway-metadata-egress-walter";
 
   it("rejects the retired mutable user access flag", () => {
@@ -1616,7 +1616,7 @@ describe("helm/octogee-gateway/ - personal gateway metadata boundary", () => {
   });
 });
 
-describe("helm/octogee-gateway/ - User Kubernetes API-server egress NetworkPolicy", () => {
+describe("platform/helm/octogee-gateway/ - User Kubernetes API-server egress NetworkPolicy", () => {
   const policyName = "octogee-gateway-apiserver-egress-walter";
   const apiServerCidr = (lastOctet: number) =>
     ["10", "128", "0", String(lastOctet)].join(".") + "/32";
@@ -1682,7 +1682,7 @@ describe("helm/octogee-gateway/ - User Kubernetes API-server egress NetworkPolic
   });
 });
 
-describe("helm/octogee-gateway/ — required value validation", () => {
+describe("platform/helm/octogee-gateway/ — required value validation", () => {
   it("fails to render when gatewayId is missing", () => {
     const args = [
       "template",
@@ -1750,7 +1750,7 @@ describe("helm/octogee-gateway/ — required value validation", () => {
 // a per-gateway K8s secret `gateway-auth-token-{gatewayId}` with a random
 // value; the chart threads it via secretKeyRef on every container that
 // needs it. Token is stable across reboots, helm-owned end to end.
-describe("helm/octogee-gateway/ — OPENCLAW_GATEWAY_TOKEN platform-owned", () => {
+describe("platform/helm/octogee-gateway/ — OPENCLAW_GATEWAY_TOKEN platform-owned", () => {
   const SECRET_NAME = "gateway-auth-token-default";
 
   function envBlock(dep: string, containerName: "gateway" | "gateway-edge"): string {
@@ -1840,7 +1840,7 @@ describe("helm/octogee-gateway/ — OPENCLAW_GATEWAY_TOKEN platform-owned", () =
 // merge. The chart already has `gatewayEdge.env.GCP_PROJECT_ID` in
 // defaults — pin that as a contract so a future trim doesn't silently
 // remove it.
-describe("helm/octogee-gateway/ — GCP_PROJECT_ID on gateway-edge", () => {
+describe("platform/helm/octogee-gateway/ — GCP_PROJECT_ID on gateway-edge", () => {
   it("renders GCP_PROJECT_ID on the gateway-edge container for cattle profile (no kubectl-set workaround needed)", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     const ge = containerBlock(dep, "gateway-edge");
@@ -1859,7 +1859,7 @@ describe("helm/octogee-gateway/ — GCP_PROJECT_ID on gateway-edge", () => {
   });
 });
 
-describe("helm/octogee-gateway/ — platform model catalog convergence", () => {
+describe("platform/helm/octogee-gateway/ — platform model catalog convergence", () => {
   it("gives gateway-edge the broker catalog endpoints used after a user is mounted", () => {
     const dep = findDoc(
       helmTemplate("octogee-gw-builder-alice", {
@@ -1905,7 +1905,7 @@ describe("helm/octogee-gateway/ — platform model catalog convergence", () => {
 // ── Profile-aware render-time assertions ───────────────────────────────────
 // Gateway-edge platform secrets are no longer render-required. Routes that still
 // need platform authority fail closed until they move behind octogee-api/fleet controller.
-describe("helm/octogee-gateway/ — platform secret render assertions", () => {
+describe("platform/helm/octogee-gateway/ — platform secret render assertions", () => {
   function templateWithLegacyGatewayEdgeSecrets(extra: Record<string, string> = {}): {
     status: number | null;
     stderr: string;
@@ -1956,7 +1956,7 @@ describe("helm/octogee-gateway/ — platform secret render assertions", () => {
 // inputs (missing required top-level keys, wrong types) fail BEFORE template
 // logic runs. The removed gatewayEdge.secrets block is intentionally not part
 // of the schema; owned values such as gatewayEdge.env remain shape-checked.
-describe("helm/octogee-gateway/ — values.schema.json", () => {
+describe("platform/helm/octogee-gateway/ — values.schema.json", () => {
   it("rejects a values file with gatewayEdge.env as the wrong type", () => {
     const args = [
       "template",
@@ -2071,7 +2071,7 @@ function findDoubleSetEntries(
   );
 }
 
-describe("helm/octogee-gateway/ — env entries pass K8s schema (no value+valueFrom)", () => {
+describe("platform/helm/octogee-gateway/ — env entries pass K8s schema (no value+valueFrom)", () => {
   it("cattle profile: no env entry sets both `value` and `valueFrom` (K8s rejects with 'may not be specified when value is not empty')", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     const bad = findDoubleSetEntries(collectAllEnvEntries(dep));

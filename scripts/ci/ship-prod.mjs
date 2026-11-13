@@ -8,7 +8,7 @@ const sha = args.find(arg => arg.startsWith('--sha='))?.slice(6) ?? execFileSync
 const releaseArgs = [...args.filter(arg => arg !== '--local' && !arg.startsWith('--sha=')), `--sha=${sha}`, '--environment=prod', '--ship-prod', '--post-deploy-checks'];
 const options = releaseOptions(releaseArgs);
 if (local) {
-  execFileSync(process.execPath, ['scripts/ci/deploy.mjs', ...releaseArgs, '--local'], { stdio: 'inherit' });
+  execFileSync(process.execPath, ['platform/scripts/ci/deploy.mjs', ...releaseArgs, '--local'], { stdio: 'inherit' });
 } else {
   await dispatchWorkflow('deploy.yml', { source_sha: sha, environment: 'prod', actor: options.actor, log_level: options.logLevel, post_deploy_checks: 'true', ship_prod: 'true' });
 }

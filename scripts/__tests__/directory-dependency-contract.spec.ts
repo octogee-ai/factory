@@ -5,10 +5,11 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const repoRoot = path.resolve(root, "..");
 
 const directoryDependencies = [
   ["core", "@octogee/shared", "devDependencies", "file:../shared"],
-  ["functions", "@octogee/test-helpers", "devDependencies", "file:../test-helpers"],
+  ["../functions", "@octogee/test-helpers", "devDependencies", "file:../platform/test-helpers"],
   ["gateway-edge", "@octogee/core", "dependencies", "file:../core"],
   ["gateway-edge", "@octogee/shared", "dependencies", "file:../shared"],
   ["gateway-edge", "@octogee/test-helpers", "devDependencies", "file:../test-helpers"],
@@ -21,7 +22,7 @@ const directoryDependencies = [
   ["scripts", "@octogee/shared", "dependencies", "file:../shared"],
 ] as const;
 
-const trackedNpmrcFiles = execFileSync("git", ["ls-files", "*.npmrc"], { cwd: root, encoding: "utf8" })
+const trackedNpmrcFiles = execFileSync("git", ["ls-files", "*.npmrc"], { cwd: repoRoot, encoding: "utf8" })
   .split("\n")
   .filter(Boolean);
 
@@ -67,21 +68,21 @@ describe("directory dependency repository contract", () => {
 
   it("discovers every tracked consumer npm config", () => {
     expect(trackedNpmrcFiles).toEqual(expect.arrayContaining([
-      "core/.npmrc",
+      "platform/core/.npmrc",
       "functions/.npmrc",
-      "gateway-edge/.npmrc",
-      "glm-controller/.npmrc",
-      "octogee-api/.npmrc",
-      "scripts/.npmrc",
+      "platform/gateway-edge/.npmrc",
+      "platform/glm-controller/.npmrc",
+      "platform/octogee-api/.npmrc",
+      "platform/scripts/.npmrc",
     ]));
   });
 
   it.each(trackedNpmrcFiles)("%s enforces the 7-day npm release-age cooldown", (npmrc) => {
-    const lines = fs.readFileSync(path.join(root, npmrc), "utf8").split("\n").map((line) => line.trim());
+    const lines = fs.readFileSync(path.join(repoRoot, npmrc), "utf8").split("\n").map((line) => line.trim());
     expect(lines).toContain("min-release-age=7");
   });
 
-  it.each(["core", "functions", "gateway-edge", "glm-controller", "octogee-api"])(
+  it.each(["core", "../functions", "gateway-edge", "glm-controller", "octogee-api"])(
     "%s enables locally linked packages with the release-age cooldown",
     (consumer) => {
       expect(fs.readFileSync(path.join(root, consumer, ".npmrc"), "utf8")).toBe(
@@ -96,11 +97,18 @@ describe("directory dependency repository contract", () => {
     );
   });
 
-  it.each(["core", "functions", "gateway-edge", "glm-controller", "octogee-api", "scripts"])(
+  it.each([
+    ["core", "../scripts"],
+    ["../functions", "../platform/scripts"],
+    ["gateway-edge", "../scripts"],
+    ["glm-controller", "../scripts"],
+    ["octogee-api", "../scripts"],
+    ["scripts", "../scripts"],
+  ])(
     "%s refreshes packed dependencies before tests",
-    (consumer) => {
+    (consumer, scripts) => {
       expect(readJson(`${consumer}/package.json`).scripts.pretest).toBe(
-        "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
+        `node ${scripts}/ops/sync-local-file-deps.mjs --consumer .`,
       );
     },
   );
@@ -194,7 +202,7 @@ describe("directory dependency repository contract", () => {
     ]) {
       expect(fs.existsSync(path.join(root, filePath))).toBe(false);
     }
-    const rootPackage = readJson("package.json");
+    const rootPackage = readJson("../package.json");
     expect(rootPackage.scripts["regen:file-deps"]).toBeUndefined();
     expect(rootPackage.scripts["rebase:resolve"]).toBeUndefined();
   });

@@ -2,30 +2,30 @@ import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { MODEL_CREDENTIAL_MATERIALIZER_PROVIDERS } from "../../scripts/lib/model-credential-materializer.js";
+import { MODEL_CREDENTIAL_MATERIALIZER_PROVIDERS } from "../../platform/scripts/lib/model-credential-materializer.js";
 import {
   MODEL_CREDENTIAL_CATALOG,
   MODEL_CREDENTIAL_STATIC_PROVIDER_IDS,
-} from "../../shared/types/model-credentials.js";
+} from "../../platform/shared/types/model-credentials.js";
 import {
   SUPPORTED,
   CANONICAL_BASE_URL,
-} from "../../gateway-edge/src/model-credentials/provider-key-format.js";
+} from "../../platform/gateway-edge/src/model-credentials/provider-key-format.js";
 
 // The BYOK provider list lives in three places that MUST agree, or a new
 // provider "works" in one layer and fails at runtime in another (exactly the
 // #1726 review finding). This pins them together so adding a provider to one
 // without the others fails CI:
-//   1. scripts/lib model-credential-materializer providers (api_key entries) — what byot-sync materializes
+//   1. platform/scripts/lib model-credential-materializer providers (api_key entries) — what byot-sync materializes
 //   2. gateway-edge provider-key-format SUPPORTED — what the static key route accepts + probes
-//   3. scripts/secret-resolver.mjs BYOK_ID_RE — what the gateway resolver will resolve
+//   3. platform/scripts/secret-resolver.mjs BYOK_ID_RE — what the gateway resolver will resolve
 
 const repoRoot = path.resolve(__dirname, "../..");
 
 // Source-inspection guards: a module/spec that moved into @octogee/core is read
-// from core/src; scripts/lib + scripts/__tests__ paths fall back to their origin.
+// from platform/core/src; platform/scripts/lib + platform/scripts/__tests__ paths fall back to their origin.
 const readSrc = (rel: string) => {
-  const moved = rel.replace(/^scripts\/(lib|__tests__)\//, "core/src/");
+  const moved = rel.replace(/^platform\/scripts\/(lib|__tests__)\//, "platform/core/src/");
   const target = existsSync(path.join(repoRoot, moved)) ? moved : rel;
   return readFileSync(path.join(repoRoot, target), "utf8");
 };
@@ -46,7 +46,7 @@ const catalogCanonicalBaseUrl = Object.fromEntries(
 
 async function resolverGrammarProviders(): Promise<string[]> {
   const resolver = await import(
-    pathToFileURL(path.join(repoRoot, "scripts/secret-resolver.mjs")).href
+    pathToFileURL(path.join(repoRoot, "platform/scripts/secret-resolver.mjs")).href
   ) as {
     BYOK_API_KEY_PROVIDER_IDS: readonly string[];
   };
@@ -54,7 +54,7 @@ async function resolverGrammarProviders(): Promise<string[]> {
 }
 
 function brokerRouteProviders(): string[] {
-  const src = readSrc("octogee-api/src/routes/byok-broker.ts");
+  const src = readSrc("platform/octogee-api/src/routes/byok-broker.ts");
   if (src.includes("MODEL_CREDENTIAL_STATIC_PROVIDER_IDS")) {
     return catalogStaticProviders;
   }
@@ -66,17 +66,17 @@ function brokerRouteProviders(): string[] {
 describe("BYOK provider registry parity (scripts PROVIDERS ↔ route ↔ resolver)", () => {
   it("static provider projections are backed by the shared model credential catalog", async () => {
     expect(
-      readSrc("gateway-edge/src/model-credentials/provider-key-format.ts"),
+      readSrc("platform/gateway-edge/src/model-credentials/provider-key-format.ts"),
     ).toContain("MODEL_CREDENTIAL_STATIC_PROVIDER_IDS");
     expect(
-      readSrc("scripts/lib/model-credential-materializer.ts"),
+      readSrc("platform/scripts/lib/model-credential-materializer.ts"),
     ).toContain("MODEL_CREDENTIAL_MATERIALIZER_PROVIDERS");
     expect(
-      readSrc("octogee-api/src/routes/byok-broker.ts"),
+      readSrc("platform/octogee-api/src/routes/byok-broker.ts"),
     ).toContain("MODEL_CREDENTIAL_STATIC_PROVIDER_IDS");
 
     const resolver = await import(
-      pathToFileURL(path.join(repoRoot, "scripts/secret-resolver.mjs")).href
+      pathToFileURL(path.join(repoRoot, "platform/scripts/secret-resolver.mjs")).href
     ) as {
       BYOK_API_KEY_PROVIDER_IDS?: readonly string[];
     };

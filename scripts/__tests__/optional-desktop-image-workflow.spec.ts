@@ -4,10 +4,10 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { createMainBuildReleaseDigestManifest } from '../../.github/actions/release-digest-manifest/release-digest-manifest.mjs';
+import { createMainBuildReleaseDigestManifest } from '../../../.github/actions/release-digest-manifest/release-digest-manifest.mjs';
 
-const main = parse(readFileSync(resolve(import.meta.dirname, '../../.github/workflows/build-main.yml'), 'utf8'));
-const shipTest = parse(readFileSync(resolve(import.meta.dirname, '../../.github/workflows/ship-test.yml'), 'utf8'));
+const main = parse(readFileSync(resolve(import.meta.dirname, '../../../.github/workflows/build-main.yml'), 'utf8'));
+const shipTest = parse(readFileSync(resolve(import.meta.dirname, '../../../.github/workflows/ship-test.yml'), 'utf8'));
 
 it('builds Desktop as part of the selected main build before shipment', () => {
   const desktop = main.jobs.desktop;
@@ -16,7 +16,7 @@ it('builds Desktop as part of the selected main build before shipment', () => {
   expect(shipTest.jobs.deploy.needs).toBe('build');
   const checkout = desktop.steps.find((step: { uses?: string }) => step.uses?.startsWith('actions/checkout@'));
   expect(checkout.with).toMatchObject({ ref: '${{ inputs.source_sha || github.sha }}', 'fetch-depth': 0 });
-  const construct = desktop.steps.find((step: { run?: string }) => step.run === 'node scripts/ci/desktop.mjs');
+  const construct = desktop.steps.find((step: { run?: string }) => step.run?.includes('/desktop.mjs'));
   expect(construct.env).toMatchObject({ CI_SOURCE_SHA: '${{ inputs.source_sha || github.sha }}', CI_BRANCH: 'main', CI_DESKTOP_ACTIONS: 'true' });
   const authentication = desktop.steps.find((step: { uses?: string }) => step.uses === './.github/actions/setup-gateway-build');
   expect(authentication.with['service-account']).toBe('octogee-ci-desktop@octogee.iam.gserviceaccount.com');

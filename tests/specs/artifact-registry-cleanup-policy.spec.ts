@@ -13,7 +13,7 @@ type CleanupPolicy = {
 
 const repoRoot = resolve(import.meta.dirname, "../..");
 const policies = JSON.parse(
-  readFileSync(resolve(repoRoot, "scripts/ops/ar-cleanup-policy.json"), "utf8"),
+  readFileSync(resolve(repoRoot, "platform/scripts/ops/ar-cleanup-policy.json"), "utf8"),
 ) as CleanupPolicy[];
 
 describe("Artifact Registry cleanup policy", () => {

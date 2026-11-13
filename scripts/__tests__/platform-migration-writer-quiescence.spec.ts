@@ -338,7 +338,7 @@ describe("platform migration writer quiescence", () => {
   });
 
   it("declares exactly the scheduled Functions the functions package deploys", () => {
-    const functionsSource = path.resolve(import.meta.dirname, "../../functions/src");
+    const functionsSource = path.resolve(import.meta.dirname, "../../../functions/src");
     const scheduled = fs.readdirSync(functionsSource, { recursive: true, encoding: "utf8" })
       .filter((file) => file.endsWith(".ts") && !file.endsWith(".spec.ts") && !file.includes("__tests__"))
       .flatMap((file) => [...fs.readFileSync(path.join(functionsSource, file), "utf8").matchAll(/export const (\w+) = onSchedule\(/gu)].map((match) => match[1]));

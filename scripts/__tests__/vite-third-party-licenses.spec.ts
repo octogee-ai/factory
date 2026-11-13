@@ -67,7 +67,7 @@ describe("Vite third-party license artifact", () => {
   it("includes root provenance plus exact bundled package license files", () => {
     const report = createThirdPartyLicenseReport({
       bundle: bundleWith(reactModule, domPurifyModule),
-      additionalNoticeFiles: [path.join(repoRoot, "THIRD_PARTY_NOTICES.md")],
+      additionalNoticeFiles: [path.join(repoRoot, "../THIRD_PARTY_NOTICES.md")],
     });
 
     expect(report).toContain("# Third-Party Notices");
@@ -96,7 +96,7 @@ describe("Vite third-party license artifact", () => {
   it("emits a stable top-level artifact during production builds", () => {
     const emitFile = vi.fn();
     const plugin = thirdPartyLicenses({
-      additionalNoticeFiles: [path.join(repoRoot, "THIRD_PARTY_NOTICES.md")],
+      additionalNoticeFiles: [path.join(repoRoot, "../THIRD_PARTY_NOTICES.md")],
     });
 
     plugin.generateBundle.call({ emitFile }, {}, bundleWith(reactModule));

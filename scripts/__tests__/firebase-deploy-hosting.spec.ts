@@ -47,7 +47,7 @@ describe("firebase hosting deploy wrapper", () => {
     expect(result.status, result.stderr).toBe(0);
     const args = readFileSync(argsPath, "utf8").trim().split("\n");
     const configArgument = args[args.indexOf("--config") + 1];
-    expect(dirname(configArgument)).toBe(repoRoot);
+    expect(dirname(configArgument)).toBe(dirname(repoRoot));
     const config = JSON.parse(readFileSync(configPath, "utf8"));
     const site = config.hosting.find((entry: { target: string }) => entry.target === "site");
     expect(site.rewrites[0].run.region).toBe("us-west1");

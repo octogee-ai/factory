@@ -51,7 +51,6 @@ COPY --chown=node:node scripts/publish-gateway-token.mjs /octogee/scripts/
 COPY --chown=node:node scripts/tsconfig.json /octogee/scripts/
 COPY --chown=node:node scripts/lib/ /octogee/scripts/lib/
 COPY --chown=node:node scripts/product/lib/octogee-entitlements.ts /octogee/scripts/product/lib/
-COPY --chown=node:node .github/actions/release-digest-manifest/desktop-image.mjs .github/actions/release-digest-manifest/desktop-image.d.mts /octogee/.github/actions/release-digest-manifest/
 COPY --chown=node:node scripts/ops/verify-native-modules.mjs /octogee/scripts/ops/
 COPY --chown=node:node scripts/ops/migrate-user-stores.ts /octogee/scripts/ops/
 RUN /octogee/scripts/node_modules/.bin/esbuild /octogee/scripts/secret-resolver.mjs \
@@ -119,7 +118,6 @@ COPY --link --from=gateway-production-dependencies --chown=1000:1000 /octogee/sh
 COPY --from=gateway-local-packages --chown=node:node /packages /octogee/scripts/node_modules
 COPY --from=gateway-payload --chown=node:node /octogee/core /octogee/core
 COPY --from=gateway-payload --chown=node:node /octogee/scripts /octogee/scripts
-COPY --from=gateway-payload --chown=node:node /octogee/.github/actions/release-digest-manifest /octogee/.github/actions/release-digest-manifest
 COPY --from=gateway-payload --chown=node:node /octogee/shared /octogee/shared
 COPY --from=gateway-payload --chown=node:node /octogee/extensions /octogee/extensions
 COPY --from=gateway-payload --chown=root:root /octogee/bundled-extensions/octogee-identity-tools /usr/local/lib/node_modules/openclaw/dist/extensions/octogee-identity-tools

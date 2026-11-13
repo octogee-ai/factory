@@ -21,7 +21,7 @@ function validateReleaseOptions(options) {
 }
 
 export function fleetStoreStages({ environment, sha, stage, withStore, storeDependencies }) {
-  const againstStore = (label, args) => withStore(storeDependencies(environment), storeEnv => stage(label, 'node', ['--import', './node_modules/tsx/dist/loader.mjs', ...args], { cwd: 'scripts', env: storeEnv }));
+  const againstStore = (label, args) => withStore(storeDependencies(environment), storeEnv => stage(label, 'node', ['--import', './node_modules/tsx/dist/loader.mjs', ...args], { cwd: 'platform/scripts', env: storeEnv }));
   return {
     desktop: () => againstStore('desktop', ['ops/release-desktop-image.ts']),
     fleet: () => againstStore('fleet', ['ops/deploy-fleet.ts', `--sha=${sha}`, '--timeout-ms=3600000']),

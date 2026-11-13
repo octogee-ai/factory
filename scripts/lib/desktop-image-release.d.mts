@@ -1,4 +1,4 @@
-import type { DesktopImageArtifact } from '../../.github/actions/release-digest-manifest/desktop-image.mjs';
+import type { DesktopImageArtifact } from './desktop-image.mjs';
 
 export interface MainBuild {
   manifest: { sourceSha: string; desktopImage?: unknown; surfaces: { gateway: Record<string, string> } };

@@ -7,7 +7,7 @@ import {
   releaseDigestManifestReference,
   validateBaselineReleaseDigestManifest,
   validateReleaseDigestManifest,
-} from "../../.github/actions/release-digest-manifest/release-digest-manifest.mjs";
+} from "../../../.github/actions/release-digest-manifest/release-digest-manifest.mjs";
 
 const repository = "us-west1-docker.pkg.dev/octogee/octogee";
 const sourceSha = "a".repeat(40);

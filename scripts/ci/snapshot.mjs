@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -61,4 +61,12 @@ export function exportSource(root, sha) {
     rmSync(temporary, { recursive: true, force: true });
     throw error;
   }
+}
+
+const CI_SCRIPT_DIRECTORIES = ['platform/scripts/ci', 'scripts/ci'];
+
+export function sourceCiScript(source, name) {
+  const script = CI_SCRIPT_DIRECTORIES.map(directory => `${directory}/${name}`).find(file => existsSync(join(source, file)));
+  if (!script) throw new Error(`${source} carries no ${name} in ${CI_SCRIPT_DIRECTORIES.join(' or ')}`);
+  return script;
 }

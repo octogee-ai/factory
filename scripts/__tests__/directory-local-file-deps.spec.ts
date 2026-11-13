@@ -94,6 +94,20 @@ afterEach(() => {
 });
 
 describe("directory local file dependencies", () => {
+  it("discovers consumers at the repository root and under platform/ when none are named", () => {
+    const root = fixture();
+    const sourceDir = writePackage(root, "source", "@octogee/source");
+    writeConsumer(root);
+    const platformConsumer = path.join(root, "platform", "controller");
+    fs.mkdirSync(platformConsumer, { recursive: true });
+    writeJson(path.join(platformConsumer, "package.json"), {
+      name: "controller", version: "1.0.0", private: true, dependencies: { "@octogee/source": "file:../../source" },
+    });
+
+    expect(discoverLocalFileDeps({ rootDir: root }).map(({ consumerDir, sourceDir: from }) => [path.relative(root, consumerDir), from]).sort())
+      .toEqual([["consumer", sourceDir], ["platform/controller", sourceDir]]);
+  });
+
   it("discovers a directory spec once and detects stale installed package output", () => {
     const root = fixture();
     const sourceDir = writePackage(root, "source", "@octogee/source");

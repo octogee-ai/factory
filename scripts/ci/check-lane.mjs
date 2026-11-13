@@ -7,7 +7,7 @@ if (!/^(units-[123]|emulators|quality)$/.test(lane ?? '')) throw new Error('A va
 const copy = snapshot(process.cwd(), { sha: process.env.CI_SOURCE_SHA });
 const cache = join(dirname(copy.source), 'npm-cache');
 try {
-  const result = spawnSync('/bin/bash', ['scripts/ci/cloud-checks.sh'], {
+  const result = spawnSync('/bin/bash', ['platform/scripts/ci/cloud-checks.sh'], {
     cwd: copy.source,
     env: { ...process.env, CI_CHECKOUT_READY: 'true', CI_CHECK_LANE: lane, npm_config_cache: cache, NPM_CONFIG_CACHE: cache },
     stdio: 'inherit',

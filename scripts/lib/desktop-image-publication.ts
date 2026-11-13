@@ -4,7 +4,7 @@ import { runWithOperationAuditIntent } from '@octogee/core/operation-audit';
 import type { PlatformStateStore } from '@octogee/core/platform-state';
 import { createCentralReleaseAuthority } from '@octogee/core/artifact-registry';
 import { deploymentEnvironmentSettings } from '@octogee/core/deployment-environment';
-import { validateDesktopImage, assertDesktopImageIdentity } from '../../.github/actions/release-digest-manifest/desktop-image.mjs';
+import { validateDesktopImage, assertDesktopImageIdentity } from './desktop-image.mjs';
 import { resolveDesktopRelease } from './desktop-image-release.mjs';
 
 export interface DesktopCloudImage {

@@ -1,4 +1,4 @@
-import { validateReleaseDigestManifest } from '../../.github/actions/release-digest-manifest/release-digest-manifest.mjs';
+import { validateReleaseDigestManifest } from '../../../.github/actions/release-digest-manifest/release-digest-manifest.mjs';
 import { request } from './gcs.mjs';
 import { resolveRegistryArtifact, resolveDesktopRelease as readDesktopRelease } from '../lib/desktop-image-release.mjs';
 

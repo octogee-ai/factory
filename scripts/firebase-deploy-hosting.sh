@@ -21,7 +21,7 @@ set -euo pipefail
 
 target="${1:?usage: firebase-deploy-hosting.sh <site|app> <firebase-project-id>}"
 project="${2:?usage: firebase-deploy-hosting.sh <site|app> <firebase-project-id>}"
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 log="$(mktemp)"
 rendered_config=""

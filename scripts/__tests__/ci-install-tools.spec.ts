@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 
-const repoRoot = resolve(import.meta.dirname, "../..");
+const repoRoot = resolve(import.meta.dirname, "../../..");
 let directory: string;
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), "octogee-install-tools-"));

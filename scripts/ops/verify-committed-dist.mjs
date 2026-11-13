@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
 
 const GIT_BIN = "/usr/bin/git";
 
@@ -63,7 +64,7 @@ function git(packageDir, args) {
   });
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   try {
     verifyCommittedDist({ packageDir: process.cwd() });
   } catch (error) {

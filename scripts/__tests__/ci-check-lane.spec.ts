@@ -13,8 +13,8 @@ function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'octogee-ci-lane-test-'));
   directories.push(root);
   const repository = join(root, 'repository');
-  mkdirSync(join(repository, 'scripts/ci'), { recursive: true });
-  writeFileSync(join(repository, 'scripts/ci/cloud-checks.sh'), `#!/usr/bin/env bash
+  mkdirSync(join(repository, 'platform/scripts/ci'), { recursive: true });
+  writeFileSync(join(repository, 'platform/scripts/ci/cloud-checks.sh'), `#!/usr/bin/env bash
 set -euo pipefail
 node --input-type=module <<'JS'
 import { execFileSync } from 'node:child_process';

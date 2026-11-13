@@ -14,7 +14,8 @@ const base = `inputs-${"b".repeat(64)}`;
 describe("runner image builds", () => {
   it("builds the isolated runner from its own Docker target", () => {
     const plan = imagePlan("octogee-project-runner", { repository, sha });
-    expect(plan.dockerfile).toBe("octogee-api/Dockerfile");
+    expect(plan.dockerfile).toBe("platform/octogee-api/Dockerfile");
+    expect(plan.context).toBe("platform");
     expect(plan.target).toBe("project-runner");
     expect(plan.tag).toBe(`${repository}/octogee-project-runner:${sha.slice(0, 7)}`);
   });
@@ -30,6 +31,39 @@ describe("runner image builds", () => {
       "buildx", "build", "--platform=linux/amd64", "--push", `--label=org.opencontainers.image.revision=${sha}`,
       `--cache-from=type=registry,ref=${repository}/cache/octogee-api:buildcache`,
     ]));
+  });
+
+  it("builds platform images from the platform context and passes their product overlay when it exists", async () => {
+    const platformOnly = mkdtempSync(resolve(tmpdir(), "image-plan-"));
+    expect(imagePlan("glm-controller", { repository, sha }, platformOnly).contexts).toEqual({});
+    expect(imagePlan("octogee-api", { repository, sha }, platformOnly).contexts).toEqual({ "obsidian-connect": "obsidian-connect" });
+    const withProduct = mkdtempSync(resolve(tmpdir(), "image-plan-product-"));
+    mkdirSync(resolve(withProduct, "product/glm-controller"), { recursive: true });
+    const plan = imagePlan("glm-controller", { repository, sha }, withProduct);
+    expect(plan.contexts).toEqual({ overlay: "product/glm-controller" });
+    const run = vi.fn(async () => {});
+    await buildImage(plan, { run, exists: async () => false });
+    const args = run.mock.calls[0][1] as string[];
+    expect(args).toContain("--file=platform/glm-controller/Dockerfile");
+    expect(args).toContain("--build-context=overlay=product/glm-controller");
+    expect(args.at(-1)).toBe("platform");
+  });
+
+  it("passes the product overlay of every platform package the API image compiles", () => {
+    const root = mkdtempSync(resolve(tmpdir(), "image-plan-api-"));
+    mkdirSync(resolve(root, "product/gateway-edge"), { recursive: true });
+    expect(imagePlan("octogee-api", { repository, sha }, root).contexts)
+      .toEqual({ "obsidian-connect": "obsidian-connect", "gateway-edge-overlay": "product/gateway-edge" });
+    mkdirSync(resolve(root, "product/octogee-api"), { recursive: true });
+    expect(imagePlan("octogee-project-runner", { repository, sha }, root).contexts).toEqual({
+      "obsidian-connect": "obsidian-connect", overlay: "product/octogee-api", "gateway-edge-overlay": "product/gateway-edge",
+    });
+  });
+
+  it("builds product images from the repository root", () => {
+    const plan = imagePlan("artifact-worker", { repository, sha });
+    expect(plan.dockerfile).toBe("artifact-worker/Dockerfile");
+    expect(plan.context).toBe(".");
   });
 
   it("leaves the gateway family to the gateway bake", () => {
@@ -80,8 +114,8 @@ describe("image reuse", () => {
     const { calls, deps } = harness();
     const row = await ensureImage("octogee-api", { repository, sha }, deps);
     expect(calls.filter(call => call[0] === "docker")).toHaveLength(1);
-    expect(calls).toContainEqual(["scripts/lib/image-fingerprint-reuse.sh", "record", "octogee-api", repository, sha.slice(0, 7), "f1"]);
-    expect(calls.at(-1)).toEqual(["scripts/lib/publish-full-sha-image-tag.sh", "octogee-api", repository, sha, "octogee"]);
+    expect(calls).toContainEqual(["platform/scripts/lib/image-fingerprint-reuse.sh", "record", "octogee-api", repository, sha.slice(0, 7), "f1"]);
+    expect(calls.at(-1)).toEqual(["platform/scripts/lib/publish-full-sha-image-tag.sh", "octogee-api", repository, sha, "octogee"]);
     expect(row).toEqual({ image: "octogee-api", tag: sha.slice(0, 7), result: "built", seconds: 90 });
   });
 
@@ -93,7 +127,7 @@ describe("image reuse", () => {
     const { calls, deps } = harness(state);
     const row = await ensureImage("octogee-api", { repository, sha }, deps);
     expect(calls.some(call => call[0] === "docker" || call[1] === "record")).toBe(false);
-    expect(calls.filter(call => call[0] === "scripts/lib/publish-full-sha-image-tag.sh")).toHaveLength(fullShaPublishes);
+    expect(calls.filter(call => call[0] === "platform/scripts/lib/publish-full-sha-image-tag.sh")).toHaveLength(fullShaPublishes);
     expect(row.result).toBe(`reused (${via})`);
   });
 

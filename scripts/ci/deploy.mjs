@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { releaseOptions } from './release-plan.mjs';
 import { resolveRelease } from './release-source.mjs';
-import { exportSource } from './snapshot.mjs';
+import { exportSource, sourceCiScript } from './snapshot.mjs';
 import { dispatchWorkflow } from './actions-dispatch.mjs';
 
 const args = process.argv.slice(2);
@@ -24,7 +24,7 @@ if (!local) {
     const manifestPath = join(directory, 'ci-release-manifest.json');
     writeFileSync(manifestPath, JSON.stringify(manifest));
     console.log(`Deploy ${options.environment}: ${manifest.sourceSha} (${digest})`);
-    execFileSync(process.execPath, ['scripts/ci/release.mjs', ...args.filter(arg => arg !== '--local')], {
+    execFileSync(process.execPath, [sourceCiScript(copy.source, 'release.mjs'), ...args.filter(arg => arg !== '--local')], {
       cwd: copy.source, stdio: 'inherit', env: { ...process.env, CI_RELEASE_MANIFEST: manifestPath },
     });
   } finally {

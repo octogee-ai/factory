@@ -5,10 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mainBuild } from './main-build.mjs';
 import { withBuildLock } from './build-lock.mjs';
-import { buildImage, buildSummary, isolatedBaseRecipe, ensureImage as ensureRegistryImage, gatewayBaseRecipe } from './image-build.mjs';
+import { PLATFORM_CONTEXT, buildImage, buildSummary, isolatedBaseRecipe, ensureImage as ensureRegistryImage, gatewayBaseRecipe } from './image-build.mjs';
 import { buildGatewayImages } from './gateway-bake.mjs';
 import { awaitDiskRoom } from './disk-room.mjs';
-import { gcsObjectIdentityFromMetadata, openclawBaseKey } from '../../.github/actions/openclaw-base-key/base-key.mjs';
+import { gcsObjectIdentityFromMetadata, openclawBaseKey } from '../../../.github/actions/openclaw-base-key/base-key.mjs';
 
 const project = 'octogee';
 const region = 'us-central1';
@@ -54,30 +54,30 @@ const ensureImage = async image => summary.push(await ensureRegistryImage(image,
 }));
 let pinned;
 const openclawObjects = () => pinned ??= (() => {
-  const current = JSON.parse(readFileSync('infra/gateway/openclaw-tarball/current.json', 'utf8'));
+  const current = JSON.parse(readFileSync('platform/infra/gateway/openclaw-tarball/current.json', 'utf8'));
   if (!/^openclaw-fork-[a-f0-9]{8}\.tgz$/.test(current.openclawObject) || !/^openclaw-mattermost-[a-f0-9]{8}\.tgz$/.test(current.mattermostObject)) throw new Error('Invalid pinned OpenClaw objects');
   return [current.openclawObject, current.mattermostObject].map(name => gcsObjectIdentityFromMetadata(JSON.parse(run('gcloud', ['storage', 'objects', 'describe', `gs://octogee-openclaw-fork/${name}`, '--format=json']))));
 })();
 let downloaded;
 const openclawTarballs = () => downloaded ??= (async () => {
-  const destinations = ['infra/gateway/openclaw-tarball/openclaw-fork.tgz', 'infra/gateway/openclaw-tarball/openclaw-mattermost-fork.tgz'];
+  const destinations = ['platform/infra/gateway/openclaw-tarball/openclaw-fork.tgz', 'platform/infra/gateway/openclaw-tarball/openclaw-mattermost-fork.tgz'];
   for (const [i, object] of openclawObjects().entries()) await execute('gcloud', ['storage', 'cp', `gs://${object.bucket}/${object.name}#${object.generation}`, destinations[i]]);
   return destinations[0];
 })();
 async function gateway() {
-  const base = openclawBaseKey({ objects: openclawObjects(), recipeFiles: gatewayBaseRecipe() }).tag;
+  const base = openclawBaseKey({ objects: openclawObjects(), recipeFiles: gatewayBaseRecipe(), cwd: PLATFORM_CONTEXT }).tag;
   const hash = value => createHash('sha256').update(value).digest('hex');
-  const recipeHash = files => hash(files.map(file => `${hash(readFileSync(file))}  ${file}\n`).join(''));
+  const recipeHash = files => hash(files.map(file => `${hash(readFileSync(join(PLATFORM_CONTEXT, file)))}  ${file}\n`).join(''));
   const toolchain = {
-    lockSha256: hash(readFileSync('infra/gateway/isolated-toolchain/package-lock.json')),
-    groupsSha256: hash(readFileSync('infra/gateway/isolated-toolchain/groups.json')),
+    lockSha256: hash(readFileSync('platform/infra/gateway/isolated-toolchain/package-lock.json')),
+    groupsSha256: hash(readFileSync('platform/infra/gateway/isolated-toolchain/groups.json')),
   };
   summary.push(...await buildGatewayImages({ repository, sha, base, isolatedBase: `${base}-builder-${recipeHash(isolatedBaseRecipe()).slice(0, 12)}`, toolchain, force }, {
     exists: async ref => Boolean(lookup(ref)),
     script: async (file, args) => run('bash', [file, ...args]),
     prepareBase: async () => {
       const tarball = await openclawTarballs();
-      await execute('bash', ['infra/gateway/openclaw-tarball/extract-npm.sh', tarball]);
+      await execute('bash', ['platform/infra/gateway/openclaw-tarball/extract-npm.sh', tarball]);
     },
     bake: async plan => {
       const room = await awaitDiskRoom(process.env.CI_DISK_ROOM_MARKER);
@@ -95,8 +95,8 @@ async function platform() {
   const reused = Boolean(lookup(`${repository}/octogee-ops-agent:${sha}`));
   if (!reused) {
     await ensureImage('octogee-ops-agent-runtime');
-    await execute('bash', ['scripts/ci/ops-agent.sh'], env);
-    run('bash', ['scripts/lib/publish-full-sha-image-tag.sh', 'octogee-ops-agent', repository, sha, project]);
+    await execute('bash', ['platform/scripts/ci/ops-agent.sh'], env);
+    run('bash', ['platform/scripts/lib/publish-full-sha-image-tag.sh', 'octogee-ops-agent', repository, sha, project]);
   }
   summary.push({ image: 'octogee-ops-agent', tag: sha.slice(0, 7), result: reused ? 'reused (full-SHA tag)' : 'built', seconds: Math.round((Date.now() - started) / 1000) });
 }
@@ -121,7 +121,7 @@ try {
     },
     publish: async () => {
       env.OPENCLAW_TARBALL = await openclawTarballs();
-      await execute('bash', ['scripts/ci/publish-manifest.sh'], env);
+      await execute('bash', ['platform/scripts/ci/publish-manifest.sh'], env);
       return readFileSync(env.CI_OUTPUT_FILE, 'utf8').trim().split('=')[1];
     },
   });

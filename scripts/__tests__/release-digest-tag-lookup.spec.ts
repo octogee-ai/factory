@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const helper = resolve(
   import.meta.dirname,
-  "../../.github/actions/release-digest-manifest/resolve-tag-digest.sh",
+  "../../../.github/actions/release-digest-manifest/resolve-tag-digest.sh",
 );
 const temporaryDirectories: string[] = [];
 

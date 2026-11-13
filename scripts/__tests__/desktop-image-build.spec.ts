@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { ensureDesktopImage, desktopFingerprint, resolveDesktopGatewayImage } from '../../.github/actions/release-digest-manifest/build-desktop-image.mjs';
+import { ensureDesktopImage, desktopFingerprint, resolveDesktopGatewayImage } from '../../../.github/actions/release-digest-manifest/build-desktop-image.mjs';
 const fingerprint = 'b'.repeat(64), sourceSha = 'a'.repeat(40);
 const name = `octogee-computer-${fingerprint.slice(0, 24)}`;
 const image = { name, id: '123', status: 'READY', labels: { source: sourceSha, 'input-a': fingerprint.slice(0, 32), 'input-b': fingerprint.slice(32) } };
@@ -53,7 +53,7 @@ it('gives up on a candidate that never leaves PENDING before the deadline', asyn
   expect(readImage.mock.calls.length).toBeGreaterThan(1);
 });
 
-import { cleanupCandidates } from '../../.github/actions/release-digest-manifest/build-desktop-image.mjs';
+import { cleanupCandidates } from '../../../.github/actions/release-digest-manifest/build-desktop-image.mjs';
 import { TEST_TARGET } from "./fixtures/deployment.js";
 it('cleanup excludes operator VMs and other active CI runs', () => {
   const vm = (run: string) => ({ labels: { 'octogee-image-run': run, purpose: 'octogee-computer-test' }, creationTimestamp: '2026-09-07T00:00:00Z' });

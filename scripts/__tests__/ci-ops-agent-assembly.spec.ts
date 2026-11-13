@@ -22,13 +22,13 @@ const script = (root: string, path: string, body: string) => {
 function run(lookups: number[], { evidenceRevision = "" } = {}) {
   const root = mkdtempSync(resolve(tmpdir(), "octogee-ops-agent-assembly-"));
   const calls = resolve(root, "calls.log");
-  mkdirSync(resolve(root, "scripts/ci"), { recursive: true });
-  copyFileSync(assemble, resolve(root, "scripts/ci/ops-agent.sh"));
-  mkdirSync(resolve(root, "infra/gateway/openclaw-tarball"), { recursive: true });
-  writeFileSync(resolve(root, "infra/gateway/openclaw-tarball/current.json"), JSON.stringify({ sourceSha: forkSha }));
+  mkdirSync(resolve(root, "platform/scripts/ci"), { recursive: true });
+  copyFileSync(assemble, resolve(root, "platform/scripts/ci/ops-agent.sh"));
+  mkdirSync(resolve(root, "platform/infra/gateway/openclaw-tarball"), { recursive: true });
+  writeFileSync(resolve(root, "platform/infra/gateway/openclaw-tarball/current.json"), JSON.stringify({ sourceSha: forkSha }));
   writeFileSync(resolve(root, "lookups"), lookups.join("\n") + "\n");
-  script(root, "scripts/lib/ops-agent-evidence.sh", `echo "evidence $1 $2" >> "$CALLS"; mkdir -p "$3"${evidenceRevision}`);
-  script(root, "scripts/lib/ops-agent-evidence-layer.sh", `echo "layer $2" >> "$CALLS"; touch "$3"`);
+  script(root, "platform/scripts/lib/ops-agent-evidence.sh", `echo "evidence $1 $2" >> "$CALLS"; mkdir -p "$3"${evidenceRevision}`);
+  script(root, "platform/scripts/lib/ops-agent-evidence-layer.sh", `echo "layer $2" >> "$CALLS"; touch "$3"`);
   script(root, ".github/actions/release-digest-manifest/resolve-tag-digest.sh", [
     `echo "resolve $3" >> "${calls}"`,
     `status="$(head -n 1 "${root}/lookups")"; sed -i.bak 1d "${root}/lookups"`,
@@ -39,7 +39,7 @@ function run(lookups: number[], { evidenceRevision = "" } = {}) {
     `echo "crane $*" >> "${calls}"`,
     `if [ "$1" = digest ]; then echo "${runtimeDigest}"; fi`,
   ].join("\n"));
-  const result = spawnSync("bash", ["scripts/ci/ops-agent.sh"], {
+  const result = spawnSync("bash", ["platform/scripts/ci/ops-agent.sh"], {
     cwd: root,
     encoding: "utf8",
     env: {

@@ -47,7 +47,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 FINGERPRINT_SCRIPT="$REPO_ROOT/.github/actions/build-image-fingerprint/image-fingerprint.mjs"
 TAG_DIGEST_RESOLVER="$REPO_ROOT/.github/actions/release-digest-manifest/resolve-tag-digest.sh"
 

@@ -7,7 +7,7 @@ const read = (relativePath: string) =>
   readFileSync(path.join(repoRoot, relativePath), "utf8");
 
 describe("User boot base", () => {
-  const dockerfile = read("infra/gateway/Dockerfile.isolated-base");
+  const dockerfile = read("platform/infra/gateway/Dockerfile.isolated-base");
 
   it("inherits the full OpenClaw base and installs controlled groups without the operator image", () => {
     expect(dockerfile).toContain("ARG GATEWAY_BASE_IMAGE");

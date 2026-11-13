@@ -13,7 +13,7 @@ if [ "${1:-}" = -- ]; then
 fi
 case "$check" in
   eslint)
-    node scripts/ds-tokens.mjs
+    node platform/scripts/ds-tokens.mjs
     if [ "$scoped" = false ]; then npm run lint -- --format=stylish --max-warnings=0
     elif [ "${#files[@]}" -gt 0 ]; then npx eslint --format=stylish --max-warnings=0 --no-warn-ignored -- "${files[@]}"
     else echo 'No changed lint sources remain'
@@ -28,7 +28,7 @@ case "$check" in
   gitleaks)
     gitleaks detect --config=.gitleaks.toml --source=. \
       --log-opts="${CI_BASE_SHA:?base SHA required}..${CI_HEAD_SHA:?head SHA required}" --redact --verbose --exit-code=1
-    if [ "${CI_INCLUDE_WORKING_TREE:-false}" = true ]; then node scripts/ci/working-tree-scan.mjs; fi
+    if [ "${CI_INCLUDE_WORKING_TREE:-false}" = true ]; then node platform/scripts/ci/working-tree-scan.mjs; fi
     ;;
   osv-scanner)
     args=(--config=osv-scanner.toml)

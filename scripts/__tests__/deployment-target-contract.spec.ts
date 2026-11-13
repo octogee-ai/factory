@@ -36,7 +36,7 @@ function deploymentSettings(path: string): string {
 describe("deployment target consumers", () => {
 
   it("keeps the reusable target action free of a regional fallback", () => {
-    const contents = source(".github/actions/resolve-deployment-target/action.yml");
+    const contents = source("../.github/actions/resolve-deployment-target/action.yml");
     expect(contents).toContain("core/dist/resolve-deployment-target.js");
     expect(contents).toContain("does not belong to requested environment");
     expect(contents).not.toContain("us-central1");

@@ -1,4 +1,6 @@
-import { findReusable, publishImage } from "./image-build.mjs";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { PLATFORM_CONTEXT, PRODUCT_ROOT, findReusable, overlayContexts, publishImage } from "./image-build.mjs";
 
 const BASE = "octogee-gateway-base";
 const ISOLATED_BASE = "octogee-gateway-builder-base";
@@ -6,17 +8,19 @@ const SYSTEM = "octogee-gateway-system";
 const IMAGES = ["gateway-edge", "octogee-gateway", "octogee-gateway-builder"];
 const ISOLATED_MAX_COMPRESSED_BYTES = 3100000000;
 const common = {
-  context: ".",
+  context: PLATFORM_CONTEXT,
   platforms: ["linux/amd64"],
   attest: ["type=provenance,disabled=true", "type=sbom,disabled=true"],
   output: ["type=registry"],
 };
 
+const withContexts = contexts => (Object.keys(contexts).length ? { contexts } : {});
+
 const requireImmutable = (tag, label) => {
   if (!/^inputs-[a-f0-9]{64}$/.test(tag ?? "")) throw new Error(`An immutable ${label} is required`);
 };
 
-export function gatewayBakePlan({ repository, sha, base, isolatedBase, toolchain, build }) {
+export function gatewayBakePlan({ repository, sha, base, isolatedBase, toolchain, build }, cwd = process.cwd()) {
   if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error("A full source SHA is required");
   if (!/^[a-z0-9.-]+\/[a-z0-9-]+\/[a-z0-9-]+$/.test(repository)) throw new Error("Invalid registry repository");
   requireImmutable(base, "gateway base");
@@ -38,6 +42,7 @@ export function gatewayBakePlan({ repository, sha, base, isolatedBase, toolchain
     args: { BUILD_SHA: short, ...extra.args },
     labels: { "org.opencontainers.image.revision": sha },
   });
+  const productContext = existsSync(join(cwd, PRODUCT_ROOT)) ? { product: PRODUCT_ROOT } : {};
   const runtimeArgs = { OPENCLAW_RUNTIME_PLUGINS: "mattermost,parallel-plugin,codex", ...systemArg };
   const candidates = {
     [BASE]: build.base && {
@@ -48,12 +53,12 @@ export function gatewayBakePlan({ repository, sha, base, isolatedBase, toolchain
       contexts: { [BASE]: from(BASE), ...systemContext },
       args: { ...systemArg, BUILDER_TOOLCHAIN_LOCK_SHA256: toolchain.lockSha256, BUILDER_TOOL_GROUPS_SHA256: toolchain.groupsSha256 },
     },
-    "gateway-edge": build.images.includes("gateway-edge") && image("gateway-edge", { dockerfile: "gateway-edge/Dockerfile" }),
+    "gateway-edge": build.images.includes("gateway-edge") && image("gateway-edge", { dockerfile: "gateway-edge/Dockerfile", ...withContexts(overlayContexts({ overlay: "gateway-edge" }, cwd)) }),
     "octogee-gateway": build.images.includes("octogee-gateway") && image("octogee-gateway", {
-      dockerfile: "infra/gateway/Dockerfile", contexts: { [BASE]: from(BASE), ...systemContext }, args: runtimeArgs,
+      dockerfile: "infra/gateway/Dockerfile", contexts: { [BASE]: from(BASE), ...systemContext, ...productContext }, args: runtimeArgs,
     }),
     "octogee-gateway-builder": build.images.includes("octogee-gateway-builder") && image("octogee-gateway-builder", {
-      dockerfile: "infra/gateway/Dockerfile", contexts: { [BASE]: from(BASE), [ISOLATED_BASE]: from(ISOLATED_BASE), ...systemContext },
+      dockerfile: "infra/gateway/Dockerfile", contexts: { [BASE]: from(BASE), [ISOLATED_BASE]: from(ISOLATED_BASE), ...systemContext, ...productContext },
       args: { ...runtimeArgs, RUNTIME_BASE_IMAGE: ISOLATED_BASE, IMAGE_PROFILE: "builder" },
     }),
   };
@@ -67,7 +72,7 @@ export function gatewayBakePlan({ repository, sha, base, isolatedBase, toolchain
   return { group: { default: { targets } }, target };
 }
 
-export async function buildGatewayImages({ repository, sha, base, isolatedBase, toolchain, force = false }, { exists, script, bake, prepareBase, now = Date.now }) {
+export async function buildGatewayImages({ repository, sha, base, isolatedBase, toolchain, force = false, root = process.cwd() }, { exists, script, bake, prepareBase, now = Date.now }) {
   const short = sha.slice(0, 7);
   const build = {
     base: !(await exists(`${repository}/${BASE}:${base}`)),
@@ -80,14 +85,14 @@ export async function buildGatewayImages({ repository, sha, base, isolatedBase, 
     found[image] = await findReusable(image, { repository, sha, base: salt, force }, { exists, script });
     if (!found[image].result) build.images.push(image);
   }
-  const plan = gatewayBakePlan({ repository, sha, base, isolatedBase, toolchain, build });
+  const plan = gatewayBakePlan({ repository, sha, base, isolatedBase, toolchain, build }, root);
   const started = now();
   if (plan.group.default.targets.length) {
     if (build.base || plan.target[SYSTEM]) await prepareBase();
     await bake(plan);
   }
   const seconds = Math.round((now() - started) / 1000);
-  if (!found["octogee-gateway-builder"].published) await script("scripts/lib/assert-artifact-image-size.sh", [
+  if (!found["octogee-gateway-builder"].published) await script("platform/scripts/lib/assert-artifact-image-size.sh", [
     `${repository}/octogee-gateway-builder:${short}`, String(ISOLATED_MAX_COMPRESSED_BYTES), repository.split("/")[1],
   ]);
   for (const image of IMAGES) await publishImage(image, { repository, sha }, found[image], { script });

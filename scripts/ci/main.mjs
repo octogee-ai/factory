@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { worktreeSource } from './snapshot.mjs';
+import { sourceCiScript, worktreeSource } from './snapshot.mjs';
 
 const git = args => execFileSync('/usr/bin/git', args, { encoding: 'utf8' }).trim();
 const sha = process.env.CI_SOURCE_SHA ?? git(['rev-parse', 'HEAD']);
@@ -9,7 +9,7 @@ if (branch !== 'main' || !/^[a-f0-9]{40}$/.test(sha)) throw new Error('Main buil
 git(['merge-base', '--is-ancestor', sha, 'origin/main']);
 const copy = worktreeSource(git(['rev-parse', '--show-toplevel']), sha);
 try {
-  const result = spawnSync(process.execPath, ['scripts/ci/run-main.mjs', ...process.argv.slice(2)], {
+  const result = spawnSync(process.execPath, [sourceCiScript(copy.source, 'run-main.mjs'), ...process.argv.slice(2)], {
     cwd: copy.source, stdio: 'inherit', env: { ...process.env, CI_SOURCE_SHA: sha, CI_BRANCH: 'main' },
   });
   if (result.error) throw result.error;

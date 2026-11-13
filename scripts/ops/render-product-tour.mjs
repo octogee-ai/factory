@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-const source = fileURLToPath(new URL('../../docs/brand/product-tour/', import.meta.url));
+const source = fileURLToPath(new URL('../../../docs/brand/product-tour/', import.meta.url));
 const output = path.resolve(process.argv[2] ?? path.join(source, 'dist'));
 const tour = JSON.parse(await readFile(path.join(source, 'tour.json'), 'utf8'));
 await mkdir(output, { recursive: true });

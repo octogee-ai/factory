@@ -10,7 +10,7 @@ const run = (file, args, options = {}) => {
   const result = execFileSync(file, args, { encoding: 'utf8', ...options });
   return result?.trim();
 };
-const target = Object.fromEntries(run('node', ['core/dist/resolve-deployment-target.js', `--environment=${process.env.RELEASE_ENVIRONMENT ?? 'test'}`, '--reject-candidate-target']).split('\n').map(line => {
+const target = Object.fromEntries(run('node', ['platform/core/dist/resolve-deployment-target.js', `--environment=${process.env.RELEASE_ENVIRONMENT ?? 'test'}`, '--reject-candidate-target']).split('\n').map(line => {
   const equals = line.indexOf('=');
   return [line.slice(0, equals), line.slice(equals + 1)];
 }));

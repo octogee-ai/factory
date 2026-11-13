@@ -1,0 +1,64 @@
+# Exclude large directories from Docker build context
+.git
+node_modules
+.firebase
+dist
+.astro
+coverage
+test-results
+logs
+
+# Frontend trees — never copied by any backend/gateway image
+# (~1GB combined). Repo-root build contexts (workspace-api,
+# glm-controller, chat-proxy) would otherwise upload these every build.
+app/
+mobile/
+renderer/
+!artifact-worker/renderer/
+!artifact-worker/renderer/**
+
+# Documentation and tests (not needed in image)
+docs/
+tests/
+# Persona-driven acceptance harness — test-only, must never enter any image.
+acceptance/
+scripts/__tests__/
+*.md
+!README.md
+!THIRD_PARTY_NOTICES.md
+k8s/
+
+# Environment files — never in the image
+.env*
+**/.env
+**/secrets
+
+# Site / functions build artifacts
+site/node_modules
+site/dist
+site/.astro
+functions/node_modules
+functions/lib
+
+# Scripts deps are installed inside the image. Internal package interfaces are copied
+# explicitly before consumer installs, so their committed dist trees stay in context.
+scripts/node_modules
+core/node_modules
+core/dist
+!core/dist/
+!core/dist/**
+shared/node_modules
+shared/dist
+!shared/dist/
+!shared/dist/**
+test-helpers/node_modules
+test-helpers/dist
+!test-helpers/dist/
+!test-helpers/dist/**
+
+# Template deps (each template may have its own node_modules)
+templates/*/node_modules
+templates/*/dist
+templates/*/.astro
+
+gha-creds-*.json

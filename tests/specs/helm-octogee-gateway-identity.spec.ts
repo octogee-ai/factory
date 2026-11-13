@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { parseAllDocuments } from "yaml";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
-const CHART_PATH = path.join(REPO_ROOT, "helm/octogee-gateway");
+const CHART_PATH = path.join(REPO_ROOT, "platform/helm/octogee-gateway");
 
 const REQUIRED_VALUES: Record<string, string> = {
   imageTag: "abc1234",
@@ -60,7 +60,7 @@ function allContainers(pod: Pod): Container[] {
   return [...(pod.spec.initContainers ?? []), ...pod.spec.containers];
 }
 
-describe("helm/octogee-gateway/ — User identity is never rendered", () => {
+describe("platform/helm/octogee-gateway/ — User identity is never rendered", () => {
   it.each([
     ["Shared", { gatewayClass: "shared" }],
     ["X11 gateway VM", USER_VALUES],

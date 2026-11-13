@@ -2,13 +2,13 @@ import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync } from "fs";
 import path from "path";
 
-const repoRoot = path.resolve(__dirname, "../..");
+const platformRoot = path.resolve(__dirname, "../../platform");
 const entrypoint = readFileSync(
-  path.join(repoRoot, "infra/gateway/entrypoint.sh"),
+  path.join(platformRoot, "infra/gateway/entrypoint.sh"),
   "utf8",
 );
 const dockerfile = readFileSync(
-  path.join(repoRoot, "infra/gateway/Dockerfile"),
+  path.join(platformRoot, "infra/gateway/Dockerfile"),
   "utf8",
 );
 
@@ -78,7 +78,7 @@ describe("gateway entrypoint ↔ Dockerfile coverage", () => {
 
   it("every script the entrypoint runs exists in the repo (no typo)", () => {
     const missing = entrypointScripts().filter(
-      (p) => !existsSync(path.join(repoRoot, p)),
+      (p) => !existsSync(path.join(platformRoot, p)),
     );
     expect(missing, `entrypoint.sh references nonexistent scripts: ${missing.join(", ")}`).toEqual([]);
   });
@@ -86,7 +86,7 @@ describe("gateway entrypoint ↔ Dockerfile coverage", () => {
   it("standard-image infra/gateway scripts the entrypoint runs exist and are COPYed into the standard gateway image", () => {
     const scripts = entrypointInfraGatewayScripts();
     const copied = dockerInfraGatewayFiles();
-    const missing = scripts.filter((p) => !existsSync(path.join(repoRoot, p)));
+    const missing = scripts.filter((p) => !existsSync(path.join(platformRoot, p)));
     const isolatedBaseScripts = new Set([
       "infra/gateway/stamp-claude-first-run.mjs",
     ]);
@@ -100,7 +100,7 @@ describe("gateway entrypoint ↔ Dockerfile coverage", () => {
   });
 
   it("installs the octogee config status and adoption helper in every isolated gateway image", () => {
-    expect(existsSync(path.join(repoRoot, "infra/gateway/octogee"))).toBe(true);
+    expect(existsSync(path.join(platformRoot, "infra/gateway/octogee"))).toBe(true);
     expect(dockerfile).toMatch(/COPY infra\/gateway\/octogee \/usr\/local\/bin\/octogee/);
     expect(dockerfile).toMatch(/chmod 755[^\n]*\/usr\/local\/bin\/octogee/);
   });

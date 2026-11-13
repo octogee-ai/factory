@@ -55,8 +55,8 @@ it('rejects conflicting environments before hosted Ship TEST', async () => {
   expect(dispatch).not.toHaveBeenCalled();
 });
 
-const deployCall = (call: unknown[]) => (call[1] as string[])[0] === 'scripts/ci/deploy.mjs';
-const buildCall = (call: unknown[]) => (call[1] as string[])[0] === 'scripts/ci/main.mjs';
+const deployCall = (call: unknown[]) => (call[1] as string[])[0] === 'platform/scripts/ci/deploy.mjs';
+const buildCall = (call: unknown[]) => (call[1] as string[])[0] === 'platform/scripts/ci/main.mjs';
 
 it('deploys a complete image family locally without starting a competing build', async () => {
   process.argv.push('--local');
@@ -89,7 +89,7 @@ it('requests the hosted image family when missing, and stops after a failed buil
   expect(dispatch).toHaveBeenCalledWith('build-main.yml', { source_sha: sha, force: 'false' });
 });
 
-const endToEndCall = (call: unknown[]) => (call[1] as string[])[0] === 'scripts/ci/end-to-end-tests.mjs';
+const endToEndCall = (call: unknown[]) => (call[1] as string[])[0] === 'platform/scripts/ci/end-to-end-tests.mjs';
 
 it('runs end-to-end tests against TEST after a local deploy completes', async () => {
   process.argv.push('--local');
@@ -105,5 +105,5 @@ it('skips end-to-end tests when the local deploy fails', async () => {
   findCompleteRelease.mockResolvedValue({ manifest: { sourceSha: sha } });
   command.mockImplementationOnce(() => { throw new Error('deploy failed'); });
   await expect(import('../ci/ship-test.mjs')).rejects.toThrow('deploy failed');
-  expect(command.mock.calls.map(call => (call[1] as string[])[0])).toEqual(['scripts/ci/deploy.mjs']);
+  expect(command.mock.calls.map(call => (call[1] as string[])[0])).toEqual(['platform/scripts/ci/deploy.mjs']);
 });

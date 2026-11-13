@@ -7,7 +7,7 @@ import { expect, it } from 'vitest';
 import { scanWorkingTree } from '../ci/working-tree-scan.mjs';
 
 const gitleaks = execFileSync('/usr/bin/which', ['gitleaks'], { encoding: 'utf8' }).trim();
-const config = resolve(import.meta.dirname, '../../.gitleaks.toml');
+const config = resolve(import.meta.dirname, '../../../.gitleaks.toml');
 it.each(['tests/new.spec.ts', 'app/src/__tests__/new.spec.ts', 'templates/brain-context/NEW.md'])('scans new credentials in %s', file => {
   const root = mkdtempSync(join(tmpdir(), 'ci-secret-boundary-'));
   try {

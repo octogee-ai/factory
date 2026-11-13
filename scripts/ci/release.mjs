@@ -23,10 +23,10 @@ const stage = (label, file, args, extra = {}) => new Promise((resolve, reject) =
   child.once('close', (code, signal) => code === 0 ? resolve() : reject(new Error(`${label} deployment exited with ${code ?? signal}`)));
 });
 try {
-  run('npm', ['ci', '--prefix', 'scripts', '--no-audit', '--no-fund']);
+  run('npm', ['ci', '--prefix', 'platform/scripts', '--no-audit', '--no-fund']);
   run('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund']);
   const { parse } = await import('yaml');
-  const values = parse(readFileSync(`helm/octogee/values.${options.environment}.yaml`, 'utf8'));
+  const values = parse(readFileSync(`platform/helm/octogee/values.${options.environment}.yaml`, 'utf8'));
   const siteAfterPlatform = values?.global?.platformState?.requireCutoverImport === true;
   await deployRelease(options, {
     siteAfterPlatform,
@@ -35,8 +35,8 @@ try {
       return JSON.parse(readFileSync(process.env.CI_RELEASE_MANIFEST, 'utf8'));
     },
     lock: task => withBuildLock(`deploy-${options.environment}`, request, task, { takeOverFinishedRuns: true }),
-    platform: () => stage('platform', 'bash', ['scripts/ci/platform-deploy.sh']),
-    site: () => stage('site', 'node', ['scripts/ci/site-deploy.mjs']),
+    platform: () => stage('platform', 'bash', ['platform/scripts/ci/platform-deploy.sh']),
+    site: () => stage('site', 'node', ['platform/scripts/ci/site-deploy.mjs']),
     ...fleetStoreStages({ environment: options.environment, sha: options.sha, stage, withStore: withFleetStore, storeDependencies: fleetStoreDependencies }),
   });
 } finally { rmSync(temporary, { recursive: true, force: true }); }

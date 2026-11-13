@@ -18,6 +18,6 @@ case "$check" in
     done <<< "$refs"
     test "$failures" -eq 0
     ;;
-  osv-scanner|cargo-audit|trivy) bash scripts/ci/quality.sh "$check" ;;
+  osv-scanner|cargo-audit|trivy) bash platform/scripts/ci/quality.sh "$check" ;;
   *) echo "Unknown scheduled audit $check" >&2; exit 2 ;;
 esac

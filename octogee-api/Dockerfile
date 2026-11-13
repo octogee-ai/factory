@@ -45,10 +45,10 @@ COPY octogee-api/tsconfig.json ./
 COPY octogee-api/src/ ./src/
 COPY gateway-edge/src/ /gateway-edge/src/
 
-COPY obsidian-connect/package.json obsidian-connect/npm-shrinkwrap.json obsidian-connect/README.md obsidian-connect/LICENSE /obsidian-connect/
-COPY obsidian-connect/bin/ /obsidian-connect/bin/
-COPY obsidian-connect/src/ /obsidian-connect/src/
-COPY obsidian-connect/test/ /obsidian-connect/test/
+COPY --from=obsidian-connect package.json npm-shrinkwrap.json README.md LICENSE /obsidian-connect/
+COPY --from=obsidian-connect bin/ /obsidian-connect/bin/
+COPY --from=obsidian-connect src/ /obsidian-connect/src/
+COPY --from=obsidian-connect test/ /obsidian-connect/test/
 RUN mkdir -p /obsidian-connect-dist \
     && (cd /obsidian-connect \
         && npm pack --ignore-scripts --pack-destination /obsidian-connect-dist)

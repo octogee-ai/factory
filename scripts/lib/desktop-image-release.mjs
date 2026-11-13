@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
-import { validateDesktopImage } from '../../.github/actions/release-digest-manifest/desktop-image.mjs';
+import { validateDesktopImage } from './desktop-image.mjs';
 
 export function validateDesktopRelease(value, build) {
   if (value?.schemaVersion !== 1 || value.sourceSha !== build.manifest.sourceSha

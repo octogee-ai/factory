@@ -29,7 +29,11 @@ function isGlobal(path: string): boolean {
   return GLOBAL_PREFIX.some((pre) => path.startsWith(pre));
 }
 
-function ownerOf(path: string): (typeof OWNERSHIP)[number] | undefined {
+const PRODUCT_DIR = "product/";
+const overlaidPlatformPath = (path: string) =>
+  path.startsWith(PRODUCT_DIR) ? `platform/${path.slice(PRODUCT_DIR.length)}` : path;
+
+function longestOwner(path: string): (typeof OWNERSHIP)[number] | undefined {
   let best: (typeof OWNERSHIP)[number] | undefined;
   for (const o of OWNERSHIP) {
     if (path.startsWith(o.dir) && (!best || o.dir.length > best.dir.length)) {
@@ -37,6 +41,10 @@ function ownerOf(path: string): (typeof OWNERSHIP)[number] | undefined {
     }
   }
   return best;
+}
+
+function ownerOf(path: string): (typeof OWNERSHIP)[number] | undefined {
+  return longestOwner(overlaidPlatformPath(path)) ?? longestOwner(path);
 }
 
 export function resolveScope(changedPaths: string[], deletedPaths: ReadonlySet<string> = new Set()): ScopeResult {
@@ -52,7 +60,7 @@ export function resolveScope(changedPaths: string[], deletedPaths: ReadonlySet<s
 
   const unmapped = changedPaths.filter((path) => !deletedPaths.has(path) && !isGlobal(path) && !isInert(path) && !ownerOf(path));
   if (unmapped.length) {
-    throw new Error(`No CI owner for ${unmapped.join(", ")}; add it to OWNERSHIP in scripts/lib/scope/manifest.ts`);
+    throw new Error(`No CI owner for ${unmapped.join(", ")}; add it to OWNERSHIP in platform/scripts/lib/scope/manifest.ts`);
   }
 
   if (acc.everything) {
@@ -93,8 +101,9 @@ function addOwnerScope(acc: ScopeAccumulator, path: string): void {
 }
 
 function addEdgeScopes(acc: ScopeAccumulator, path: string): void {
+  const platformPath = overlaidPlatformPath(path);
   for (const edge of EDGES) {
-    if (!path.startsWith(edge.when)) continue;
+    if (!platformPath.startsWith(edge.when)) continue;
     addJobs(acc.jobs, edge.jobs);
     acc.reasons.push(`edge:${edge.when}`);
   }

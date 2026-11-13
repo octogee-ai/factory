@@ -170,12 +170,12 @@ describe('githubRunCompleted', () => {
 
 describe('lock-taking workflows can check the lock holder run', () => {
   it.each([
-    ['deploy.yml', 'deploy', 'scripts/ci/deploy.mjs'],
-    ['ship-test.yml', 'deploy', 'scripts/ci/deploy.mjs'],
-    ['build-main.yml', 'desktop', 'scripts/ci/desktop.mjs'],
-    ['desktop-image.yml', 'build', 'scripts/ci/desktop.mjs'],
+    ['deploy.yml', 'deploy', '/deploy.mjs'],
+    ['ship-test.yml', 'deploy', '/deploy.mjs'],
+    ['build-main.yml', 'desktop', '/desktop.mjs'],
+    ['desktop-image.yml', 'build', '/desktop.mjs'],
   ])('%s gives its %s job read access to Actions and the run token', (file, jobName, script) => {
-    const workflow = parse(readFileSync(new URL(`../../.github/workflows/${file}`, import.meta.url), 'utf8'));
+    const workflow = parse(readFileSync(new URL(`../../../.github/workflows/${file}`, import.meta.url), 'utf8'));
     const job = workflow.jobs[jobName];
     expect(job.permissions ?? workflow.permissions).toMatchObject({ actions: 'read' });
     const step = job.steps.find((s: { run?: string }) => s.run?.includes(script));
