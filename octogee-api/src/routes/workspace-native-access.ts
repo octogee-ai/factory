@@ -1,3 +1,4 @@
+import { brokerRequestLimit } from "../middleware/broker-request-limit.js";
 import { Router, type Request } from "express";
 import { readGatewayAuthorizationInStore } from "@octogee/core/gateway-live-release";
 import { isCanonicalWorkspaceMembership } from "@octogee/core/gateway-principal-access";
@@ -107,7 +108,7 @@ async function toolConversation(deps: WorkspaceConversationDeps, claim: ToolConv
 }
 export function createToolConversationRoutes(deps: WorkspaceConversationDeps): Router {
   const router = Router();
-  router.post("/tool-conversation", async (req: Request, res, next) => {
+  router.post("/tool-conversation", brokerRequestLimit(2400), async (req: Request, res, next) => {
     try {
       const claim = toolConversationClaim(req);
       const context = claim ? await toolConversation(deps, claim) : null;

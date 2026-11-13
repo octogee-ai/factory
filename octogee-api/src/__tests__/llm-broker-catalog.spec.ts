@@ -17,6 +17,20 @@ async function credential(store: InMemoryModelBrokerTokenStore, provider: ModelB
 }
 
 describe("credential-scoped broker catalog", () => {
+  it("limits catalog requests by verified owner and gateway before resolving the provider key", async () => {
+    const store = new InMemoryModelBrokerTokenStore();
+    const alice = await credential(store, "openai");
+    const bob = await credential(store, "openai", "bob");
+    const providerKeyResolver = vi.fn(async () => ({ apiKey: "fixture-key", source: "platform" as const }));
+    const app = createLlmBrokerApp({ rails: operatorRailRegistry(), store, providerKeys: {}, now: () => 2_000, providerKeyResolver });
+    for (let index = 0; index < 120; index++) {
+      await request(app).get("/v1/catalog").set("x-api-key", alice.token).expect(200);
+    }
+    await request(app).get("/v1/catalog").set("x-api-key", alice.token).expect(429);
+    expect(providerKeyResolver).toHaveBeenCalledTimes(120);
+    await request(app).get("/v1/catalog").set("x-api-key", bob.token).expect(200);
+  });
+
   it.each(["anthropic", "openai", "openrouter"] as const)("reports only %s routes and registered models without billing or upstream calls", async (provider) => {
     const store = new InMemoryModelBrokerTokenStore();
     const { token } = await credential(store, provider);

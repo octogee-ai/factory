@@ -1,3 +1,4 @@
+import { brokerRequestLimit } from "../middleware/broker-request-limit.js";
 import { Router, type Request, type Response } from "express";
 import type { PlatformStateRepositories } from "@octogee/core/platform-state";
 
@@ -50,7 +51,7 @@ export function createOwnerAutomationAuthorizationBrokerRoutes(opts: {
   const findAssignedUser = opts.findAssignedUser ?? findAssignedUserByAgentId;
   const rateLimiter = opts.rateLimiter ?? createProductivityRateLimiter();
 
-  router.post("/authorize", async (req, res) => {
+  router.post("/authorize", brokerRequestLimit(2400), async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
     const proof = proofBody(req);

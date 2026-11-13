@@ -1,5 +1,6 @@
 import { operatorRailRegistry, type ModelBrokerRailRegistry } from "../lib/model-broker-rails.js";
 import * as crypto from "node:crypto";
+import { rateLimit } from "express-rate-limit";
 import { Router, type Request, type Response } from "express";
 
 import type {
@@ -120,7 +121,9 @@ export function createModelKeyIssuerRoutes(deps: ModelKeyIssuerRouteDeps): Route
       : deps.ttlSeconds;
   const now = deps.now ?? Date.now;
 
-  router.post("/issue", async (req, res, next) => {
+  const issuerQuota = rateLimit({ windowMs: 60_000, limit: 1200, standardHeaders: "draft-7", legacyHeaders: false });
+
+  router.post("/issue", issuerQuota, async (req, res, next) => {
     try {
       if (!authorize(req, bearerToken, res)) return;
       const parsed = validIssueBody((req.body ?? {}) as IssueBody);
@@ -160,7 +163,7 @@ export function createModelKeyIssuerRoutes(deps: ModelKeyIssuerRouteDeps): Route
     }
   });
 
-  router.post("/revoke", async (req, res, next) => {
+  router.post("/revoke", issuerQuota, async (req, res, next) => {
     try {
       if (!authorize(req, bearerToken, res)) return;
       const parsed = validIssueBody((req.body ?? {}) as IssueBody);

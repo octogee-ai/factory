@@ -3,6 +3,7 @@ import type { GatewayArtifact } from "@octogee/core/gateway-live-release";
 
 import express, { Router, type Express, type Request, type Response, type NextFunction } from "express";
 import type { Server } from "node:http";
+import { rateLimit } from "express-rate-limit";
 import { publicAppOriginsFromEnv } from "@octogee/core/public-app-origins";
 import { renderMetrics } from "./metrics.js";
 import type { UserAccounts, UserSignInHosts } from "@octogee/core/admin-user-router";
@@ -306,6 +307,11 @@ export function createHttpServer(deps: HttpServerDeps): Express {
   addHealthAndMetricsRoutes(app);
 
   const adminRouter = Router();
+  adminRouter.use(rateLimit({
+    windowMs: 60_000, limit: 1200, standardHeaders: false, legacyHeaders: false,
+    skipSuccessfulRequests: true,
+    requestWasSuccessful: req => req.isAdmin === true,
+  }));
   adminRouter.use(
     createRequireAdmin({
       identity: deps.identity,
@@ -314,6 +320,11 @@ export function createHttpServer(deps: HttpServerDeps): Express {
       log: deps.log,
     }),
   );
+
+  adminRouter.use(rateLimit({
+    windowMs: 60_000, limit: 300, standardHeaders: "draft-7", legacyHeaders: false,
+    keyGenerator: req => req.uid!,
+  }));
 
   addAdminFleetEventRoute(
     adminRouter,

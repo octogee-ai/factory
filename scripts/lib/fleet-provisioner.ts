@@ -8,6 +8,7 @@ import { createFleetBrokerClient } from "./fleet-broker-client.js";
 import { isolatedToolchainRoot } from "./user-storage.js";
 import { waitForPreparedIsolatedToolchain } from "./isolated-toolchain-preparation.js";
 import express from "express";
+import { rateLimit } from "express-rate-limit";
 import { workspaceIdentityReady } from "@octogee/core/openclaw-workspace-bootstrap";
 import { OpenclawWireError } from "@octogee/shared/types/openclaw-wire-core";
 import * as path from "node:path";
@@ -1972,42 +1973,43 @@ function registerMigrationRoutes(
   migrationDeps: MigrationHandlerDeps,
   processControlDeps: SurgeOpenClawProcessHandlerDeps,
 ): void {
+  const quota = rateLimit({ windowMs: 60_000, limit: 1200, standardHeaders: "draft-7", legacyHeaders: false });
   const restore = createRestoreHandler(migrationDeps);
-  app.post("/restore/:gatewayId", restore);
-  app.post("/resume-restore/:gatewayId", restore);
-  app.post("/migration-progress/:gatewayId", createMigrationProgressHandler(migrationDeps));
-  app.post("/resume/:gatewayId", createResumeHandler(migrationDeps));
-  app.post("/scheduler/:gatewayId", createSchedulerMigrationHandler(migrationDeps));
-  app.post("/scheduler-ready/:gatewayId", createSchedulerReadyHandler(migrationDeps));
-  app.post("/schedules/:gatewayId", createScheduleTransferHandler(migrationDeps));
-  app.post("/quiesce/:gatewayId", createQuiesceHandler(migrationDeps));
-  app.post("/flush/:gatewayId", createFlushHandler(migrationDeps));
-  app.post("/verify/:gatewayId", createVerifyHandler(migrationDeps));
-  app.post("/export-paths/:gatewayId", createExportPathsHandler(migrationDeps));
+  app.post("/restore/:gatewayId", quota, restore);
+  app.post("/resume-restore/:gatewayId", quota, restore);
+  app.post("/migration-progress/:gatewayId", quota, createMigrationProgressHandler(migrationDeps));
+  app.post("/resume/:gatewayId", quota, createResumeHandler(migrationDeps));
+  app.post("/scheduler/:gatewayId", quota, createSchedulerMigrationHandler(migrationDeps));
+  app.post("/scheduler-ready/:gatewayId", quota, createSchedulerReadyHandler(migrationDeps));
+  app.post("/schedules/:gatewayId", quota, createScheduleTransferHandler(migrationDeps));
+  app.post("/quiesce/:gatewayId", quota, createQuiesceHandler(migrationDeps));
+  app.post("/flush/:gatewayId", quota, createFlushHandler(migrationDeps));
+  app.post("/verify/:gatewayId", quota, createVerifyHandler(migrationDeps));
+  app.post("/export-paths/:gatewayId", quota, createExportPathsHandler(migrationDeps));
   app.post(
-    "/export-activation-manifest/:gatewayId",
+    "/export-activation-manifest/:gatewayId", quota,
     createActivationManifestExportHandler(migrationDeps),
   );
-  app.post("/prepare-import/:gatewayId", createPrepareImportHandler(migrationDeps));
-  app.post("/activate-import/:gatewayId", createActivateImportHandler(migrationDeps));
-  app.post("/prepare-rsync-import/:gatewayId", createPrepareRsyncImportHandler(migrationDeps));
-  app.post("/push-rsync-state/:gatewayId", createPushRsyncStateHandler(migrationDeps));
-  app.post("/finish-rsync-import/:gatewayId", createFinishRsyncImportHandler(migrationDeps));
-  app.post("/abort-rsync-import/:gatewayId", createAbortRsyncImportHandler(migrationDeps));
+  app.post("/prepare-import/:gatewayId", quota, createPrepareImportHandler(migrationDeps));
+  app.post("/activate-import/:gatewayId", quota, createActivateImportHandler(migrationDeps));
+  app.post("/prepare-rsync-import/:gatewayId", quota, createPrepareRsyncImportHandler(migrationDeps));
+  app.post("/push-rsync-state/:gatewayId", quota, createPushRsyncStateHandler(migrationDeps));
+  app.post("/finish-rsync-import/:gatewayId", quota, createFinishRsyncImportHandler(migrationDeps));
+  app.post("/abort-rsync-import/:gatewayId", quota, createAbortRsyncImportHandler(migrationDeps));
   app.post(
-    "/hold-surge-openclaw/:gatewayId",
+    "/hold-surge-openclaw/:gatewayId", quota,
     createHoldSurgeOpenClawHandler(processControlDeps),
   );
   app.post(
-    "/resume-surge-openclaw/:gatewayId",
+    "/resume-surge-openclaw/:gatewayId", quota,
     createResumeSurgeOpenClawHandler(processControlDeps),
   );
   app.post(
-    "/unreserve-surge-openclaw/:gatewayId",
+    "/unreserve-surge-openclaw/:gatewayId", quota,
     createUnreserveSurgeOpenClawHandler(processControlDeps),
   );
-  app.post("/complete-surge-handoff/:gatewayId", createCompleteSurgeHandoffHandler(migrationDeps));
-  app.post("/unmount/:gatewayId", createUnmountHandler(migrationDeps));
+  app.post("/complete-surge-handoff/:gatewayId", quota, createCompleteSurgeHandoffHandler(migrationDeps));
+  app.post("/unmount/:gatewayId", quota, createUnmountHandler(migrationDeps));
 }
 
 interface IsolatedSurgeGateWiring {
@@ -2692,7 +2694,8 @@ export async function startFleetController(
     }));
   });
 
-  app.post(`${FLEET_STATE_PATH}/:gatewayId`, createFleetStateHandler({
+  const fleetStateQuota = rateLimit({ windowMs: 60_000, limit: 1200, standardHeaders: "draft-7", legacyHeaders: false });
+  app.post(`${FLEET_STATE_PATH}/:gatewayId`, fleetStateQuota, createFleetStateHandler({
     publicKey: opts.publicKey,
     gatewayId: opts.gatewayId,
     log: opts.log,
