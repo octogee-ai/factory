@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+import http.server
+import json
+import os
+import socketserver
+import subprocess
+from pathlib import Path
+
+UNIT = "octo-desktop.service"
+USER_UNIT = "user@1000.service"
+MIGRATE_UNIT = "octo-home-migrate.service"
+SSH_UNIT = "sshd.service"
+OWNER_UID = 1000
+GATE = "/srv/octogee/home-restore.gate"
+SOCKET = "/run/octogee-desktop/control.sock"
+
+
+def owner_processes(uid):
+    result = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit(): continue
+        try:
+            fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
+            if entry.stat().st_uid == uid and fields[0] not in ("Z", "X"):
+                result.append(int(entry.name))
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+    return result
+
+
+def operate(action, run=subprocess.run, gate=GATE, processes=owner_processes):
+    def command(argv, check=True):
+        return run(argv, check=check, capture_output=True, text=True)
+
+    if action == "reconcile-tools":
+        result = run(["systemd-run", "--quiet", "--wait", "--pipe", "--collect", "--property=Type=exec", "--property=RuntimeMaxSec=20min", "--property=KillMode=control-group", "/usr/local/bin/octo-desktop-tool-storage", "--reconcile"], check=True, capture_output=True, text=True)
+        if result.stderr: print(result.stderr, flush=True)
+        return
+    if action == "stop-home":
+        if not os.path.exists(gate):
+            raise RuntimeError("full-home restore is blocked: SSH session writers have no verified host fence")
+        states = command(["systemctl", "show", "--property=ActiveState", "--value", UNIT, USER_UNIT, SSH_UNIT]).stdout.split()
+        if len(states) != 3 or any(value not in ("inactive", "failed") for value in states) or processes(OWNER_UID):
+            raise RuntimeError(f"fresh-home restore refused: desktop, user manager or SSH writers are running behind {gate}")
+        return
+    if action not in {"freeze", "thaw", "stop", "start"}:
+        raise ValueError("unknown action")
+    if action == "start" and os.path.exists(gate):
+        raise RuntimeError(f"writers stay off until the checkpoint restore clears {gate}")
+
+    def property_value(unit, name):
+        return command(["systemctl", "show", f"--property={name}", "--value", unit]).stdout.strip()
+
+    def thaw(units):
+        errors = []
+        for unit in units:
+            try:
+                if property_value(unit, "ActiveState") == "active":
+                    command(["systemctl", "thaw", unit])
+            except subprocess.CalledProcessError as error:
+                errors.append(error)
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise RuntimeError("; ".join(str(error) for error in errors))
+
+    if action == "freeze":
+        frozen = []
+        try:
+            for unit in (UNIT, USER_UNIT):
+                if property_value(unit, "ActiveState") != "active":
+                    continue
+                if property_value(unit, "FreezerState") == "frozen":
+                    continue
+                frozen.append(unit)
+                command(["systemctl", "freeze", unit])
+            command(["sync", "-f", "/home/octo"])
+        except subprocess.CalledProcessError as error:
+            try:
+                thaw(reversed(frozen))
+            except (subprocess.CalledProcessError, RuntimeError) as rollback_error:
+                raise RuntimeError(f"{error}; freeze rollback failed: {rollback_error}") from error
+            raise
+    elif action == "thaw":
+        thaw((USER_UNIT, UNIT))
+    elif action == "stop":
+        was_masked = command(["systemctl", "is-enabled", USER_UNIT], check=False).stdout.strip() == "masked-runtime"
+        thaw((UNIT,) if was_masked else (USER_UNIT, UNIT))
+        try:
+            command(["systemctl", "mask", "--runtime", USER_UNIT])
+            command(["systemctl", "stop", UNIT])
+            command(["systemctl", "stop", USER_UNIT])
+        except (subprocess.CalledProcessError, RuntimeError) as error:
+            if not was_masked:
+                try:
+                    command(["systemctl", "unmask", "--runtime", USER_UNIT])
+                except subprocess.CalledProcessError as rollback_error:
+                    raise RuntimeError(f"{error}; restore hold rollback failed: {rollback_error}") from error
+            raise
+    else:
+        try:
+            command(["systemctl", "unmask", "--runtime", USER_UNIT])
+            thaw((USER_UNIT, UNIT))
+            command(["systemctl", "start", USER_UNIT])
+            command(["systemctl", "start", MIGRATE_UNIT])
+            command(["systemctl", "start", UNIT])
+        except (subprocess.CalledProcessError, RuntimeError) as error:
+            try:
+                command(["systemctl", "start", "--no-block", SSH_UNIT])
+            except subprocess.CalledProcessError as ssh_error:
+                raise RuntimeError(f"{error}; SSH admission also failed: {ssh_error}") from error
+            raise
+        command(["systemctl", "start", "--no-block", SSH_UNIT])
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def address_string(self):
+        return "local"
+
+    def do_POST(self):
+        action = self.path.removeprefix("/")
+        try:
+            if action == "record-tools":
+                result = subprocess.run(["/usr/local/bin/octo-desktop-tool-storage", "--record"], check=True, capture_output=True, text=True, timeout=50)
+                if result.stderr: print(result.stderr, flush=True)
+                code, body = 200, json.loads(result.stdout)
+            elif action == "accept-home-recovery":
+                result = subprocess.run(["/usr/local/bin/octo-home-recovery"], check=True, capture_output=True, text=True, timeout=50)
+                code, body = 200, json.loads(result.stdout)
+            else:
+                operate(action)
+                code, body = 200, {"ok": True}
+        except ValueError as error:
+            code, body = 400, {"error": str(error)}
+        except (subprocess.SubprocessError, RuntimeError, OSError) as error:
+            code, body = 500, {"error": str(error), "detail": getattr(error, "stderr", None)}
+        self.log_message("desktop %s: %s", action, body)
+        encoded = json.dumps(body).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+
+if __name__ == "__main__":
+    if os.path.exists(SOCKET):
+        os.unlink(SOCKET)
+    with socketserver.UnixStreamServer(SOCKET, Handler) as server:
+        os.chmod(SOCKET, 0o600)
+        server.serve_forever()

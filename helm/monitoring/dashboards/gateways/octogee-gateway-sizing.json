@@ -1,0 +1,638 @@
+{
+  "uid": "octogee-gateway-sizing",
+  "title": "Gateways \u2014 Right-Sizing",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "tags": [
+    "octogee",
+    "gateway"
+  ],
+  "links": [
+    {
+      "title": "Gateways",
+      "type": "dashboards",
+      "tags": [
+        "gateway"
+      ],
+      "asDropdown": true,
+      "includeVars": true,
+      "keepTime": true,
+      "icon": "external link"
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {
+          "text": "Managed Prometheus",
+          "value": "Managed Prometheus"
+        },
+        "hide": 0,
+        "refresh": 1
+      },
+      {
+        "name": "namespace",
+        "label": "Namespace",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": {
+          "query": "label_values(kube_pod_info{job=\"gmp-kube-state-metrics\"}, namespace)",
+          "refId": "ns"
+        },
+        "regex": "/^(__ENVIRONMENT_NAMESPACES__)$/",
+        "current": {
+          "text": "octogee",
+          "value": "octogee"
+        },
+        "includeAll": false,
+        "multi": false,
+        "refresh": 2,
+        "sort": 1
+      },
+      {
+        "name": "gwpod",
+        "label": "Gateway pod",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": {
+          "query": "label_values(kube_pod_info{namespace=\"$namespace\",pod=~\"octogee-gateway-.*\"}, pod)",
+          "refId": "gwpod"
+        },
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "includeAll": true,
+        "multi": true,
+        "refresh": 2,
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "Reading this board",
+      "options": {
+        "mode": "markdown",
+        "content": "**Right-size the `gateway` container's tier from real peak usage.** Gateways run **Guaranteed QoS** (requests == limits), so a pod can't burst past its tier \u2014 under-sizing surfaces as **OOMKills** (memory) or **CPU throttling**, never as >100% usage.\n\n- **Peak mem % of limit** is the binding signal \u2014 pick the **smallest tier that keeps peak under ~70%**.\n- **CPU throttled %** sustained above 0 means the agent wants more cores than the tier grants \u2192 size up.\n- **Window = the dashboard time range.** Set it to **7d\u201330d** (Prometheus retains 30d) for a real signal; the default `now-6h` is too short to size on.\n\nTiers (cpu / mem): micro 0.5 / 2Gi \u00b7 mini 1 / 4Gi \u00b7 nano 2 / 8Gi \u00b7 **small 4 / 16Gi (operator default)** \u00b7 medium 8 / 32Gi \u00b7 large 16 / 64Gi \u00b7 xlarge 32 / 128Gi \u00b7 2xlarge 56 / 224Gi."
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": 2,
+      "type": "row",
+      "title": "Per-instance headroom \u2014 peak over the selected range",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      },
+      "panels": []
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "Right-sizing summary (gateway container)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max_over_time(sum by(pod)(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",pod=~\"$gwpod\",container=\"gateway\"}[5m]))[$__range:5m])",
+          "legendFormat": "cpu_peak",
+          "refId": "A",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by(pod)(kube_pod_container_resource_limits{job=\"gmp-kube-state-metrics\",namespace=\"$namespace\",pod=~\"$gwpod\",container=\"gateway\",resource=\"cpu\"})",
+          "legendFormat": "cpu_lim",
+          "refId": "B",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "100 * max_over_time(sum by(pod)(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",pod=~\"$gwpod\",container=\"gateway\"}[5m]))[$__range:5m]) / sum by(pod)(kube_pod_container_resource_limits{job=\"gmp-kube-state-metrics\",namespace=\"$namespace\",pod=~\"$gwpod\",container=\"gateway\",resource=\"cpu\"})",
+          "legendFormat": "cpu_pct",
+          "refId": "C",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max_over_time(sum by(pod)(container_memory_working_set_bytes{namespace=\"$namespace\",pod=~\"$gwpod\",container=\"gateway\"})[$__range:5m]) / 1073741824",
+          "legendFormat": "mem_peak_gib",
+          "refId": "D",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by(pod)(kube_pod_container_resource_limits{job=\"gmp-kube-state-metrics\",namespace=\"$namespace\",pod=~\"$gwpod\",container=\"gateway\",resource=\"memory\"}) / 1073741824",
+          "legendFormat": "mem_lim_gib",
+          "refId": "E",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "100 * max_over_time(sum by(pod)(container_memory_working_set_bytes{namespace=\"$namespace\",pod=~\"$gwpod\",container=\"gateway\"})[$__range:5m]) / sum by(pod)(kube_pod_container_resource_limits{job=\"gmp-kube-state-metrics\",namespace=\"$namespace\",pod=~\"$gwpod\",container=\"gateway\",resource=\"memory\"})",
+          "legendFormat": "mem_pct",
+          "refId": "F",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      },
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "pod": "Gateway pod",
+              "Value #A": "Peak CPU (cores)",
+              "Value #B": "CPU limit (cores)",
+              "Value #C": "CPU % of limit",
+              "Value #D": "Peak mem (GiB)",
+              "Value #E": "Mem limit (GiB)",
+              "Value #F": "Mem % of limit"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "row",
+      "title": "CPU",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "panels": []
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "CPU cores \u2014 used vs limit",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by(pod)(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",pod=~\"$gwpod\",container=\"gateway\"}[5m]))",
+          "legendFormat": "{{pod}} used",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by(pod)(kube_pod_container_resource_limits{job=\"gmp-kube-state-metrics\",namespace=\"$namespace\",pod=~\"$gwpod\",container=\"gateway\",resource=\"cpu\"})",
+          "legendFormat": "{{pod}} limit",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "CPU throttled %",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Sustained above 0 \u2192 the gateway is CPU-starved at this tier; size up.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "100 * sum by(pod)(rate(container_cpu_cfs_throttled_periods_total{namespace=\"$namespace\",pod=~\"$gwpod\",container=\"gateway\"}[5m])) / clamp_min(sum by(pod)(rate(container_cpu_cfs_periods_total{namespace=\"$namespace\",pod=~\"$gwpod\",container=\"gateway\"}[5m])), 0.001)",
+          "legendFormat": "{{pod}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      }
+    },
+    {
+      "id": 7,
+      "type": "row",
+      "title": "Memory",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "panels": []
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Memory working set \u2014 used vs limit",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by(pod)(container_memory_working_set_bytes{namespace=\"$namespace\",pod=~\"$gwpod\",container=\"gateway\"})",
+          "legendFormat": "{{pod}} used",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by(pod)(kube_pod_container_resource_limits{job=\"gmp-kube-state-metrics\",namespace=\"$namespace\",pod=~\"$gwpod\",container=\"gateway\",resource=\"memory\"})",
+          "legendFormat": "{{pod}} limit",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 25
+      }
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Gateway pods OOM-killed (range)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(max_over_time(kube_pod_container_status_last_terminated_reason{job=\"gmp-kube-state-metrics\",namespace=\"$namespace\",pod=~\"$gwpod\",container=\"gateway\",reason=\"OOMKilled\"}[$__range])) or vector(0)",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 25
+      }
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "Per-container breakdown (gateway vs gateway-edge sidecar)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 33
+      },
+      "panels": []
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "CPU by container",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by(pod,container)(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",pod=~\"$gwpod\",container=~\"gateway|gateway-edge\"}[5m]))",
+          "legendFormat": "{{pod}}/{{container}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 34
+      }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Memory by container",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by(pod,container)(container_memory_working_set_bytes{namespace=\"$namespace\",pod=~\"$gwpod\",container=~\"gateway|gateway-edge\"})",
+          "legendFormat": "{{pod}}/{{container}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 34
+      }
+    }
+  ]
+}

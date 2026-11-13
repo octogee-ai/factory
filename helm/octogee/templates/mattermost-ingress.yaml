@@ -1,0 +1,68 @@
+{{- $ingressClass := (.Values.global).ingressClassName | default "traefik" -}}
+{{- $edgeEnabled := .Values.edgeIngress.enabled | default false -}}
+{{- if and (eq $ingressClass "gce") (or .Values.mattermost.ingress.enabled $edgeEnabled) }}
+---
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: {{ .Values.mattermost.ingress.backendConfigName | default "mattermost-backend" }}
+spec:
+  healthCheck:
+    type: HTTP
+    requestPath: /api/v4/system/ping
+    port: 8065
+  timeoutSec: 3600
+  connectionDraining:
+    drainingTimeoutSec: 300
+  {{- if .Values.mattermost.ingress.cloudArmor.enabled }}
+  securityPolicy:
+    name: {{ .Values.mattermost.ingress.cloudArmor.policyName }}
+  {{- end }}
+  # GKE BackendConfig controller treats `iap` field absent as "leave the
+  # GCP backend service's IAP setting alone" — which means `if iap.enabled`
+  # blocks silently fail to disable IAP after a previous enable. Render
+  # `iap.enabled` always so the controller actually pushes the flip down
+  # to GCP. (Confirmed empirically: `gcloud compute backend-services
+  # describe` showed iap.enabled=True on both envs even after the chart
+  # stopped declaring an iap block — Apr 30 2026.)
+  iap:
+    enabled: {{ .Values.mattermost.ingress.iap.enabled | default false }}
+    {{- if and .Values.mattermost.ingress.iap.enabled .Values.mattermost.ingress.iap.oauthClientCredentialsSecretName }}
+    oauthclientCredentials:
+      secretName: {{ .Values.mattermost.ingress.iap.oauthClientCredentialsSecretName }}
+    {{- end }}
+---
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: {{ .Values.mattermost.ingress.certName }}
+spec:
+  domains:
+    - {{ .Values.mattermost.ingress.host }}
+{{- end }}
+{{- if and .Values.mattermost.ingress.enabled (not $edgeEnabled) }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mattermost-ingress
+  {{- if eq $ingressClass "gce" }}
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    networking.gke.io/managed-certificates: {{ .Values.mattermost.ingress.certName }}
+    kubernetes.io/ingress.global-static-ip-name: {{ .Values.mattermost.ingress.staticIpName }}
+  {{- end }}
+spec:
+  ingressClassName: {{ $ingressClass }}
+  rules:
+    - host: {{ .Values.mattermost.ingress.host }}
+      http:
+        paths:
+          - path: {{ ternary "/*" "/" (eq $ingressClass "gce") }}
+            pathType: {{ ternary "ImplementationSpecific" "Prefix" (eq $ingressClass "gce") }}
+            backend:
+              service:
+                name: mattermost
+                port:
+                  number: 8065
+{{- end }}

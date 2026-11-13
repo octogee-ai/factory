@@ -1,0 +1,171 @@
+{
+  "uid": "octogee-tracing",
+  "title": "Tracing & APM (OTel)",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "tags": [
+    "octogee",
+    "tracing"
+  ],
+  "links": [],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {
+          "text": "Managed Prometheus",
+          "value": "Managed Prometheus"
+        },
+        "hide": 0,
+        "refresh": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "",
+      "options": {
+        "mode": "markdown",
+        "content": "## Tracing & APM (OpenTelemetry)\n\n**Status: not yet landing.** This is the third SPOG pillar (metrics \u2713 \u00b7 logs \u2713 \u00b7 traces \u23f3), stubbed and ready to light up.\n\n### Current pipeline\n- No OTel collector or application instrumentation is deployed yet.\n\n### Intended (deferred prod-runtime work)\n1. Deploy an **OTel Collector** with the `googlecloud` exporter \u2192 **Cloud Trace**.\n2. Point `VITE_OTLP_ENDPOINT` at it \u2192 client traces land.\n3. Instrument octogee-api / gateway-edge / agent-run (OTLP \u2192 collector).\n\n### Where traces will be viewed\nCloud Trace is explored in the **GCP Cloud Console** (no reliable Grafana trace datasource plugin). Once span-metrics exist, RED panels + exemplars can be added below.\n\n\ud83d\udd17 [Cloud Trace console](https://console.cloud.google.com/traces/list?project=octogee)"
+      },
+      "gridPos": {
+        "h": 18,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": 2,
+      "type": "row",
+      "title": "Placeholders (light up when the collector lands)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "panels": []
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Span ingest rate (collector)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "vector(0)",
+          "legendFormat": "no data \u2014 collector not deployed",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 19
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Service RED \u2014 request rate from spans",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "vector(0)",
+          "legendFormat": "no data \u2014 instrument services",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 19
+      }
+    }
+  ]
+}

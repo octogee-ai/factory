@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+STATE_ROOT="${OCTO_VM_STATE_ROOT:-/srv/octogee}"
+IMAGE_FILE="${OCTO_COMPUTER_IMAGE_FILE:-/etc/octogee-computer-image}"
+image="$(cat "$IMAGE_FILE")"
+[[ "$image" =~ ^[a-z][a-z0-9-]{0,62}$ ]] || { echo "octo-home-migrate: invalid platform image identity" >&2; exit 1; }
+recovery_root="$STATE_ROOT/.home-checkpoint/pre-migration"
+machine_id="$(cat "${OCTO_MACHINE_ID_FILE:-/etc/machine-id}")"
+[[ "$machine_id" =~ ^[a-f0-9]{32}$ ]] || { echo "octo-home-migrate: invalid native machine identity" >&2; exit 1; }
+point_id="$image-$machine_id"
+point="$recovery_root/$point_id"
+[[ ! -L "$STATE_ROOT/.home-checkpoint" && ! -L "$recovery_root" && ! -L "$point" ]] || { echo "octo-home-migrate: recovery paths must not be symlinks" >&2; exit 1; }
+install -d -m 0700 "$recovery_root"
+if [[ ! -e "$point" ]]; then
+  points=0
+  for existing in "$recovery_root"/*; do
+    [[ -e "$existing" ]] && points=$((points + 1))
+  done
+  (( points < 2 )) || { echo "octo-home-migrate: recovery retention is full; archive an older platform recovery point before another image update" >&2; exit 1; }
+  nested="$(btrfs subvolume list -o "$STATE_ROOT")"
+  while IFS= read -r entry; do
+    [[ -z "$entry" || "$entry" == *' path .home-checkpoint/'* ]] || { echo "octo-home-migrate: nested user subvolumes require a complete recovery adapter" >&2; exit 1; }
+  done <<< "$nested"
+  printf '%s\n' "$image" > "$STATE_ROOT/.home-checkpoint/recovery-image"
+  printf '%s\n' "$point_id" > "$STATE_ROOT/.home-checkpoint/recovery-point"
+  sync -f "$STATE_ROOT"
+  btrfs subvolume snapshot -r "$STATE_ROOT" "$point"
+  rm "$STATE_ROOT/.home-checkpoint/recovery-image" "$STATE_ROOT/.home-checkpoint/recovery-point"
+fi
+[[ "$(cat "$point/.home-checkpoint/recovery-image")" == "$image" && "$(cat "$point/.home-checkpoint/recovery-point")" == "$point_id" ]] || { echo "octo-home-migrate: recovery point identity differs" >&2; exit 1; }
+[[ "$(btrfs property get -ts "$point" ro)" == 'ro=true' ]] || { echo "octo-home-migrate: pre-migration home point is not read-only" >&2; exit 1; }
+
+native_migrate() {
+  setpriv --reuid=octo --regid=octo --init-groups env HOME=/home/octo USER=octo LOGNAME=octo XDG_RUNTIME_DIR=/run/user/1000 \
+    DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus OMARCHY_PATH=/usr/share/omarchy \
+    PATH=/usr/share/omarchy/bin:/usr/bin:/bin /usr/share/omarchy/bin/omarchy migrate "$@"
+}
+pending_migrations() {
+  set +e
+  pending="$(native_migrate --pending 2>&1)"
+  pending_status=$?
+  set -e
+  if [[ "$pending_status" == 1 && -z "$pending" ]]; then return 1; fi
+  if [[ "$pending_status" != 0 || -z "$pending" ]]; then
+    echo "octo-home-migrate: native pending check failed ($pending_status): $pending" >&2
+    exit 1
+  fi
+  return 0
+}
+
+if pending_migrations; then
+  native_migrate
+  if pending_migrations; then
+    echo "octo-home-migrate: native migrations remain pending; user admission stays closed: $pending" >&2
+    exit 1
+  fi
+fi
+echo "octo-home-migrate: native Omarchy migrations complete; recovery point kept until separately verified gateway/native-store admission"

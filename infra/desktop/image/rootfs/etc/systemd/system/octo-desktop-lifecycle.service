@@ -1,0 +1,13 @@
+[Unit]
+Description=Octogee desktop checkpoint lifecycle
+After=octo-desktop.service
+
+[Service]
+ExecStart=/usr/local/bin/octo-desktop-lifecycle
+RuntimeDirectory=octogee-desktop
+RuntimeDirectoryMode=0700
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

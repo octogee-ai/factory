@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway-edge
+  labels:
+    {{- include "gateway-edge.labels" . | nindent 4 }}
+spec:
+  # Phase 6.B collocation: gateway-edge now runs as a sidecar inside the
+  # octogee-gateway pod. This alias is retained for internal compatibility;
+  # public gateway-local traffic goes through the stable gateway-router Service.
+  # Keep operator pods out of this alias so generic fallback traffic cannot land
+  # on tenant-untrusted gateway-edge sidecars.
+  selector:
+    app: octogee-gateway
+    gateway-profile: standard
+  ports:
+    - port: {{ .Values.port }}
+      targetPort: {{ .Values.port }}
+      name: http
+  type: ClusterIP
+{{ $router := .Values.router | default dict }}
+{{ $routerEnabled := true }}
+{{ if hasKey $router "enabled" }}
+{{ $routerEnabled = $router.enabled }}
+{{ end }}
+{{ if $routerEnabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $router.serviceName | default "gateway-router" }}
+  labels:
+    {{- include "gateway-edge.labels" . | nindent 4 }}
+    app: {{ $router.serviceName | default "gateway-router" }}
+  {{- if eq ((.Values.global).ingressClassName | default "traefik") "gce" }}
+  annotations:
+    cloud.google.com/neg: '{"ingress":true}'
+    cloud.google.com/backend-config: '{"default":"gateway-edge-backend"}'
+  {{- end }}
+spec:
+  selector:
+    app: {{ $router.serviceName | default "gateway-router" }}
+  ports:
+    - port: {{ $router.port | default .Values.port }}
+      targetPort: {{ $router.port | default .Values.port }}
+      name: http
+  type: ClusterIP
+{{ end }}

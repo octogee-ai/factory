@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="${OCTO_SCRATCH_ROOT:-/var/lib/docker/volumes}"
+IMAGE="${OCTO_SCRATCH_IMAGE:-/var/lib/octogee-scratch.ext4}"
+BYTES=8589934592
+[[ ! -L "$ROOT" && ! -L "$IMAGE" ]] || { echo "scratch storage paths must not be symlinks" >&2; exit 1; }
+if [[ ! -e "$IMAGE" ]]; then
+  [[ "${1:-}" == --initialize-factory ]] || { echo "scratch filesystem is missing; replace the platform boot image" >&2; exit 1; }
+  for unit in docker.service docker.socket; do
+    ! systemctl is-active --quiet "$unit" || { echo "scratch initialization requires stopped Docker" >&2; exit 1; }
+  done
+  install -d -m 0755 "$ROOT"
+  available="$(df -PB1 "$ROOT" | awk 'END {print $4}')"
+  (( available >= BYTES + 2147483648 )) || { echo "scratch initialization requires 8 GiB plus 2 GiB boot headroom" >&2; exit 1; }
+  (umask 077; set -o noclobber; : > "$IMAGE")
+  fallocate -l "$BYTES" "$IMAGE"
+  mkfs.ext4 -q -F "$IMAGE"
+  stage="${ROOT}.factory-mount"
+  [[ ! -e "$stage" ]] || { echo "scratch initialization stage already exists; preserve it for repair" >&2; exit 1; }
+  install -d -m 0700 "$stage"
+  mount -o loop,nodev,nosuid "$IMAGE" "$stage"
+  trap 'umount "$stage"' EXIT
+  cp -a "$ROOT/." "$stage/"
+  sync -f "$stage"
+  umount "$stage"
+  trap - EXIT
+  rmdir "$stage"
+fi
+[[ "$(stat -c %s "$IMAGE")" == "$BYTES" ]] || { echo "scratch filesystem has the wrong fixed capacity" >&2; exit 1; }
+uuid="$(blkid -p -s UUID -o value "$IMAGE")"
+[[ -n "$uuid" && "$(blkid -p -s TYPE -o value "$IMAGE")" == ext4 ]] || { echo "scratch filesystem identity/type is unverified" >&2; exit 1; }
+mountpoint -q "$ROOT" || mount -o loop,nodev,nosuid "$IMAGE" "$ROOT"
+read -r observed_uuid observed_type <<< "$(findmnt -n -o UUID,FSTYPE --mountpoint "$ROOT")"
+[[ "$observed_uuid" == "$uuid" && "$observed_type" == ext4 ]] || { echo "Docker scratch is mounted from another filesystem" >&2; exit 1; }
+echo "octo-scratch-storage: Docker volumes on the fixed 8 GiB disposable boot filesystem"

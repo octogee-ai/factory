@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+import json
+import os
+import re
+import subprocess
+import time
+import urllib.request
+from urllib.parse import urlsplit
+
+import websocket
+
+
+def browser_running():
+    profile = os.path.join(os.environ["HOME"], ".config/octogee-chromium")
+    result = subprocess.run(
+        ["pgrep", "-u", str(os.getuid()), "-f", re.escape("--user-data-dir=" + profile)],
+        capture_output=True, text=True, timeout=2,
+    )
+    if result.returncode not in (0, 1):
+        raise RuntimeError("could not inspect Chromium processes: " + result.stderr)
+    return result.returncode == 0
+
+
+def close_browser():
+    if not browser_running():
+        print("Chromium already stopped", flush=True)
+        return
+    deadline = time.monotonic() + 12
+    with urllib.request.urlopen("http://127.0.0.1:9222/json/version", timeout=3) as response:
+        endpoint = json.load(response)["webSocketDebuggerUrl"]
+    url = urlsplit(endpoint)
+    if url.scheme != "ws" or url.hostname != "127.0.0.1" or url.port != 9222:
+        raise ValueError("unexpected Chromium CDP endpoint")
+    connection = websocket.create_connection(endpoint, timeout=3, suppress_origin=True)
+    try:
+        connection.send(json.dumps({"id": 1, "method": "Browser.close"}))
+        try:
+            reply = connection.recv()
+        except websocket.WebSocketConnectionClosedException:
+            reply = ""
+        if reply and json.loads(reply).get("error"):
+            raise RuntimeError("Chromium rejected Browser.close: " + reply)
+    finally:
+        connection.close(timeout=1)
+    while browser_running():
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Chromium did not exit after Browser.close")
+        time.sleep(0.1)
+    print("Chromium closed cleanly", flush=True)
+
+
+if __name__ == "__main__":
+    close_browser()

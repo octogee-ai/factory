@@ -1,0 +1,113 @@
+name: Build main
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-main-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io/octogee-ai/octogee-cloud
+
+jobs:
+  images:
+    name: Images (${{ matrix.platform }})
+    if: github.repository == 'octogee-ai/octogee-cloud'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+            arch: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
+        with:
+          node-version: 22
+      - name: Stage the pinned OpenClaw build
+        run: |
+          node infra/gateway/openclaw-tarball/fetch-release.mjs --to=infra/gateway/openclaw-tarball
+          bash infra/gateway/openclaw-tarball/extract-npm.sh infra/gateway/openclaw-tarball/openclaw-fork.tgz
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push by digest
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          node scripts/ci/cloud-build.mjs plan --registry="$REGISTRY" --sha="$GITHUB_SHA" --platform="$PLATFORM" --cache=gha > "$RUNNER_TEMP/bake.json"
+          docker buildx bake --file="$RUNNER_TEMP/bake.json" --metadata-file="$RUNNER_TEMP/metadata.json"
+          mkdir -p "$RUNNER_TEMP/digests"
+          node scripts/ci/cloud-build.mjs digests --platform="$PLATFORM" --metadata="$RUNNER_TEMP/metadata.json" > "$RUNNER_TEMP/digests/${{ matrix.arch }}.json"
+      - name: Check the images carry only platform source
+        run: node scripts/ci/cloud-build.mjs tripwire --registry="$REGISTRY" --digests="$RUNNER_TEMP/digests/${{ matrix.arch }}.json" --root=. --pull
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/${{ matrix.arch }}.json
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish
+    needs: images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: digests-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag multi-platform images and write the image manifest
+        run: |
+          node scripts/ci/cloud-build.mjs publish --registry="$REGISTRY" --sha="$GITHUB_SHA" --digests="$RUNNER_TEMP/digests" > "$RUNNER_TEMP/image-manifest.json"
+          {
+            echo "### Platform images at ${GITHUB_SHA:0:7}"
+            echo
+            echo '```json'
+            cat "$RUNNER_TEMP/image-manifest.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: image-manifest-${{ github.sha }}
+          path: ${{ runner.temp }}/image-manifest.json
+          if-no-files-found: error
+          retention-days: 90

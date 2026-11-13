@@ -1,0 +1,30 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-monitoring-scrape
+spec:
+  # Scope tightly to gitea. An empty podSelector ({}) would pull EVERY pod under
+  # NetworkPolicy control — and a pod with no prior policy is default-allow, so
+  # selecting it silently flips it to default-deny and drops all ingress not
+  # listed here (this took cloud-sql-proxy's :5432 offline and 502'd prod login).
+  # gitea already carries the gitea-ingress policy, so adding a rule here is
+  # purely additive and flips nothing. Mattermost metrics are Enterprise-licensed
+  # (404 unlicensed) so there's nothing to scrape; restricted gateways get their
+  # monitoring allowance from the gateway ingress policy instead.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: gitea
+  policyTypes:
+    - Ingress
+  ingress:
+    # GMP scrapes from the managed collector DaemonSet in gke-gmp-system, NOT the
+    # monitoring namespace (which only runs Grafana + the gmp-frontend proxy).
+    # Pointing this at monitoring firewalls the collectors and takes gitea
+    # metrics dark (up=0).
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: gke-gmp-system
+      ports:
+        - protocol: TCP
+          port: 3000  # gitea /metrics (shares the http port)

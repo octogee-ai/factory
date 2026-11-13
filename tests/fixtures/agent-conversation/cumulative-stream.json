@@ -1,0 +1,20 @@
+{
+  "frames": [
+    { "sequence": 1, "lane": "commentary", "itemId": "commentary-1", "value": "First" },
+    { "sequence": 2, "lane": "commentary", "itemId": "commentary-1", "value": "First thought." },
+    { "sequence": 3, "lane": "tool", "itemId": "tool-1", "value": "Tool one" },
+    { "sequence": 4, "lane": "commentary", "itemId": "commentary-2", "value": "After" },
+    { "sequence": 5, "lane": "commentary", "itemId": "commentary-2", "value": "After tool." },
+    { "sequence": 6, "lane": "tool", "itemId": "tool-2", "value": "Tool two" },
+    { "sequence": 7, "lane": "final", "itemId": "octogee:turn-finalized", "value": "Final sentence." }
+  ],
+  "expected": {
+    "durableItems": [
+      { "itemId": "commentary-1", "ordinal": 1, "text": "First thought." },
+      { "itemId": "tool-1", "ordinal": 2, "text": "Tool one" },
+      { "itemId": "commentary-2", "ordinal": 3, "text": "After tool." },
+      { "itemId": "tool-2", "ordinal": 4, "text": "Tool two" }
+    ],
+    "finalAnswer": "Final sentence."
+  }
+}

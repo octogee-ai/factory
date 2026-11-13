@@ -1,0 +1,21 @@
+import { type RecordKey } from "../errors.js";
+import type { AgentImportPointer, AgentImportPointerName, AgentImportRecord, AnonymousOperationalArchive, UserDeletionJobStatus } from "../jobs.js";
+import type { OpaqueMap, Revision } from "../store.js";
+import { FirestoreFields } from "./workspaces.js";
+export declare const STORED_PRODUCT_VERIFICATION_STATUS = "posthog_verification_pending";
+export declare const EXPORT_RECORD_KIND = "authored-agent-export";
+export type PlainObject = Record<string, unknown>;
+export declare const archiveKey: (archiveId: string) => RecordKey;
+export declare const agentImportKey: (uid: string, importId: string) => RecordKey;
+export declare const agentImportPointerKey: (uid: string, pointer: AgentImportPointerName) => RecordKey;
+export declare function storedDeletionStatus(status: UserDeletionJobStatus): string;
+export declare function anonymousArchiveFromData(id: string, data: Record<string, unknown>): AnonymousOperationalArchive;
+export declare function isoMillis(key: RecordKey, fields: FirestoreFields, path: string): number;
+export declare function agentImportFields(uid: string, importId: string, record: OpaqueMap, cleanupAt: number | null): Omit<AgentImportRecord, "record">;
+export declare function agentImportRecordFromPayload(uid: string, importId: string, payload: OpaqueMap, cleanupAt: number | null): AgentImportRecord;
+export declare function agentImportRecordFromData(uid: string, importId: string, data: PlainObject): AgentImportRecord;
+export declare function agentImportDocument(record: AgentImportRecord & {
+    readonly revision?: Revision;
+}): PlainObject;
+export declare function agentImportPointerFromData(uid: string, pointer: AgentImportPointerName, data: PlainObject): AgentImportPointer;
+export declare function agentImportPointerDocument(uid: string, value: AgentImportPointer): PlainObject;

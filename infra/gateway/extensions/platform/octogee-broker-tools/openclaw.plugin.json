@@ -1,0 +1,9 @@
+{
+  "id": "octogee-broker-tools", "name": "Octogee Broker Discovery", "version": "0.1.0",
+  "description": "Credential-scoped model discovery and owner-only broker inspection.",
+  "providers": ["octogee-broker"],
+  "activation": { "onStartup": true },
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {
+    "brokerUrl": { "type": "string" }, "tokenPath": { "type": "string" }
+  } }
+}

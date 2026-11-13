@@ -1,0 +1,17 @@
+{{- if .Values.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: octogee-gateway-{{ include "octogee-gateway.revisionId" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: octogee-gateway
+    {{- include "octogee-gateway.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.pdb.minAvailable }}
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      app: octogee-gateway
+      gateway-instance: {{ include "octogee-gateway.revisionId" . }}
+{{- end }}

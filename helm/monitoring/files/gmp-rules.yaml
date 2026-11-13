@@ -1,0 +1,314 @@
+# Octogee alert rules — GMP managed rule evaluation. Ported from the retired
+# PrometheusRule (kube-prometheus-stack). The managed rule-evaluator evaluates
+# these against Monarch and writes their state to the ALERTS metric. WEST
+# Terraform Cloud Monitoring policies select firing critical/warning ALERTS
+# series and notify the verified operator email and SMS channels.
+apiVersion: monitoring.googleapis.com/v1
+kind: ClusterRules
+metadata:
+  name: octogee-alerts
+spec:
+  groups:
+    - name: octogee.gateway
+      rules:
+        - alert: GatewayDown
+          expr: |
+            (
+              sum by (namespace) (up{job="octogee-gateway",namespace=~"__ENVIRONMENT_NAMESPACES__"} == 1)
+              or on(namespace)
+              (0 * kube_namespace_created{job="gmp-kube-state-metrics",namespace=~"__ENVIRONMENT_NAMESPACES__"})
+            ) < 1
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Octogee gateway is unreachable"
+            description: "No gateway metrics for 2m. Pod may be crashlooping or stuck."
+        - alert: GatewayHighRestarts
+          expr: kube_pod_container_status_restarts_total{job="gmp-kube-state-metrics",namespace=~"__ENVIRONMENT_NAMESPACES__",container="gateway"} > 3
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Gateway pod has restarted {{ $value }} times"
+            description: "Container {{ $labels.container }} in {{ $labels.namespace }} has restarted {{ $value }} times."
+        - alert: GatewayPodNotReady
+          expr: kube_pod_status_ready{job="gmp-kube-state-metrics",namespace=~"__ENVIRONMENT_NAMESPACES__",pod=~"octogee-gateway-.*", condition="true"} == 0
+          for: 3m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Gateway pod not ready for 3m"
+            description: "Pod {{ $labels.pod }} in {{ $labels.namespace }} has been not-ready for 3 minutes."
+        - alert: GatewayDesiredRunningUnavailable
+          expr: glm_gateway_desired_running_unavailable{namespace=~"__ENVIRONMENT_NAMESPACES__"} == 1
+          for: 3m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Desired-running gateway {{ $labels.gateway_id }} has no available pod"
+            description: "The fleet controller expects gateway {{ $labels.gateway_id }} to be running, but Kubernetes has reported zero available replicas for 3 minutes. Check the gateway card, rollout operation, and pod events."
+        - alert: GatewayOnDemandFallback
+          expr: |
+            (
+              kube_pod_info{job="gmp-kube-state-metrics",namespace=~"__ENVIRONMENT_NAMESPACES__",pod=~"octogee-gateway-.*"}
+              * on(namespace,pod) group_left()
+              kube_pod_labels{job="gmp-kube-state-metrics",namespace=~"__ENVIRONMENT_NAMESPACES__",label_gateway_class=~"builder|isolated"}
+            )
+            * on(node) group_left()
+            kube_node_labels{job="gmp-kube-state-metrics",label_cloud_google_com_gke_spot!="true"}
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Gateway {{ $labels.pod }} is running on on-demand capacity"
+            description: "An owner-bound regional Spot-first ComputeClass exhausted a Spot placement and activated its on-demand fallback. Service remains available and active migration returns the gateway to Spot when capacity permits."
+        - alert: SharedGatewayPoolDegraded
+          expr: |
+            (
+              count by (namespace) (
+                (kube_pod_status_ready{job="gmp-kube-state-metrics",namespace=~"__ENVIRONMENT_NAMESPACES__",condition="true"} == 1)
+                * on(namespace,pod) group_left()
+                kube_pod_labels{job="gmp-kube-state-metrics",namespace=~"__ENVIRONMENT_NAMESPACES__",label_gateway_class="shared"}
+              )
+              or on(namespace)
+              (0 * kube_namespace_created{job="gmp-kube-state-metrics",namespace=~"__ENVIRONMENT_NAMESPACES__"})
+            )
+            < on(namespace) group_left()
+            octogee_shared_pool_min_replicas{namespace=~"__ENVIRONMENT_NAMESPACES__"}
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Shared gateway pool is degraded in {{ $labels.namespace }}"
+            description: "Fewer Ready shared gateway pods than the environment's minReplicas floor (the fleet controller's octogee_shared_pool_min_replicas gauge) are available from the on-demand reliability floor. Each slot's minAvailable: 1 PDB protects its Ready gateway during voluntary disruption while AlwaysAllow permits eviction of an unhealthy stale pod. Inspect gateway pods, node capacity, and the shared pool scaler."
+        - alert: SharedGatewayZoneDiversityLost
+          expr: |
+            (
+              count by (namespace) (
+                count by (namespace, label_topology_kubernetes_io_zone) (
+                  (
+                    (kube_pod_status_ready{job="gmp-kube-state-metrics",namespace=~"__ENVIRONMENT_NAMESPACES__",condition="true"} == 1)
+                    * on(namespace,pod) group_left(node)
+                    kube_pod_info{job="gmp-kube-state-metrics",namespace=~"__ENVIRONMENT_NAMESPACES__",pod=~"octogee-gateway-.*"}
+                    * on(namespace,pod) group_left()
+                    kube_pod_labels{job="gmp-kube-state-metrics",namespace=~"__ENVIRONMENT_NAMESPACES__",label_gateway_class="shared"}
+                    * on(node) group_left(label_topology_kubernetes_io_zone)
+                    kube_node_labels{job="gmp-kube-state-metrics",label_topology_kubernetes_io_zone!=""}
+                  )
+                )
+              )
+              or on(namespace)
+              (0 * kube_namespace_created{job="gmp-kube-state-metrics",namespace=~"__ENVIRONMENT_NAMESPACES__"})
+            ) < 2
+            and on(namespace)
+            octogee_shared_pool_min_replicas{namespace=~"__ENVIRONMENT_NAMESPACES__"} >= 2
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Shared gateway pool lost zone diversity in {{ $labels.namespace }}"
+            description: "Ready shared gateway pods occupy fewer than two Central zones. Capacity remains available, but a zonal disruption can now remove the entire shared pool."
+        - alert: SharedGatewayMaxCapacity
+          expr: increase(glm_shared_gateway_max_capacity_total{namespace=~"__ENVIRONMENT_NAMESPACES__"}[5m]) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Shared gateway reached its configured member limit"
+            description: "The fleet controller needs another whole shared gateway member but shared-a through shared-d are already running. Raise the configured member ceiling or reduce assignment pressure before another disposable gateway is preempted."
+        - alert: GatewayKubeletPreempted
+          expr: increase(glm_disruption_observations_total{cause="kubelet_critical_preemption",namespace=~"__ENVIRONMENT_NAMESPACES__"}[10m]) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Kubelet preempted a gateway pod in {{ $labels.namespace }} to admit a critical pod"
+            description: "GKE Autopilot bound a system-node-critical pod (usually kube-system/gke-system-balloon-pod) to a full node and the kubelet evicted a gateway to admit it. PriorityClass and PodDisruptionBudget cannot prevent this. The Deployment replaces the pod; check the fleet controller's 'Gateway disruption observed' log for the node and affected users."
+        - alert: BuilderComputerDiskLow
+          expr: |
+            (
+              glm_gateway_vm_disk_free_bytes{namespace=~"__ENVIRONMENT_NAMESPACES__"}
+              / glm_gateway_vm_disk_size_bytes{namespace=~"__ENVIRONMENT_NAMESPACES__"}
+            ) < 0.15
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Gateway VM {{ $labels.gateway_id }} has {{ $value | humanizePercentage }} of its disk free"
+            description: "The vm-agent on gateway {{ $labels.gateway_id }} reports under 15% free on its boot disk. The home checkpoint stages a gzip archive of up to 4 GiB on that disk, so a full disk fails every checkpoint and hangs a return at checkpoint-native-vm. Grow the disk with `gcloud compute disks resize` and reboot the VM (octo-grow-root extends the partition and filesystem at boot), or clean up over SSH."
+        - alert: BuilderComputerDiskCritical
+          expr: |
+            (
+              glm_gateway_vm_disk_free_bytes{namespace=~"__ENVIRONMENT_NAMESPACES__"}
+              / glm_gateway_vm_disk_size_bytes{namespace=~"__ENVIRONMENT_NAMESPACES__"}
+            ) < 0.05
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Gateway VM {{ $labels.gateway_id }} is out of disk ({{ $value | humanizePercentage }} free)"
+            description: "Under 5% free on gateway {{ $labels.gateway_id }}'s boot disk. Home checkpoints are failing or about to; a Builder return will hang. Resize the disk and reboot the VM now."
+        - alert: BuilderComputerDiskReportStale
+          expr: (time() - glm_gateway_vm_disk_observed_timestamp_seconds{namespace=~"__ENVIRONMENT_NAMESPACES__"}) > 900
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Gateway VM {{ $labels.gateway_id }} stopped reporting its disk"
+            description: "The fleet controller still lists gateway {{ $labels.gateway_id }}'s VM as running, but the broker has not refreshed its disk observation for over 15 minutes (the vm-agent reports every poll and the broker persists at least every 10 minutes). The disk gauges for this gateway are stale, so the low/critical disk alerts cannot be trusted; check octo-gateway-agent on the VM and the vm-runtime broker route."
+        - alert: GlmControllerDown
+          expr: |
+            (
+              sum by (namespace) (kube_deployment_status_replicas_available{job="gmp-kube-state-metrics",namespace="octogee",deployment="glm-controller"})
+              or on(namespace)
+              (0 * kube_namespace_created{job="gmp-kube-state-metrics",namespace="octogee"})
+            ) < 1
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "PROD fleet controller has no available backend pods"
+            description: "The fleet controller has had no available backend pods in PROD for 1 minute. Fleet Admin requests may fail. Check node readiness, the glm-controller pod, and PostgreSQL connection errors."
+        - alert: GlmControllerReconcileStalled
+          expr: (time() - glm_reconcile_last_success_timestamp_seconds{namespace=~"__ENVIRONMENT_NAMESPACES__"}) > 600
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "The fleet controller has not completed a successful reconcile in >10m"
+            description: "glm-controller reconcile success is stale. Gateway desired state may not be reaching Kubernetes; check glm-controller logs and /metrics."
+    - name: octogee.mattermost
+      rules:
+        - alert: MattermostDown
+          expr: kube_deployment_status_replicas_available{job="gmp-kube-state-metrics",namespace=~"__ENVIRONMENT_NAMESPACES__",deployment="mattermost"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Mattermost is unreachable"
+            description: "No Mattermost metrics for 2m. Chat is broken for all users."
+        - alert: MattermostPodNotReady
+          expr: kube_pod_status_ready{job="gmp-kube-state-metrics",namespace=~"__ENVIRONMENT_NAMESPACES__",pod=~"mattermost-.*", condition="true"} == 0
+          for: 3m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Mattermost pod not ready for 3m"
+            description: "Pod {{ $labels.pod }} in {{ $labels.namespace }} has been not-ready for 3 minutes."
+    - name: octogee.activity
+      rules:
+        - alert: ActivityFinalMissing
+          expr: sum by (namespace) (increase(octogee_activity_missing_final_total{namespace=~"__ENVIRONMENT_NAMESPACES__"}[10m])) > 0
+          for: 0m
+          labels:
+            severity: critical
+          annotations:
+            summary: "An agent run ended without a durable final response"
+            description: "The Activity journal reached a terminal run state but the primary Mattermost conversation has no final answer or failure notice."
+        - alert: ActivityRoutineDeliveredNormally
+          expr: sum by (namespace) (increase(octogee_activity_routine_normal_delivery_total{namespace=~"__ENVIRONMENT_NAMESPACES__"}[10m])) > 0
+          for: 0m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Routine Activity created ordinary Mattermost attention"
+            description: "A routine journal post was delivered without silent semantics. Disable Activity intake and verify the exact Mattermost capability artifact."
+        - alert: ActivityOrphansSustained
+          expr: sum by (namespace) (increase(octogee_activity_orphan_total{namespace=~"__ENVIRONMENT_NAMESPACES__"}[15m])) > 2
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Activity items are arriving without committed run roots"
+            description: "Multiple normalized Activity events could not resolve their run root. Check producer ordering, receipt health, and pair integrity."
+        - alert: ActivityAttachmentResultUnknown
+          expr: sum by (namespace) (increase(octogee_activity_attachment_unknown_total{namespace=~"__ENVIRONMENT_NAMESPACES__"}[10m])) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "A Mattermost upload completed with an unknown file id"
+            description: "The summary post is durable, but attachment detail is intentionally lossy and will not be uploaded again automatically."
+    - name: octogee.cloudsql
+      rules:
+        - alert: CloudSQLProxyDown
+          expr: kube_deployment_status_replicas_available{job="gmp-kube-state-metrics",namespace=~"__ENVIRONMENT_NAMESPACES__",deployment="cloud-sql-proxy"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Cloud SQL proxy has no available replicas"
+            description: "Mattermost and Gitea cannot reach the database."
+    - name: octogee.pods
+      rules:
+        - alert: PodCrashLooping
+          expr: rate(kube_pod_container_status_restarts_total{job="gmp-kube-state-metrics",namespace=~"__ENVIRONMENT_NAMESPACES__"}[5m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pod {{ $labels.pod }} is crash-looping"
+            description: "Container {{ $labels.container }} in {{ $labels.namespace }} is restarting frequently."
+        - alert: PodOOMKilled
+          expr: kube_pod_container_status_last_terminated_reason{job="gmp-kube-state-metrics",reason="OOMKilled", namespace=~"__ENVIRONMENT_NAMESPACES__"} == 1
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pod OOMKilled: {{ $labels.pod }}"
+            description: "Container {{ $labels.container }} was OOM-killed. Check memory limits."
+        - alert: PVCNearFull
+          expr: |
+            (kubelet_volume_stats_used_bytes{namespace=~"__ENVIRONMENT_NAMESPACES__"}
+            / kubelet_volume_stats_capacity_bytes{namespace=~"__ENVIRONMENT_NAMESPACES__"}) > 0.85
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "PVC {{ $labels.persistentvolumeclaim }} is {{ $value | humanizePercentage }} full"
+            description: "PVC in {{ $labels.namespace }} is above 85% capacity. Expand or clean up."
+        - alert: PodStuckPending
+          expr: kube_pod_status_phase{job="gmp-kube-state-metrics",namespace=~"__ENVIRONMENT_NAMESPACES__", phase="Pending"} == 1
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pod {{ $labels.pod }} has been Pending for 15m"
+            description: "Pod {{ $labels.pod }} in {{ $labels.namespace }} has been Pending for 15+ minutes; normal Autopilot provisioning completes in minutes. Read the pod's scheduler events first. An unsatisfiable compute class or exhausted regional capacity/quota leaves a pod Pending with no scale-up coming, and an unpullable image does the same after scheduling succeeds."
+    - name: octogee.runners
+      rules:
+        - alert: RunnerDown
+          expr: octogee_runner_up{namespace=~"__ENVIRONMENT_NAMESPACES__"} == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "In-pod runner {{ $labels.runner }} is down"
+            description: "Runner {{ $labels.runner }} on {{ $labels.pod }} has reported down (or its supervisor's heartbeat went stale) for 5m."
+        - alert: RunnerCrashLooping
+          expr: increase(octogee_runner_restart_total{namespace=~"__ENVIRONMENT_NAMESPACES__"}[10m]) > 3
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "In-pod runner {{ $labels.runner }} is crash-looping"
+            description: "Runner {{ $labels.runner }} on {{ $labels.pod }} restarted {{ $value }} times in 10m. Check its structured restart logs."
+    - name: octogee.firestore
+      rules:
+        - alert: FirestoreReadRateHigh
+          expr: sum(rate(firestore_googleapis_com:document_read_count{monitored_resource="firestore.googleapis.com/Database"}[10m])) > 150
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Firestore document reads are sustained at {{ $value }}/s"
+            description: "Reads have held above 150/s for 15m against a healthy fleet baseline near 27/s. A read storm is almost always amplification, not user load: a listener whose watchers redeliver every document on each change, or a reconciler rewriting documents that did not change. Read-rate storms have run 750-1,150/s for days. Check the fleet-event listener hub, the fleet controller's reconcile fingerprints, and the placement and heartbeat write paths."
+        - alert: FirestoreWriteRateHigh
+          expr: sum(rate(firestore_googleapis_com:document_write_count{monitored_resource="firestore.googleapis.com/Database"}[10m])) > 50
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Firestore document writes are sustained at {{ $value }}/s"
+            description: "Writes have held above 50/s for 15m. Each write republishes its document to every watcher, so a write loop is the leading indicator of a read storm. Check the fleet controller's Kubernetes observation and operator-heartbeat writers, which suppress a write only when the observed state and its freshness stamp are both unchanged, and the operations journal."

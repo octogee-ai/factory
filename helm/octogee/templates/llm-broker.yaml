@@ -1,0 +1,210 @@
+{{- if .Values.llmBroker.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.llmBroker.serviceAccountName }}
+  labels:
+    app: llm-broker
+    {{- include "octogee.labels" . | nindent 4 }}
+  {{- with .Values.llmBroker.gcpServiceAccount }}
+  annotations:
+    iam.gke.io/gcp-service-account: {{ . | quote }}
+  {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-broker
+  labels:
+    app: llm-broker
+    {{- include "octogee.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.llmBroker.replicas }}
+  minReadySeconds: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: llm-broker
+  template:
+    metadata:
+      labels:
+        app: llm-broker
+    spec:
+      {{- with (.Values.global).nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: 30
+      serviceAccountName: {{ .Values.llmBroker.serviceAccountName }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: llm-broker
+          image: "{{ required "llmBroker.image.repository is required" .Values.llmBroker.image.repository }}:{{ required "llmBroker.image.tag is required" .Values.llmBroker.image.tag }}@{{ required "llmBroker.image.digest is required" .Values.llmBroker.image.digest }}"
+          imagePullPolicy: Always
+          command:
+            - node
+            - dist/octogee-api/src/llm-broker.js
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 15"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.llmBroker.port }}
+          env:
+            {{- with (include "octogee.platformStateEnv" .) }}{{ . | nindent 12 }}{{ end }}
+            {{- include "octogee.runtimeSecretStoreEnv" . | nindent 12 }}
+            - name: LOG_LEVEL
+              value: {{ (.Values.global).logLevel | default "info" | quote }}
+            - name: PORT
+              value: {{ .Values.llmBroker.port | quote }}
+            - name: K8S_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: OCTOGEE_API_URL
+              value: "http://octogee-api:3001"
+            - name: OCTOGEE_API_SA_TOKEN_PATH
+              value: /var/run/secrets/octogee-api/token
+            - name: GCLOUD_PROJECT
+              value: {{ required "global.deploymentProjectId is required" (.Values.global).deploymentProjectId | quote }}
+            - name: GCP_PROJECT_ID
+              value: {{ required "global.deploymentProjectId is required" (.Values.global).deploymentProjectId | quote }}
+            - name: GOOGLE_CLOUD_PROJECT
+              value: {{ required "global.deploymentProjectId is required" (.Values.global).deploymentProjectId | quote }}
+            - name: FIREBASE_PROJECT_ID
+              value: {{ required "global.deploymentProjectId is required" (.Values.global).deploymentProjectId | quote }}
+            - name: ANTHROPIC_UPSTREAM_BASE_URL
+              value: {{ .Values.llmBroker.upstream.anthropicBaseUrl | quote }}
+            - name: OPENROUTER_UPSTREAM_BASE_URL
+              value: {{ .Values.llmBroker.upstream.openrouterBaseUrl | quote }}
+            - name: PLATFORM_CREDIT_MARKUP_MULTIPLIER
+              value: {{ required "llmBroker.prepaidCreditMarkupMultiplier is required" .Values.llmBroker.prepaidCreditMarkupMultiplier | quote }}
+            - name: PLATFORM_VERTEX_ENABLED
+              value: {{ .Values.llmBroker.vertex.enabled | quote }}
+            - name: PLATFORM_VERTEX_PROJECT_ID
+              value: {{ .Values.llmBroker.vertex.projectId | default (.Values.global).deploymentProjectId | quote }}
+            - name: PLATFORM_VERTEX_LOCATION
+              value: {{ .Values.llmBroker.vertex.location | quote }}
+            - name: PLATFORM_VERTEX_MODEL_PRICES
+              value: {{ required "llmBroker.vertex.modelPrices is required" .Values.llmBroker.vertex.modelPrices | toJson | quote }}
+            - name: LLM_BROKER_VERTEX_HOUSE_MODEL
+              value: {{ .Values.llmBroker.vertex.houseModel | quote }}
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llmBroker.providerSecret.name }}
+                  key: {{ .Values.llmBroker.providerSecret.key }}
+                  optional: false
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llmBroker.openrouterProviderSecret.name }}
+                  key: {{ .Values.llmBroker.openrouterProviderSecret.key }}
+                  optional: {{ .Values.llmBroker.openrouterProviderSecret.optional | default true }}
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llmBroker.openaiProviderSecret.name }}
+                  key: {{ .Values.llmBroker.openaiProviderSecret.key }}
+                  optional: {{ .Values.llmBroker.openaiProviderSecret.optional | default true }}
+            - name: META_MODEL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: octogee-meta
+                  key: api_key
+                  optional: true
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 72
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.llmBroker.resources | nindent 12 }}
+          volumeMounts:
+            - name: octogee-api-sa-token
+              mountPath: /var/run/secrets/octogee-api
+              readOnly: true
+      volumes:
+        - name: octogee-api-sa-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: octogee-api
+                  expirationSeconds: 3600
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-broker
+  labels:
+    app: llm-broker
+    {{- include "octogee.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: llm-broker
+  ports:
+    - name: http
+      port: {{ .Values.llmBroker.port }}
+      targetPort: http
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: llm-broker-ingress
+  labels:
+    {{- include "octogee.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: llm-broker
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: octogee-gateway
+      ports:
+        - protocol: TCP
+          port: {{ .Values.llmBroker.port }}
+    {{- if ((.Values.global).computer | default dict).enabled }}
+    - from:
+        - podSelector:
+            matchLabels:
+              app: octogee-vm-bridge
+      ports:
+        - protocol: TCP
+          port: {{ .Values.llmBroker.port }}
+    {{- end }}
+{{- end }}

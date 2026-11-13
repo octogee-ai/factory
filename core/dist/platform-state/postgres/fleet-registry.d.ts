@@ -1,0 +1,11 @@
+import type { FleetRegistryRecord, FleetRegistryRepository } from "../fleet-registry.js";
+import type { Stored, WatchFilters } from "../store.js";
+import type { PostgresSession } from "./session.js";
+import { type Row } from "./sql.js";
+import { type TableSpec } from "./values.js";
+import type { PostgresWatchSource } from "./watch-sources.js";
+export declare const FLEET_REGISTRY_TABLE: TableSpec;
+export declare function upsertRecord(session: PostgresSession, operation: string, table: TableSpec, initial: object, patch: object): Promise<readonly Row[]>;
+export declare function decodeFleetRegistryRecord(row: Row): Stored<FleetRegistryRecord>;
+export declare function createPostgresFleetRegistryRepository(session: PostgresSession): FleetRegistryRepository;
+export declare function postgresFleetRegistryWatchSource(filter: WatchFilters["fleetRegistry"]): PostgresWatchSource<"fleetRegistry">;

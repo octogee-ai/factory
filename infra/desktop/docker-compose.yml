@@ -1,0 +1,35 @@
+services:
+  desktop:
+    build:
+      context: .
+      args:
+        OMARCHY_CHANNEL: ${OMARCHY_CHANNEL:-stable}
+    image: ${OCTO_DESKTOP_IMAGE:-octogee-desktop:spike}
+    platform: linux/amd64
+    container_name: octo-desktop
+    hostname: octo-desktop
+    shm_size: 1g
+    ports:
+      - "127.0.0.1:${OCTO_VNC_PORT:-5900}:5900"
+      - "127.0.0.1:${OCTO_NOVNC_PORT:-6080}:6080"
+      - "127.0.0.1:${OCTO_CONTROL_PORT:-7777}:7777"
+    environment:
+      OCTO_COMPOSITOR: ${OCTO_COMPOSITOR:-hyprland}
+      OCTO_RESOLUTION: ${OCTO_RESOLUTION:-1440x900}
+      OCTO_REFRESH: ${OCTO_REFRESH:-30}
+      OCTO_HOME_URL: ${OCTO_HOME_URL:-http://127.0.0.1:7777/desk}
+      OCTO_CHROMIUM_NO_SANDBOX: ${OCTO_CHROMIUM_NO_SANDBOX:-1}
+      OCTO_CHROMIUM_EGRESS_PROXY: ${OCTO_CHROMIUM_EGRESS_PROXY:-0}
+    volumes:
+      - octo-home:/home/octo
+    tmpfs:
+      - /run:exec
+      - /tmp:exec
+    deploy:
+      resources:
+        limits:
+          cpus: "${OCTO_CPUS:-4}"
+          memory: ${OCTO_MEMORY:-4g}
+
+volumes:
+  octo-home: {}

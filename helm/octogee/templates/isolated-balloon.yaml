@@ -1,0 +1,84 @@
+{{- $balloon := .Values.builderBalloon }}
+{{- if gt (int $balloon.replicas) 0 }}
+{{- $release := index .Values "glm-controller" "platformRelease" }}
+{{- $gatewayRepository := required "glm-controller.platformRelease.gatewayImageRepository is required" $release.gatewayImageRepository }}
+{{- $isolatedTag := required "glm-controller.platformRelease.builderImageTag is required while builderBalloon.replicas > 0" $release.builderImageTag }}
+{{- $computeClass := required "gatewayFleet.computeClass.name is required" .Values.gatewayFleet.computeClass.name }}
+{{- $priorityClass := printf "octogee-builder-balloon-%s" .Release.Namespace }}
+{{- $warmRoots := list "/usr/local/bin/node" "/usr/local/lib/node_modules/openclaw" "/opt/openclaw-runtime-deps" "/opt/octogee" "/octogee" "/usr/bin/Xvnc" "/usr/bin/openbox" "/usr/bin/tint2" "/usr/lib/chromium" "/usr/lib/x86_64-linux-gnu" "/usr/share/octogee" "/usr/share/themes/Octogee" }}
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: {{ $priorityClass }}
+value: {{ int $balloon.priority }}
+globalDefault: false
+preemptionPolicy: Never
+description: "Warm-capacity placeholder for disposable Builder gateway pods; any Builder pod preempts it."
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: octogee-builder-balloon
+  labels:
+    app: octogee-builder-balloon
+    {{- include "octogee.labels" . | nindent 4 }}
+spec:
+  replicas: {{ int $balloon.replicas }}
+  selector:
+    matchLabels:
+      app: octogee-builder-balloon
+  template:
+    metadata:
+      labels:
+        app: octogee-builder-balloon
+    spec:
+      priorityClassName: {{ $priorityClass }}
+      terminationGracePeriodSeconds: 0
+      automountServiceAccountToken: false
+      nodeSelector:
+        cloud.google.com/compute-class: {{ $computeClass | quote }}
+      runtimeClassName: gvisor
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values: [octogee-gateway, octogee-builder-balloon]
+              namespaceSelector: {}
+              topologyKey: kubernetes.io/hostname
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: placeholder
+          image: "{{ trimSuffix "/octogee-gateway" $gatewayRepository }}/octogee-gateway-builder:{{ $isolatedTag }}"
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              started=$(date +%s)
+              for root in {{ join " " $warmRoots }}; do
+                if [ ! -e "$root" ]; then
+                  echo "isolated-balloon: warm root $root is missing from the image" >&2
+                  exit 1
+                fi
+              done
+              find -H {{ join " " $warmRoots }} -type f -exec cat {} + >/dev/null
+              echo "isolated-balloon: warmed {{ len $warmRoots }} roots in $(( $(date +%s) - started )) s"
+              exec sleep infinity
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              {{- toYaml (required "builderBalloon.resources.requests is required" $balloon.resources.requests) | nindent 14 }}
+{{- end }}

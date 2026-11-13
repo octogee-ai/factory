@@ -1,0 +1,131 @@
+{{- $router := .Values.router | default dict -}}
+{{- $global := .Values.global | default dict -}}
+{{- $routerEnabled := true -}}
+{{- if hasKey $router "enabled" -}}
+{{- $routerEnabled = $router.enabled -}}
+{{- end -}}
+{{- if $routerEnabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $router.serviceName | default "gateway-router" }}
+  labels:
+    {{- include "gateway-edge.labels" . | nindent 4 }}
+    app: {{ $router.serviceName | default "gateway-router" }}
+spec:
+  replicas: {{ $router.replicas | default 2 }}
+  minReadySeconds: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: {{ $router.serviceName | default "gateway-router" }}
+  template:
+    metadata:
+      labels:
+        {{- include "gateway-edge.labels" . | nindent 8 }}
+        app: {{ $router.serviceName | default "gateway-router" }}
+    spec:
+      {{- with (.Values.global).nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: 30
+      serviceAccountName: {{ .Values.serviceAccountName }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway-router
+          image: "{{ required "gateway-edge.image.repository is required" .Values.image.repository }}:{{ required "gateway-edge.image.tag is required" .Values.image.tag }}@{{ required "gateway-edge.image.digest is required" .Values.image.digest }}"
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 15"]
+          ports:
+            - name: http
+              containerPort: {{ $router.port | default .Values.port }}
+          env:
+            - name: LOG_LEVEL
+              value: {{ (.Values.global).logLevel | default "info" | quote }}
+            - name: LOG_KEEP_LONG_IDENTIFIERS
+              value: {{ (.Values.global).logKeepLongIdentifiers | default false | quote }}
+            - name: GATEWAY_EDGE_MODE
+              value: "router"
+            - name: PORT
+              value: {{ printf "%v" ($router.port | default .Values.port) | quote }}
+            - name: K8S_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: PUBLIC_APP_ORIGINS
+              value: {{ join "," (required "global.publicAppOrigins is required" (.Values.global).publicAppOrigins) | quote }}
+            {{- $computer := (.Values.global).computer | default dict }}
+            {{- if $computer.enabled }}
+            - name: GATEWAY_VM_ROUTES_FILE
+              value: /etc/octogee/vm-routes/routes.json
+            {{- end }}
+          {{- if $computer.enabled }}
+          volumeMounts:
+            - name: vm-routes
+              mountPath: /etc/octogee/vm-routes
+              readOnly: true
+          {{- end }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 24
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            {{- $routerResources := $router.resources | default .Values.resources -}}
+            {{- toYaml $routerResources | nindent 12 }}
+      {{- if ((.Values.global).computer | default dict).enabled }}
+      volumes:
+        - name: vm-routes
+          configMap:
+            name: octogee-vm-routes
+            optional: true
+      {{- end }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $router.serviceName | default "gateway-router" }}
+  labels:
+    {{- include "gateway-edge.labels" . | nindent 4 }}
+    app: {{ $router.serviceName | default "gateway-router" }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: {{ $router.serviceName | default "gateway-router" }}
+{{- end }}

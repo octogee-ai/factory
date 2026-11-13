@@ -1,0 +1,195 @@
+{{- if .Values.opsAgent.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.opsAgent.serviceAccountName }}
+  labels:
+    app: octogee-ops-agent
+  annotations:
+    iam.gke.io/gcp-service-account: {{ .Values.opsAgent.gcpServiceAccount | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: octogee-ops-agent
+  labels:
+    app: octogee-ops-agent
+spec:
+  replicas: {{ .Values.opsAgent.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: octogee-ops-agent
+  template:
+    metadata:
+      labels:
+        app: octogee-ops-agent
+    spec:
+      {{- with (.Values.global).nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ .Values.opsAgent.serviceAccountName }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ops-agent
+          image: "{{ required "opsAgent.image.repository is required" .Values.opsAgent.image.repository }}:{{ required "opsAgent.image.tag is required" .Values.opsAgent.image.tag }}@{{ required "opsAgent.image.digest is required" .Values.opsAgent.image.digest }}"
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: http
+              containerPort: {{ .Values.opsAgent.port }}
+          env:
+            - name: LOG_LEVEL
+              value: {{ (.Values.global).logLevel | default "info" | quote }}
+            - name: PORT
+              value: {{ .Values.opsAgent.port | quote }}
+            - name: XDG_CACHE_HOME
+              value: /tmp/openclaw-cache
+            - name: APP_URL
+              value: {{ .Values.opsAgent.appUrl | quote }}
+            - name: K8S_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: GCLOUD_PROJECT
+              value: {{ .Values.opsAgent.loggingProjectId | quote }}
+            - name: GOOGLE_CLOUD_PROJECT
+              value: {{ .Values.opsAgent.loggingProjectId | quote }}
+            - name: OCTOGEE_LOG_VIEW_RESOURCE
+              value: {{ .Values.opsAgent.loggingResourceName | quote }}
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.opsAgent.openrouterSecret.name }}
+                  key: {{ .Values.opsAgent.openrouterSecret.key }}
+                  optional: true
+            - name: OPS_AGENT_BEARER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.opsAgent.bearerSecret.name }}
+                  key: {{ .Values.opsAgent.bearerSecret.key }}
+                  optional: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.opsAgent.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: openclaw-state
+              mountPath: /home/node/.openclaw
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: openclaw-state
+          emptyDir:
+            sizeLimit: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: octogee-ops-agent
+  labels:
+    app: octogee-ops-agent
+spec:
+  type: ClusterIP
+  selector:
+    app: octogee-ops-agent
+  ports:
+    - name: http
+      port: {{ .Values.opsAgent.port }}
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: octogee-ops-agent-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: octogee-ops-agent
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: octogee-api
+      ports:
+        - protocol: TCP
+          port: {{ .Values.opsAgent.port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: octogee-ops-agent-egress
+spec:
+  podSelector:
+    matchLabels:
+      app: octogee-ops-agent
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {}
+        - ipBlock:
+            cidr: {{ .Values.opsAgent.nodeLocalDnsCidr }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.252/32
+      ports:
+        - protocol: TCP
+          port: 987
+        - protocol: TCP
+          port: 988
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.254/32
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 8080
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+{{- end }}

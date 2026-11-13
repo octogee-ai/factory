@@ -1,0 +1,389 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.4.14",
+    "migrations": { "skillWorkshopPlugin": true }
+  },
+  "database": {
+    "engine": "postgres",
+    "postgres": {
+      "connection": {
+        "source": "env",
+        "provider": "default",
+        "id": "OPENCLAW_AGENT_STORE_DSN"
+      },
+      "schemaPrefix": "octogee"
+    }
+  },
+  "discovery": {
+    "mdns": {
+      "mode": "off"
+    }
+  },
+  "auth": {
+    "profiles": {
+      "anthropic:default": {
+        "provider": "anthropic",
+        "mode": "api_key"
+      },
+      "openai:default": {
+        "provider": "openai",
+        "mode": "api_key"
+      }
+    }
+  },
+  "secrets": {
+    "providers": {
+      "gcp-secret-manager": {
+        "source": "exec",
+        "command": "/octogee/scripts/secret-resolver.mjs",
+        "passEnv": [
+          "FLEET_BROKER_URL",
+          "OCTOGEE_API_URL",
+          "OCTOGEE_API_SA_TOKEN_PATH",
+          "INTERNAL_SERVICE_KEY",
+          "OPENCLAW_AGENTS_DIR",
+          "HOME"
+        ],
+        "jsonOnly": true,
+        "timeoutMs": 45000
+      },
+      "octogee-mattermost": {
+        "source": "file",
+        "path": "/home/node/.openclaw/secrets/mattermost-accounts.json",
+        "mode": "json"
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "models": {
+        "platform-openrouter/deepseek/deepseek-v4-pro": {
+          "alias": "deepseek"
+        },
+        "platform-openrouter/z-ai/glm-5.2": {
+          "alias": "glm",
+          "params": {
+            "thinking": "xhigh"
+          }
+        },
+        "anthropic/claude-sonnet-4-6": {
+          "alias": "sonnet",
+          "params": {
+            "cacheRetention": "short"
+          }
+        },
+        "anthropic/claude-haiku-4-5": {
+          "alias": "haiku",
+          "params": {
+            "cacheRetention": "short"
+          }
+        }
+      },
+      "verboseDefault": "off",
+      "typingMode": "instant",
+      "toolProgressDetail": "raw",
+      "workspace": "/home/node/.openclaw/workspace",
+      "contextPruning": {
+        "mode": "cache-ttl",
+        "ttl": "1h"
+      },
+      "compaction": {
+        "mode": "safeguard"
+      },
+      "maxConcurrent": 8,
+      "subagents": {
+        "maxConcurrent": 8,
+        "runTimeoutSeconds": 900
+      }
+    },
+    "entries": {}
+  },
+  "browser": {
+    "enabled": false,
+    "defaultProfile": "openclaw",
+    "headless": true,
+    "noSandbox": true,
+    "evaluateEnabled": true,
+    "executablePath": "/usr/bin/chromium"
+  },
+  "tools": {
+    "profile": "coding",
+    "alsoAllow": [
+      "automations",
+      "message",
+      "octogee_project_create",
+      "octogee_project_delegate",
+      "octogee_project_commit",
+      "octogee_project_list",
+      "octogee_project_set_recipe",
+      "octogee_project_capability",
+      "octogee_project_build",
+      "octogee_project_test",
+      "octogee_project_preview",
+      "octogee_project_run_status",
+      "octogee_project_publish",
+      "octogee_board_list",
+      "octogee_board_card_read",
+      "octogee_board_card_create",
+      "octogee_board_card_update",
+      "octogee_board_card_move",
+      "octogee_board_card_comment",
+      "workspace_commit",
+      "brave_search",
+      "tavily_search",
+      "tavily_extract",
+      "octogee_chat_search",
+      "octogee_chat_history",
+      "octogee_chat_set_identity",
+      "octogee_connection_request",
+      "octogee_status",
+      "octogee_ask_ops",
+      "octogee_google_calendar_events",
+      "octogee_google_calendar_create",
+      "octogee_google_calendar_create_approved",
+      "octogee_google_calendar_update",
+      "octogee_google_calendar_update_approved",
+      "octogee_google_calendar_delete",
+      "octogee_google_calendar_delete_approved",
+      "octogee_google_gmail_search",
+      "octogee_google_gmail_get",
+      "octogee_google_gmail_triage",
+      "octogee_google_gmail_triage_approved",
+      "octogee_google_gmail_draft_create",
+      "octogee_google_gmail_draft_create_approved",
+      "octogee_google_gmail_draft_send",
+      "octogee_google_gmail_draft_send_approved",
+      "octogee_google_drive_read",
+      "octogee_google_docs_read",
+      "octogee_google_docs_write",
+      "octogee_google_contacts_read",
+      "octogee_google_tasks_lists",
+      "octogee_google_tasks_list",
+      "octogee_google_tasks_add",
+      "octogee_google_tasks_add_approved",
+      "octogee_google_tasks_update",
+      "octogee_google_tasks_update_approved",
+      "octogee_google_sheets_read",
+      "octogee_google_sheets_write",
+      "octogee_obsidian_read",
+      "octogee_obsidian_write",
+      "octogee_owner_automations",
+      "browser"
+    ],
+    "web": {
+      "search": {
+        "provider": "parallel-free"
+      }
+    }
+  },
+  "bindings": [],
+  "messages": {
+    "queue": {
+      "byChannel": {
+        "mattermost": "steer"
+      }
+    },
+    "ackReactionScope": "all",
+    "groupChat": {
+      "visibleReplies": "automatic"
+    }
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true
+  },
+  "session": {
+    "dmScope": "per-channel-peer"
+  },
+  "channels": {
+    "mattermost": {
+      "replyToMode": "all",
+      "streaming": {
+        "mode": "progress",
+        "preview": { "toolProgress": true },
+        "progress": { "toolProgress": true }
+      },
+      "enabled": true,
+      "baseUrl": "${MM_URL}",
+      "chatmode": "onmessage",
+      "requireMention": false,
+      "actions": {
+        "reactions": true,
+        "messages": true,
+        "messageWrites": true,
+        "fileDownloads": true,
+        "pins": true,
+        "search": true,
+        "memberInfo": true
+      },
+      "reactionNotifications": "own",
+      "joinIntro": true,
+      "network": {
+        "dangerouslyAllowPrivateNetwork": true
+      },
+      "interactions": {
+        "callbackBaseUrl": "${MM_INTERACTIONS_CALLBACK_BASE_URL}",
+        "allowedSourceIps": [
+          "${MM_INTERACTIONS_ALLOWED_SOURCE_IPS}"
+        ]
+      },
+      "commands": {
+        "native": false
+      },
+      "accounts": {}
+    }
+  },
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "bind": "lan",
+    "terminal": {
+      "enabled": true
+    },
+    "auth": {
+      "mode": "token",
+      "rateLimit": {
+        "maxAttempts": 10,
+        "windowMs": 60000,
+        "lockoutMs": 300000
+      }
+    },
+    "controlUi": {
+      "allowedOrigins": [
+        "http://localhost:18789",
+        "http://127.0.0.1:18789"
+      ]
+    }
+  },
+  "plugins": {
+    "enabled": true,
+    "allow": [
+      "mattermost",
+      "anthropic",
+      "memory-core",
+      "octogee-chat-tools",
+      "octogee-connector-tools",
+      "octogee-access-tools",
+      "octogee-broker-tools",
+      "octogee-project-tools",
+      "octogee-board-tools",
+      "octogee-status-tools",
+      "octogee-ops-tools",
+      "octogee-web-tools",
+      "octogee-workspace-tools",
+      "octogee-activity-tools",
+      "parallel",
+      "openai",
+      "skill-workshop",
+      "codex",
+      "browser"
+    ],
+    "entries": {
+      "mattermost": {
+        "enabled": true
+      },
+      "anthropic": {
+        "enabled": true
+      },
+      "codex": {
+        "enabled": true
+      },
+      "browser": {
+        "enabled": false
+      },
+      "octogee-chat-tools": {
+        "enabled": true,
+        "hooks": {
+          "allowPromptModification": true,
+          "allowConversationAccess": true,
+          "timeouts": {
+            "before_dispatch": 3000,
+            "before_prompt_build": 3000,
+            "before_agent_run": 3000
+          }
+        },
+        "config": {
+          "siteUrl": "${MM_SITE_URL}",
+          "brokerUrl": "${FLEET_BROKER_URL}",
+          "tokenPath": "${OCTOGEE_API_SA_TOKEN_PATH}",
+          "customersRoot": "${CUSTOMERS_DIR}"
+        }
+      },
+      "octogee-connector-tools": {
+        "enabled": true,
+        "config": {
+          "brokerUrl": "${FLEET_BROKER_URL}",
+          "tokenPath": "${OCTOGEE_API_SA_TOKEN_PATH}"
+        }
+      },
+      "octogee-access-tools": {
+        "enabled": true,
+        "config": {
+          "brokerUrl": "${FLEET_BROKER_URL}",
+          "tokenPath": "${OCTOGEE_API_SA_TOKEN_PATH}"
+        }
+      },
+      "octogee-project-tools": {
+        "enabled": true,
+        "config": {
+          "brokerUrl": "${FLEET_BROKER_URL}",
+          "tokenPath": "${OCTOGEE_API_SA_TOKEN_PATH}"
+        }
+      },
+      "octogee-board-tools": {
+        "enabled": true,
+        "config": {
+          "brokerUrl": "${FLEET_BROKER_URL}",
+          "tokenPath": "${OCTOGEE_API_SA_TOKEN_PATH}"
+        }
+      },
+      "octogee-status-tools": {
+        "enabled": true,
+        "config": {
+          "brokerUrl": "${FLEET_BROKER_URL}",
+          "tokenPath": "${OCTOGEE_API_SA_TOKEN_PATH}",
+          "gatewayClass": "${GATEWAY_CLASS}"
+        }
+      },
+      "octogee-ops-tools": {
+        "enabled": true,
+        "config": {
+          "brokerUrl": "${FLEET_BROKER_URL}",
+          "tokenPath": "${OCTOGEE_API_SA_TOKEN_PATH}"
+        }
+      },
+      "octogee-web-tools": {
+        "enabled": true,
+        "config": {
+          "brokerUrl": "${FLEET_BROKER_URL}",
+          "gatewayId": "${GATEWAY_ID}",
+          "tokenPath": "${OCTOGEE_API_SA_TOKEN_PATH}"
+        }
+      },
+      "octogee-workspace-tools": {
+        "enabled": true,
+        "config": {}
+      },
+      "octogee-broker-tools": {
+        "enabled": true,
+        "config": {
+          "brokerUrl": "${FLEET_BROKER_URL}",
+          "tokenPath": "${OCTOGEE_API_SA_TOKEN_PATH}"
+        }
+      },
+      "octogee-activity-tools": {
+        "enabled": true,
+        "config": {
+          "heartbeatMs": 5000
+        }
+      },
+      "parallel": {
+        "enabled": true
+      },
+      "skill-workshop": {
+        "enabled": true
+      }
+    }
+  }
+}

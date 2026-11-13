@@ -1,0 +1,107 @@
+# ── Secrets Module ───────────────────────────────────────────────────────────
+# Secret Manager secrets + versions for database passwords and service tokens.
+
+terraform {
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = ">= 7.40.0"
+    }
+  }
+}
+
+# ── Mattermost DB password ──────────────────────────────────────────────────
+resource "google_secret_manager_secret" "mm_db_password" {
+  secret_id = var.mm_db_password_secret_id
+  project   = var.project_id
+
+  replication {
+    dynamic "auto" {
+      for_each = var.automatic_replication ? [true] : []
+      content {}
+    }
+    dynamic "user_managed" {
+      for_each = var.automatic_replication ? [] : [true]
+      content {
+        replicas {
+          location = var.region
+        }
+      }
+    }
+  }
+}
+
+resource "google_secret_manager_secret_version" "mm_db_password" {
+  secret      = google_secret_manager_secret.mm_db_password.id
+  secret_data = var.mm_db_password
+}
+
+# ── Gitea DB password ───────────────────────────────────────────────────────
+resource "google_secret_manager_secret" "gitea_db_password" {
+  secret_id = var.gitea_db_password_secret_id
+  project   = var.project_id
+
+  replication {
+    dynamic "auto" {
+      for_each = var.automatic_replication ? [true] : []
+      content {}
+    }
+    dynamic "user_managed" {
+      for_each = var.automatic_replication ? [] : [true]
+      content {
+        replicas {
+          location = var.region
+        }
+      }
+    }
+  }
+}
+
+resource "google_secret_manager_secret_version" "gitea_db_password" {
+  secret      = google_secret_manager_secret.gitea_db_password.id
+  secret_data = var.gitea_db_password
+}
+
+# ── Cloud SQL connection name ───────────────────────────────────────────────
+resource "google_secret_manager_secret" "cloudsql_connection" {
+  secret_id = "cloud-sql-connection-name"
+  project   = var.project_id
+
+  replication {
+    dynamic "auto" {
+      for_each = var.automatic_replication ? [true] : []
+      content {}
+    }
+    dynamic "user_managed" {
+      for_each = var.automatic_replication ? [] : [true]
+      content {
+        replicas {
+          location = var.region
+        }
+      }
+    }
+  }
+}
+
+resource "google_secret_manager_secret_version" "cloudsql_connection" {
+  secret      = google_secret_manager_secret.cloudsql_connection.id
+  secret_data = var.cloudsql_connection_name
+}
+
+resource "google_secret_manager_secret" "agent_store" {
+  for_each  = var.agent_store_enabled ? toset(["admin-dsn", "client-dsn"]) : toset([])
+  secret_id = "agent-store-postgres-${each.key}"
+  project   = var.project_id
+
+  replication {
+    user_managed {
+      replicas {
+        location = var.region
+      }
+    }
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}

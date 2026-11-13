@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: octogee-gateway-{{ include "octogee-gateway.revisionId" . }}
+  labels:
+    {{- include "octogee-gateway.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: octogee-gateway
+    gateway-instance: {{ include "octogee-gateway.revisionId" . }}
+  ports:
+    - name: http
+      port: 18789
+      targetPort: 18789
+    - name: runner-metrics
+      port: 9092
+      targetPort: 9092
+    - name: fleet-http
+      port: {{ .Values.env.fleetControllerPort | default "3003" }}
+      targetPort: {{ .Values.env.fleetControllerPort | default "3003" }}
+  type: ClusterIP
+---
+# Per-instance gateway-edge Service — internal target for the shared public
+# gateway-router and cluster-local gateway callers. Public GCLB/NEG wiring is
+# attached only to the stable gateway-router Service in the umbrella chart.
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway-edge-{{ include "octogee-gateway.revisionId" . }}
+  labels:
+    {{- include "octogee-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/name: gateway-edge
+spec:
+  selector:
+    app: octogee-gateway
+    gateway-instance: {{ include "octogee-gateway.revisionId" . }}
+  ports:
+    - name: http
+      port: {{ .Values.gatewayEdge.port }}
+      targetPort: {{ .Values.gatewayEdge.port }}
+  type: ClusterIP

@@ -1,0 +1,57 @@
+#!/usr/bin/bash
+set -euo pipefail
+
+export HOME=/home/octo
+export USER=octo
+export LOGNAME=octo
+export XDG_RUNTIME_DIR=/run/user/1000
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=Hyprland
+export XDG_SESSION_DESKTOP=Hyprland
+export XDG_SEAT=seat0
+export XDG_VTNR=0
+export OMARCHY_PATH=/usr/share/omarchy
+export PATH="/usr/local/bin/octo-shims:${PATH}"
+export LIBSEAT_BACKEND=seatd
+export SEATD_SOCK=/run/seatd.sock
+
+export LIBGL_ALWAYS_SOFTWARE=1
+export WLR_RENDERER_ALLOW_SOFTWARE=1
+export AQ_NO_MODIFIERS=1
+export HYPRLAND_NO_RT=1
+if [[ -z "${AQ_DRM_DEVICES:-}" ]]; then unset AQ_DRM_DEVICES; fi
+
+mkdir -p "$HOME/.local/state/octo-desktop"
+
+hypr_config="$HOME/.config/hypr/hyprland.lua"
+policy="octo-desktop.hypr.${OCTO_DISPLAY:-headless}"
+if [[ -f "$hypr_config" ]] && ! grep -Fq "$policy" "$hypr_config"; then
+  sed -i '/^require("octo-desktop\.hypr\./d' "$hypr_config"
+  printf '\nrequire("%s")\n' "$policy" >> "$hypr_config"
+fi
+
+export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+export QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
+for _ in $(seq 1 300); do
+  [[ -S "${XDG_RUNTIME_DIR}/bus" ]] && break
+  sleep 0.1
+done
+[[ -S "${XDG_RUNTIME_DIR}/bus" ]] || { echo "ERROR: no session bus at ${XDG_RUNTIME_DIR}/bus" >&2; exit 1; }
+if ! dbus-send --session --print-reply --reply-timeout=10000 --dest=org.a11y.Bus /org/a11y/bus org.a11y.Bus.GetAddress >/dev/null; then
+  echo "ERROR: org.a11y.Bus did not answer on the session bus; accessibility trees are unavailable" >&2
+fi
+
+/usr/local/bin/octo-desktop-style apply || echo "ERROR: octo-desktop-style apply failed; the desktop starts with whatever configuration is in place" >&2
+
+
+/usr/local/bin/octo-desktop-run &
+session_pid=$!
+stop_session() {
+  trap '' TERM INT
+  /usr/local/bin/octo-desktop-stop
+  kill "$session_pid" 2>/dev/null || true
+  wait "$session_pid" || true
+  exit 0
+}
+trap stop_session TERM INT
+wait "$session_pid"

@@ -1,0 +1,275 @@
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { join, relative } from "node:path";
+import { pathToFileURL } from "node:url";
+import { IMAGE_BUILDS, PLATFORM_CONTEXT, imagePlan } from "./image-build.mjs";
+import { gatewayBakePlan } from "./gateway-bake.mjs";
+
+export const PLATFORM_IMAGES = ["glm-controller", "octogee-api", "gateway-edge", "octogee-gateway", "mattermost"];
+export const PLATFORMS = ["linux/amd64", "linux/arm64"];
+export const SOURCE_REPOSITORY = "https://github.com/octogee-ai/octogee-cloud";
+export const CACHE_PREFIX = "octogee-cloud";
+
+const MATTERMOST = { dockerfile: "infra/mattermost/Dockerfile", args: {} };
+const GATEWAY_BASE = "octogee-gateway-base";
+const GATEWAY_SYSTEM = "octogee-gateway-system";
+const unpublished = [GATEWAY_BASE, GATEWAY_SYSTEM];
+const stageContexts = new Set(unpublished);
+const placeholderBase = `inputs-${"0".repeat(64)}`;
+
+function checkInputs({ registry, sha, platform }) {
+  if (!/^[a-f0-9]{40}$/.test(sha ?? "")) throw new Error("A full source SHA is required");
+  if (!/^[a-z0-9.-]+\/[a-z0-9-]+\/[a-z0-9-]+$/.test(registry ?? "")) throw new Error("Invalid registry repository");
+  if (!PLATFORMS.includes(platform)) throw new Error(`Unsupported platform: ${platform}`);
+}
+
+function gatewayTargets(registry, sha, root) {
+  return gatewayBakePlan({
+    repository: registry, sha, base: placeholderBase, isolatedBase: `${placeholderBase}-builder-${"0".repeat(12)}`, toolchain: {},
+    build: { base: true, isolatedBase: false, images: ["gateway-edge", "octogee-gateway"] },
+  }, root).target;
+}
+
+function singleTarget(name, registry, sha, root) {
+  const definition = IMAGE_BUILDS[name];
+  if (!definition) throw new Error(`Missing platform image definition: ${name}`);
+  if (definition.context !== PLATFORM_CONTEXT) throw new Error(`${name} does not build from the platform tree`);
+  if (definition.target) throw new Error(`${name} builds a named target, which the platform build does not publish`);
+  const plan = imagePlan(name, { repository: registry, sha }, root);
+  const dockerfile = relative(PLATFORM_CONTEXT, plan.dockerfile);
+  if (!existsSync(join(root, dockerfile))) throw new Error(`${name} has no Dockerfile at ${dockerfile}`);
+  const stages = new Set([...readFileSync(join(root, dockerfile), "utf8").matchAll(/^FROM\s+\S+\s+AS\s+(\S+)\s*$/gim)].map(match => match[1].toLowerCase()));
+  const missing = Object.keys(plan.contexts ?? {}).filter(context => !stages.has(context));
+  if (missing.length) throw new Error(`${name} needs build contexts outside the platform tree: ${missing.join(", ")}`);
+  return { dockerfile, args: plan.buildArgs, labels: plan.labels };
+}
+
+function checkContexts(name, contexts = {}) {
+  const outside = Object.keys(contexts).filter(context => !stageContexts.has(context));
+  if (outside.length) throw new Error(`${name} needs build contexts outside the platform tree: ${outside.join(", ")}`);
+}
+
+function cacheFor(cache, name, platform) {
+  if (cache !== "gha") return {};
+  const scope = `${CACHE_PREFIX}-${name}-${platform.replace("/", "-")}`;
+  return { "cache-from": [`type=gha,scope=${scope}`], "cache-to": [`type=gha,scope=${scope},mode=max`] };
+}
+
+function outputFor({ name, registry, push, load, tagPrefix, short }) {
+  if (unpublished.includes(name)) return { output: ["type=cacheonly"] };
+  if (load || push) {
+    if (!tagPrefix) throw new Error("A tag prefix is required to load or push tagged images");
+    return { output: [load ? "type=docker" : "type=image,push=true"], tags: [`${tagPrefix}${name}:${short}`] };
+  }
+  return { output: [`type=image,name=${registry}/${name},push-by-digest=true,name-canonical=true,push=true`] };
+}
+
+const planOptions = ({
+  registry, sha, platform, root = ".", context = root, load = false, push = false, tagPrefix = "", cache = "", images = PLATFORM_IMAGES,
+}) => ({ registry, sha, platform, root, context, load, push, tagPrefix, cache, images });
+
+function sourceFor(name, gateway, { registry, sha, root }) {
+  if (gateway[name]) return gateway[name];
+  if (name === "mattermost") return { ...MATTERMOST, labels: { "org.opencontainers.image.revision": sha } };
+  return singleTarget(name, registry, sha, root);
+}
+
+function bakeTarget(name, source, options) {
+  const { platform, root, context, cache, sha } = options;
+  const { tags: _tags, output: _output, "cache-from": _from, "cache-to": _to, platforms: _platforms, attest: _attest, context: _context, ...definition } = source;
+  checkContexts(name, definition.contexts);
+  if (definition.contexts && Object.keys(definition.contexts).length === 0) delete definition.contexts;
+  if (!existsSync(join(root, definition.dockerfile))) throw new Error(`${name} has no Dockerfile at ${definition.dockerfile}`);
+  return {
+    ...definition, context, platforms: [platform], ...outputFor({ ...options, name, short: sha.slice(0, 7) }), ...cacheFor(cache, name, platform),
+    attest: ["type=provenance,disabled=true", "type=sbom,disabled=true"],
+    labels: { ...definition.labels, "org.opencontainers.image.source": SOURCE_REPOSITORY },
+  };
+}
+
+export function cloudBakePlan(input) {
+  const options = planOptions(input);
+  const { registry, sha, platform, root, load, push, images } = options;
+  checkInputs({ registry, sha, platform });
+  if (load && push) throw new Error("Choose either load or push");
+  const unknown = images.filter(image => !PLATFORM_IMAGES.includes(image));
+  if (unknown.length) throw new Error(`Unknown platform image: ${unknown.join(", ")}`);
+  const wanted = new Set(images);
+  if (wanted.has("octogee-gateway")) unpublished.forEach(name => wanted.add(name));
+  const gateway = [...wanted].some(name => name.startsWith("octogee-gateway") || name === "gateway-edge") ? gatewayTargets(registry, sha, root) : {};
+  const target = Object.fromEntries([...wanted].map(name => [name, bakeTarget(name, sourceFor(name, gateway, options), options)]));
+  return { group: { default: { targets: images } }, target };
+}
+
+export function digestsFromMetadata(metadata, images = PLATFORM_IMAGES) {
+  return Object.fromEntries(images.map(name => {
+    const digest = metadata[name]?.["containerimage.digest"];
+    if (!/^sha256:[a-f0-9]{64}$/.test(digest ?? "")) throw new Error(`No pushed digest for ${name}`);
+    return [name, digest];
+  }));
+}
+
+export function mergeCommands({ registry, sha, digests }) {
+  const platforms = Object.keys(digests);
+  for (const platform of PLATFORMS) if (!platforms.includes(platform)) throw new Error(`Missing ${platform} digests`);
+  return PLATFORM_IMAGES.map(name => [
+    "buildx", "imagetools", "create", `--tag=${registry}/${name}:${sha}`, `--tag=${registry}/${name}:${sha.slice(0, 7)}`,
+    ...PLATFORMS.map(platform => {
+      const digest = digests[platform][name];
+      if (!digest) throw new Error(`Missing ${platform} digest for ${name}`);
+      return `${registry}/${name}@${digest}`;
+    }),
+  ]);
+}
+
+export function imageManifest({ registry, sha, digests, indexes }) {
+  return {
+    sha, registry, source: SOURCE_REPOSITORY,
+    images: Object.fromEntries(PLATFORM_IMAGES.map(name => {
+      if (!/^sha256:[a-f0-9]{64}$/.test(indexes[name] ?? "")) throw new Error(`No index digest for ${name}`);
+      return [name, {
+        image: `${registry}/${name}@${indexes[name]}`, tag: `${registry}/${name}:${sha}`, digest: indexes[name],
+        platforms: Object.fromEntries(PLATFORMS.map(platform => [platform, digests[platform][name]])),
+      }];
+    })),
+  };
+}
+
+export function readDigestDirectory(directory) {
+  const digests = {};
+  for (const file of readdirSync(directory).filter(entry => entry.endsWith(".json"))) {
+    const { platform, images } = JSON.parse(readFileSync(join(directory, file), "utf8"));
+    if (!PLATFORMS.includes(platform) || digests[platform]) throw new Error(`Unexpected digest file ${file}`);
+    digests[platform] = images;
+  }
+  return digests;
+}
+
+const SERVICE_PACKAGES = "glm-controller|gateway-edge|octogee-api";
+const sourceRules = [
+  [new RegExp(`(?:^|/)(?:${SERVICE_PACKAGES})/dist/((?:${SERVICE_PACKAGES})/src/.+?)(?:\\.d\\.ts|\\.js\\.map|\\.js)$`), path => [`${path}.ts`, `${path}.tsx`]],
+  [new RegExp(`(?:^|/)((?:${SERVICE_PACKAGES})/src/.+)$`), path => [path]],
+  [/(?:^|\/)core\/dist\/(.+?)(?:\.d\.ts|\.js\.map|\.js)$/, path => [`core/src/${path}.ts`]],
+  [/(?:^|\/)shared\/dist\/(.+?)(?:\.d\.ts|\.js\.map|\.js)$/, path => [`shared/${path}.ts`]],
+  [/^octogee\/extensions\/([^/]+)\//, extension => [`infra/gateway/extensions/platform/${extension}`]],
+];
+
+export function productFindings(paths, exists) {
+  const findings = new Set();
+  for (const raw of paths) {
+    const path = raw.replace(/^\.?\//, "");
+    if (path.endsWith("/") || path.startsWith("usr/")) continue;
+    if (/(?:^|\/)node_modules\/@octogee\/product-/.test(path)) { findings.add(path); continue; }
+    if (path.includes("node_modules/")) continue;
+    if (path.split("/").includes("product")) { findings.add(path); continue; }
+    for (const [pattern, sources] of sourceRules) {
+      const match = path.match(pattern);
+      if (!match) continue;
+      if (!sources(match[1]).some(exists)) findings.add(path);
+      break;
+    }
+  }
+  return [...findings].sort();
+}
+
+const tool = (command, args, stdio) => spawn(command, args, { stdio });
+
+function exited(child, label) {
+  return new Promise((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", code => (code === 0 ? resolve() : reject(new Error(`${label} exited ${code}`))));
+  });
+}
+
+function collect(stream) {
+  let text = "";
+  stream.on("data", chunk => { text += chunk; });
+  return () => text;
+}
+
+export async function imagePaths(image) {
+  const create = tool("docker", ["create", image], ["ignore", "pipe", "inherit"]);
+  const id = collect(create.stdout);
+  await exited(create, `docker create ${image}`);
+  const container = id().trim();
+  try {
+    const exported = tool("docker", ["export", container], ["ignore", "pipe", "inherit"]);
+    const tar = tool("tar", ["-t"], ["pipe", "pipe", "inherit"]);
+    exported.stdout.pipe(tar.stdin);
+    const listing = collect(tar.stdout);
+    await Promise.all([exited(exported, `docker export ${image}`), exited(tar, `listing ${image}`)]);
+    const paths = listing().split("\n").filter(Boolean);
+    if (!paths.length) throw new Error(`${image} lists no files`);
+    return paths;
+  } finally {
+    await exited(tool("docker", ["rm", container], "ignore"), `docker rm ${container}`);
+  }
+}
+
+function docker(args) {
+  // eslint-disable-next-line sonarjs/no-os-command-from-path -- docker is the build runner's own tool.
+  const result = spawnSync("docker", args, { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
+  if (result.status !== 0) throw new Error(`docker ${args.slice(0, 3).join(" ")} exited ${result.status}`);
+  return result.stdout;
+}
+
+function options(argv) {
+  return Object.fromEntries(argv.filter(arg => arg.startsWith("--")).map(arg => {
+    const [key, ...value] = arg.slice(2).split("=");
+    return [key, value.length ? value.join("=") : true];
+  }));
+}
+
+const selectedImages = opts => (typeof opts.images === "string" ? { images: opts.images.split(",") } : {});
+
+async function tripwire(opts) {
+  const root = opts.root ?? ".";
+  const { images: pushed } = JSON.parse(readFileSync(opts.digests, "utf8"));
+  const checked = [];
+  const failures = [];
+  for (const [name, digest] of Object.entries(pushed)) {
+    const image = `${opts.registry}/${name}@${digest}`;
+    if (opts.pull === true) docker(["pull", "--quiet", image]);
+    const findings = productFindings(await imagePaths(image), path => existsSync(join(root, path)));
+    if (findings.length) failures.push(`${image} carries files that are not platform source:\n${findings.slice(0, 50).join("\n")}`);
+    checked.push(image);
+  }
+  if (failures.length) throw new Error(failures.join("\n"));
+  return { checked };
+}
+
+function publish(opts) {
+  const digests = readDigestDirectory(opts.digests);
+  for (const args of mergeCommands({ registry: opts.registry, sha: opts.sha, digests })) docker(args);
+  const indexes = Object.fromEntries(PLATFORM_IMAGES.map(name => [
+    name, JSON.parse(docker(["buildx", "imagetools", "inspect", `${opts.registry}/${name}:${opts.sha}`, "--format", "{{json .Manifest}}"])).digest,
+  ]));
+  return imageManifest({ registry: opts.registry, sha: opts.sha, digests, indexes });
+}
+
+const COMMANDS = {
+  plan: opts => cloudBakePlan({
+    registry: opts.registry, sha: opts.sha, platform: opts.platform, root: opts.root, context: opts.context ?? opts.root,
+    load: opts.load === true, push: opts.push === true, tagPrefix: opts["tag-prefix"], cache: opts.cache, ...selectedImages(opts),
+  }),
+  digests: opts => {
+    if (!PLATFORMS.includes(opts.platform)) throw new Error(`Unsupported platform: ${opts.platform}`);
+    return { platform: opts.platform, images: digestsFromMetadata(JSON.parse(readFileSync(opts.metadata, "utf8")), selectedImages(opts).images) };
+  },
+  publish,
+  tripwire,
+};
+
+async function cli([command, ...rest]) {
+  if (!Object.hasOwn(COMMANDS, command ?? "")) throw new Error("Usage: cloud-build.mjs plan|digests|publish|tripwire [--options]");
+  return COMMANDS[command](options(rest));
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  try {
+    process.stdout.write(`${JSON.stringify(await cli(process.argv.slice(2)), null, 2)}\n`);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  }
+}

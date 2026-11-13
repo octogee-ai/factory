@@ -1,0 +1,80 @@
+#!/usr/bin/bash
+set -euo pipefail
+user=octo
+home=/home/$user
+metadata=http://metadata.google.internal/computeMetadata/v1
+
+if ! curl -fsS -m 3 -H 'Metadata-Flavor: Google' "$metadata/instance/id" >/dev/null 2>&1; then
+  echo "metadata server unavailable; refusing SSH admission until current authorization is reconciled" >&2
+  exit 1
+fi
+
+body_file="$(mktemp)"
+keys_file="$(mktemp)"
+trap 'rm -f "$body_file" "$keys_file"' EXIT
+
+metadata_get() {
+  local path="$1" code
+  code="$(curl -sS -m 5 -o "$body_file" -w '%{http_code}' -H 'Metadata-Flavor: Google' "$metadata/$path" || echo 000)"
+  case "$code" in
+    200) cat "$body_file" ;;
+    404) ;;
+    *) echo "metadata $path returned HTTP $code; failing so the timer retries" >&2; return 1 ;;
+  esac
+}
+
+block_project="$(metadata_get instance/attributes/block-project-ssh-keys)"
+case "${block_project,,}" in
+  true|false|"") ;;
+  *) echo "invalid block-project-ssh-keys metadata" >&2; exit 1 ;;
+esac
+keys="$(metadata_get instance/attributes/ssh-keys)"
+if [[ "${block_project,,}" != true ]]; then
+  keys+=$'\n'"$(metadata_get project/attributes/ssh-keys)"
+fi
+printf '%s' "$keys" > "$keys_file"
+selected="$(python3 - "$user" "$keys_file" <<'PYTHON'
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+user, path = sys.argv[1:]
+selected = set()
+now = datetime.now(timezone.utc)
+for line in Path(path).read_text().splitlines():
+    owner, separator, key = line.partition(":")
+    if not separator or owner != user or not key.strip():
+        continue
+    key = key.strip()
+    _, marker, payload = key.partition(" google-ssh ")
+    if marker:
+        try:
+            metadata = json.loads(payload)
+            expiry = datetime.fromisoformat(metadata["expireOn"].replace("Z", "+00:00"))
+            if metadata["userName"] != user or expiry.utcoffset() is None:
+                raise ValueError("invalid expiration identity or timezone")
+        except (ValueError, TypeError, KeyError, AttributeError):
+            raise SystemExit("invalid Google SSH expiration metadata") from None
+        if expiry <= now:
+            continue
+        stamp = expiry.astimezone(timezone.utc).strftime("%Y%m%d%H%M%SZ")
+        key = f'expiry-time="{stamp}" {key}'
+    selected.add(key)
+if selected:
+    print("\n".join(sorted(selected)))
+PYTHON
+)"
+install -d -m 0700 -o "$user" -g "$user" "$home/.ssh"
+if [[ -f "$home/.ssh/authorized_keys" ]] && [[ "$(cat "$home/.ssh/authorized_keys")" == "$selected" ]]; then
+  chmod 0600 "$home/.ssh/authorized_keys"
+  exit 0
+fi
+if [[ -n "$selected" ]]; then
+  printf '%s\n' "$selected" > "$keys_file"
+else
+  : > "$keys_file"
+fi
+install -m 0600 -o "$user" -g "$user" "$keys_file" "$home/.ssh/authorized_keys.metadata"
+mv "$home/.ssh/authorized_keys.metadata" "$home/.ssh/authorized_keys"
+echo "installed $(wc -l < "$keys_file") metadata key(s) for $user"

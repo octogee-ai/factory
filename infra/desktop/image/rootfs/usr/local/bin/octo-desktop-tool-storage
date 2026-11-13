@@ -1,0 +1,412 @@
+#!/usr/bin/env python3
+import argparse
+import hashlib
+import json
+import subprocess
+import sys
+import tomllib
+import shutil
+import tempfile
+import uuid
+import os
+from pathlib import Path
+import stat
+import signal
+import time
+
+
+def real_ancestors(path):
+    for parent in reversed((path, *path.parents)):
+        try:
+            mode = parent.lstat().st_mode
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISDIR(mode):
+            raise RuntimeError(f"tool storage ancestor is not a real directory: {parent}")
+
+
+def tree_state(root):
+    state = {}
+    def visit(location):
+        value = location.lstat()
+        item = [stat.S_IFMT(value.st_mode), value.st_mode & 0o7777, value.st_uid, value.st_gid]
+        if stat.S_ISLNK(value.st_mode):
+            item.append(str(location.readlink()))
+        elif stat.S_ISREG(value.st_mode):
+            with location.open("rb") as file:
+                item.extend([value.st_mtime_ns, hashlib.file_digest(file, "sha256").hexdigest()])
+        elif not stat.S_ISDIR(value.st_mode):
+            raise RuntimeError(f"tool storage has a special file: {location}")
+        state[str(location.relative_to(root))] = item
+        if stat.S_ISDIR(value.st_mode):
+            for child in sorted(location.iterdir()): visit(child)
+    visit(root)
+    return state
+
+
+def copy_tree(source, target):
+    original = tree_state(source)
+    if target.exists():
+        current = tree_state(target)
+        for relative, item in original.items():
+            existing = current.get(relative)
+            if existing and existing[0] != item[0]:
+                raise RuntimeError("tool copy destination has a conflicting file type")
+            if existing and item[0] == stat.S_IFLNK:
+                (target / relative).unlink()
+    shutil.copytree(source, target, symlinks=True, dirs_exist_ok=True)
+    if tree_state(source) != original:
+        raise RuntimeError("tool copy source changed before verification")
+    for relative, item in original.items():
+        location = target / relative
+        os.chown(location, item[2], item[3], follow_symlinks=False)
+
+
+def project_tree(source, target, owner):
+    real_ancestors(source.parent)
+    real_ancestors(target.parent)
+    if source.is_symlink():
+        if source.readlink() != target or not target.is_dir() or target.is_symlink():
+            raise RuntimeError(f"tool storage has an unexpected symlink: {source}")
+        return
+    if target.is_symlink() or (target.exists() and not target.is_dir()):
+        raise RuntimeError(f"tool storage destination is not a real directory: {target}")
+    if not source.exists():
+        target.mkdir(parents=True, exist_ok=True)
+        os.chown(target, owner.st_uid, owner.st_gid)
+        source.parent.mkdir(parents=True, exist_ok=True)
+        os.chown(source.parent, owner.st_uid, owner.st_gid)
+        source.symlink_to(target, target_is_directory=True)
+        os.lchown(source, owner.st_uid, owner.st_gid)
+        return
+    if not source.is_dir():
+        raise RuntimeError(f"tool storage is not a directory: {source}")
+    source_identity = source.stat()
+    original = tree_state(source)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staged = Path(tempfile.mkdtemp(prefix=".octogee-tool-stage-", dir=target.parent))
+    holding = source.with_name(source.name + ".octogee-held-" + uuid.uuid4().hex)
+    previous = target.with_name(target.name + ".octogee-previous-" + uuid.uuid4().hex)
+    published = False
+    try:
+        if target.exists(): copy_tree(target, staged)
+        copy_tree(source, staged)
+        copied = tree_state(staged)
+        if tree_state(source) != original or any(copied.get(name) != item for name, item in original.items()):
+            raise RuntimeError("tool copy changed before verification")
+        current = source.lstat()
+        if (current.st_dev, current.st_ino) != (source_identity.st_dev, source_identity.st_ino):
+            raise RuntimeError("tool copy source identity changed")
+        source.rename(holding)
+        if target.exists(): target.rename(previous)
+        staged.rename(target)
+        published = True
+        source.symlink_to(target, target_is_directory=True)
+        os.lchown(source, owner.st_uid, owner.st_gid)
+        if tree_state(holding) != original:
+            raise RuntimeError("tool source changed during hand-off; original retained")
+    except (OSError, RuntimeError) as error:
+        if holding.exists():
+            if source.is_symlink() and source.readlink() == target: source.unlink()
+            if not source.exists() and not source.is_symlink(): holding.rename(source)
+        if previous.exists():
+            if published: shutil.rmtree(target)
+            previous.rename(target)
+        raise RuntimeError(f"tool storage copy failed: {error}") from error
+    finally:
+        if not published and staged.exists(): shutil.rmtree(staged)
+    for obsolete in (holding, previous):
+        if not obsolete.exists(): continue
+        try: shutil.rmtree(obsolete)
+        except OSError as error:
+            print(f"verified tool hand-off retained its old copy ({type(error).__name__}): {obsolete}", file=sys.stderr)
+
+
+def prepare_image(home, tools, cache):
+    paths = [Path(value) for value in (home, tools, cache)]
+    if any(not value.is_absolute() for value in paths):
+        raise RuntimeError("tool storage paths must be absolute")
+    home, tools, cache = paths
+    if any(home == value or home in value.parents for value in (tools, cache)) or tools == cache:
+        raise RuntimeError("tool storage must be outside the durable home")
+    real_ancestors(home)
+    owner = home.stat()
+    project_tree(home / ".local/share/mise", tools, owner)
+    project_tree(home / ".cache/mise", cache / "mise", owner)
+    project_tree(home / ".npm", cache / "npm", owner)
+
+
+def owner_processes(uid):
+    result = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit(): continue
+        try:
+            fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
+            if entry.stat().st_uid == uid and fields[0] not in ("Z", "X"):
+                result.append(int(entry.name))
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+    return result
+
+
+def writer_fence(home, run, processes):
+    states = run(["systemctl", "show", "--property=ActiveState", "--value", "octo-desktop.service", "user@1000.service", "sshd.service"], check=True, capture_output=True, text=True).stdout.split()
+    if len(states) != 3 or any(value not in ("inactive", "failed") for value in states) or processes(home.stat().st_uid):
+        raise RuntimeError("desktop or SSH writers are not fenced before tool storage reconciliation")
+
+
+def process_group_writers(group):
+    writers = []
+    for process in Path("/proc").iterdir():
+        if not process.name.isdigit(): continue
+        try:
+            fields = (process / "stat").read_text().rsplit(")", 1)[1].split()
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        if int(fields[2]) == group and fields[0] not in ("Z", "X"):
+            writers.append(int(process.name))
+    return writers
+
+
+def quiesce_process_group(group):
+    for termination in (signal.SIGTERM, signal.SIGKILL):
+        if not process_group_writers(group): return
+        try: os.killpg(group, termination)
+        except ProcessLookupError: pass
+        deadline = time.monotonic() + 2
+        while process_group_writers(group) and time.monotonic() < deadline:
+            time.sleep(.01)
+    if process_group_writers(group):
+        raise RuntimeError("mise process group could not be quiesced before writer admission")
+
+
+def run_mise_command(command, *, env, cwd, timeout):
+    process = subprocess.Popen(command, env=env, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+    try:
+        output, errors = process.communicate(timeout=timeout)
+    except BaseException:
+        quiesce_process_group(process.pid)
+        try: process.communicate(timeout=2)
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError("mise output custody could not be released before writer admission") from error
+        raise
+    quiesce_process_group(process.pid)
+    if process.returncode:
+        raise subprocess.CalledProcessError(process.returncode, command, output, errors)
+    return subprocess.CompletedProcess(command, process.returncode, output, errors)
+
+
+def mise(home, args, run, timeout=30):
+    owner = home.stat()
+    if owner.st_uid == 0: raise RuntimeError("Builder tool execution cannot use a root-owned home")
+    command = ["/usr/bin/mise", *args]
+    if os.geteuid() == 0:
+        command = ["setpriv", f"--reuid={owner.st_uid}", f"--regid={owner.st_gid}", "--init-groups", *command]
+    with tempfile.TemporaryDirectory(prefix="octogee-mise-read-") as directory:
+        os.chown(directory, owner.st_uid, owner.st_gid)
+        environment = {**os.environ, "HOME": str(home), "MISE_DATA_DIR": str(home / ".local/share/mise"), "MISE_CACHE_DIR": directory, "MISE_NO_HOOKS": "1", "MISE_NO_ENV": "1"}
+        if run is subprocess.run:
+            return run_mise_command(command, env=environment, cwd=home, timeout=timeout)
+        return run(command, env=environment, cwd=home, check=True, capture_output=True, text=True, timeout=timeout)
+
+
+def write_ledger(home, record):
+    folder = home / ".config/octogee"
+    real_ancestors(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    owner = home.stat()
+    os.chown(folder, owner.st_uid, owner.st_gid)
+    target = folder / "mise-installs.json"
+    if target.is_symlink(): raise RuntimeError("tool ledger is not a real file")
+    value = json.dumps(record, sort_keys=True) + "\n"
+    if target.exists() and target.read_text() == value: return
+    staged = target.with_name(target.name + ".next-" + uuid.uuid4().hex)
+    with staged.open("x") as file: file.write(value)
+    os.chmod(staged, 0o600)
+    os.chown(staged, owner.st_uid, owner.st_gid)
+    os.replace(staged, target)
+
+
+def pending_requests(home):
+    ledger = home / ".config/octogee/mise-installs.json"
+    if not ledger.exists(): return []
+    if ledger.is_symlink(): raise RuntimeError("tool ledger is not a real file")
+    record = json.loads(ledger.read_text())
+    if not isinstance(record, dict): raise RuntimeError("tool ledger is malformed")
+    requests = record.get("pendingRequests", [])
+    if not isinstance(requests, list) or any(not isinstance(value, str) or not value or value.startswith("-") or any(character.isspace() for character in value) for value in requests):
+        raise RuntimeError("pending tool rebuild requests are malformed")
+    return requests
+
+
+def install_before_deadline(home, args, run, deadline):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise subprocess.TimeoutExpired(["/usr/bin/mise", *args], 180)
+    return mise(home, args, run, timeout=remaining)
+
+
+def rebuildable_install_manifest(path, backends, backend_metadata):
+    if not stat.S_ISREG(path.lstat().st_mode): return False
+    try:
+        manifest = tomllib.loads(path.read_text())
+    except ValueError:
+        return False
+    if not manifest: return False
+    if {str(path.parent / directory): entry for directory, entry in manifest.items()} != backend_metadata: return False
+    for directory, entry in manifest.items():
+        if Path(directory).name != directory or directory.startswith(".") or not isinstance(entry, dict): return False
+        if set(entry) - {"short", "full", "explicit_backend"}: return False
+        if not isinstance(entry.get("short"), str) or not isinstance(entry.get("full"), str): return False
+        if not isinstance(entry.get("explicit_backend", True), bool): return False
+        if backends.get(str(path.parent / directory)) != {(entry["short"], entry["full"])}: return False
+    return True
+
+
+def record_tools(home, tools, run=subprocess.run, rebuild_complete=False):
+    try:
+        pending = [] if rebuild_complete else pending_requests(home)
+        inventory = json.loads(mise(home, ["ls", "--installed", "--json", "--offline"], run).stdout)
+        if not isinstance(inventory, dict): raise RuntimeError("mise inventory is malformed")
+        requests, unsupported, declared, backends, backend_metadata = [], False, set(), {}, {}
+        for tool, rows in inventory.items():
+            if not isinstance(tool, str) or not tool or tool.startswith("-") or any(value.isspace() for value in tool):
+                raise RuntimeError("mise inventory tool is malformed")
+            if not isinstance(rows, list): raise RuntimeError("mise inventory versions are malformed")
+            for row in rows:
+                if not isinstance(row, dict): raise RuntimeError("mise inventory installation is malformed")
+                version = row.get("version")
+                if not isinstance(version, str) or not version or any(value.isspace() for value in version):
+                    raise RuntimeError("mise inventory version is malformed")
+                if not isinstance(row.get("install_path"), str): raise RuntimeError("mise installation path is malformed")
+                location = Path(row["install_path"])
+                source = home / ".local/share/mise"
+                if source not in location.parents: raise RuntimeError("mise installation path is outside its owned store")
+                declared.add(str(location))
+                backend = tool
+                metadata = location.parent / ".mise.backend.toml"
+                if metadata.exists() or metadata.is_symlink():
+                    if not stat.S_ISREG(metadata.lstat().st_mode): raise RuntimeError("mise backend metadata is not a real file")
+                    parsed_metadata = tomllib.loads(metadata.read_text())
+                    if set(parsed_metadata) - {"short", "full", "explicit_backend"} or "full" not in parsed_metadata:
+                        unsupported = True
+                    if parsed_metadata.get("short", tool) != tool or not isinstance(parsed_metadata.get("explicit_backend", True), bool):
+                        unsupported = True
+                    backend_metadata[str(location.parent)] = parsed_metadata
+                    backend = parsed_metadata.get("full", tool)
+                if not isinstance(backend, str) or not backend or backend.startswith("-") or any(value.isspace() for value in backend):
+                    raise RuntimeError("mise backend declaration is malformed")
+                if row.get("symlinked_to") or version.startswith(("path:", "ref:", "link:")) or backend.startswith(("asdf:", "vfox:")):
+                    unsupported = True
+                backends.setdefault(str(location.parent), set()).add((tool, backend))
+                requests.append(f"{backend}@{version}")
+        installs = home / ".local/share/mise/installs"
+        if installs.is_dir():
+            for tool in installs.iterdir():
+                if tool.name == ".mise-installs.toml":
+                    if not rebuildable_install_manifest(tool, backends, backend_metadata): unsupported = True
+                    continue
+                if not tool.is_dir() or tool.is_symlink():
+                    unsupported = True
+                    continue
+                for version in tool.iterdir():
+                    if version.name.startswith("."):
+                        if version.name != ".mise.backend.toml" or not stat.S_ISREG(version.lstat().st_mode) or str(tool) not in backend_metadata:
+                            unsupported = True
+                        continue
+                    if version.is_symlink() and version.resolve().parent == tool.resolve(): continue
+                    if str(version) not in declared: unsupported = True
+        plugins = home / ".local/share/mise/plugins"
+        if plugins.exists() and any(plugins.iterdir()): unsupported = True
+        record = {"version": 1, "rebuildable": not unsupported, "requests": sorted(set(requests))}
+        if pending: record["pendingRequests"] = pending
+        if unsupported:
+            print("mise has local or linked installs; preserving owned tool storage until operator cleanup", file=sys.stderr)
+            if (home / ".local/share/mise").is_symlink():
+                if (home / ".local/share/mise").readlink() != tools:
+                    raise RuntimeError("mise projection has an unexpected link")
+                retained = home / ".config/octogee/mise-retained"
+                real_ancestors(retained.parent)
+                retained.parent.mkdir(parents=True, exist_ok=True)
+                copy_tree(tools, retained)
+        write_ledger(home, record)
+        return {"rebuildable": record["rebuildable"]}
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+        print(f"mise inventory unavailable ({type(error).__name__}); retaining tool bytes", file=sys.stderr)
+        source = home / ".local/share/mise"
+        if source.is_symlink() and source.readlink() == tools and tools.is_dir():
+            try:
+                retained = home / ".config/octogee/mise-retained"
+                real_ancestors(retained.parent)
+                retained.parent.mkdir(parents=True, exist_ok=True)
+                copy_tree(tools, retained)
+            except (OSError, RuntimeError) as retained_error:
+                print(f"owned mise tree remains on OS storage; durable retention failed ({type(retained_error).__name__})", file=sys.stderr)
+        return {"rebuildable": False}
+
+
+def reconcile_boot(home, tools, cache, run=subprocess.run, processes=owner_processes):
+    home, tools, cache = (Path(value) for value in (home, tools, cache))
+    writer_fence(home, run, processes)
+    ledger = home / ".config/octogee/mise-installs.json"
+    previous = None
+    if ledger.exists():
+        if ledger.is_symlink(): raise RuntimeError("tool ledger is not a real file")
+        previous = json.loads(ledger.read_text())
+        if not isinstance(previous, dict) or previous.get("version") != 1 or not isinstance(previous.get("requests"), list):
+            raise RuntimeError("tool rebuild declaration is malformed")
+    state = record_tools(home, tools, run)
+    retained = home / ".config/octogee/mise-retained"
+    folder = retained.parent
+    if folder.exists():
+        for tree in sorted(folder.glob("mise-retained-before-restore-*")):
+            real_ancestors(tree)
+            copy_tree(tree, tools)
+    if retained.exists():
+        real_ancestors(retained)
+        copy_tree(retained, tools)
+    if state["rebuildable"]:
+        writer_fence(home, run, processes)
+        project_tree(home / ".local/share/mise", tools, home.stat())
+        missing = []
+        if previous:
+            requests = pending_requests(home) + (previous["requests"] if previous.get("rebuildable") else [])
+            for request in requests:
+                if not isinstance(request, str) or request.startswith("-") or any(value.isspace() for value in request):
+                    raise RuntimeError("tool rebuild request is malformed")
+            current = json.loads(ledger.read_text())
+            missing = sorted(set(requests) - set(current["requests"]))
+            if missing:
+                write_ledger(home, {**current, "pendingRequests": missing})
+        deadline = time.monotonic() + 180
+        try:
+            if missing:
+                install_before_deadline(home, ["install", "--", *missing], run, deadline)
+            install_before_deadline(home, ["install"], run, deadline)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            print(f"mise tool rebuild pending ({type(error).__name__}); retained declarations will retry on the next boot", file=sys.stderr)
+        else:
+            record_tools(home, tools, run, rebuild_complete=True)
+    writer_fence(home, run, processes)
+    for source, target in [(home / ".cache/mise", cache / "mise"), (home / ".npm", cache / "npm")]:
+        try:
+            writer_fence(home, run, processes)
+            project_tree(source, target, home.stat())
+        except (OSError, RuntimeError) as error:
+            print(f"optional tool cache remains on home ({type(error).__name__})", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--home", type=Path, default=Path("/home/octo"))
+    parser.add_argument("--tools", type=Path, default=Path("/var/lib/octogee-desktop/mise"))
+    parser.add_argument("--cache", type=Path, default=Path("/var/cache/octogee-desktop"))
+    parser.add_argument("--record", action="store_true")
+    parser.add_argument("--reconcile", action="store_true")
+    args = parser.parse_args()
+    if args.record:
+        print(json.dumps(record_tools(args.home, args.tools)))
+    elif args.reconcile:
+        reconcile_boot(args.home, args.tools, args.cache)
+    else:
+        prepare_image(args.home, args.tools, args.cache)

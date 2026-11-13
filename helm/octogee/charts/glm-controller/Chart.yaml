@@ -1,0 +1,9 @@
+apiVersion: v2
+name: glm-controller
+description: |
+  Gateway Lifecycle Manager controller — runs in-cluster, watches Firestore
+  glmGateways/* + glmOperations/* and reconciles to Helm + drives migration
+  operations. Namespace-scoped KSA + Role; no cluster-wide permissions.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

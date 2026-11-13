@@ -1,0 +1,31 @@
+
+
+export const REQUIRED_ENV = [
+  "GCP_PROJECT_ID",
+] as const;
+
+export type RequiredEnvKey = (typeof REQUIRED_ENV)[number];
+
+export interface ValidateRequiredEnvOpts {
+
+isProd: boolean;
+
+profile?: string;
+}
+
+export interface RequiredEnvResult {
+  missing: string[];
+}
+
+export function validateRequiredEnv(
+  env: Record<string, string | undefined>,
+  opts: ValidateRequiredEnvOpts,
+): RequiredEnvResult {
+  if (!opts.isProd) return { missing: [] };
+  const missing = REQUIRED_ENV.filter((key) => {
+    const value = env[key];
+
+return typeof value !== "string" || value.trim().length === 0;
+  });
+  return { missing: [...missing] };
+}

@@ -1,0 +1,39 @@
+#!/usr/bin/bash
+set -euo pipefail
+
+sandbox_args=()
+case "${OCTO_CHROMIUM_NO_SANDBOX-0}" in
+  0) ;;
+  1) sandbox_args+=(--no-sandbox) ;;
+  *) printf '%s\n' 'OCTO_CHROMIUM_NO_SANDBOX must be 0 or 1' >&2; exit 2 ;;
+esac
+
+egress_mode() {
+  local file="$HOME/.config/octogee/egress-mode" mode=cloud
+  [[ -f "$file" ]] && mode="$(<"$file")"
+  printf '%s' "$mode"
+}
+
+proxy_args=()
+case "${OCTO_CHROMIUM_EGRESS_PROXY-1}" in
+  0) ;;
+  1)
+    mode="$(egress_mode)"
+    case "$mode" in
+      cloud) ;;
+      desktop) proxy_args+=(--proxy-server=socks5://127.0.0.1:1080 "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1 , EXCLUDE localhost" --force-webrtc-ip-handling-policy=disable_non_proxied_udp) ;;
+      *) printf '%s\n' "unknown egress mode recorded: ${mode}" >&2; exit 2 ;;
+    esac
+    ;;
+  *) printf '%s\n' 'OCTO_CHROMIUM_EGRESS_PROXY must be 0 or 1' >&2; exit 2 ;;
+esac
+
+if (( $# == 0 )); then
+  set -- "--app=${OCTO_HOME_URL:-http://127.0.0.1:7777/desk}"
+fi
+
+export ACCESSIBILITY_ENABLED=1
+exec chromium --ozone-platform="${OCTO_CHROMIUM_PLATFORM:-wayland}" --disable-gpu "${sandbox_args[@]}" "${proxy_args[@]}" --no-first-run --password-store=basic \
+  --force-renderer-accessibility \
+  --user-data-dir="$HOME/.config/octogee-chromium" \
+  --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 "$@"

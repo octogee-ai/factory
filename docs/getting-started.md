@@ -1,14 +1,22 @@
 # Getting started
 
 Try Octogee Cloud on your own machine in Docker, or install it for production
-on managed cloud services. One installer handles both.
+on managed cloud services. One installer, `install.sh`, handles both.
 
-## Status
+## Two installers
 
-The fleet controller, API and edge have not moved into this repository yet.
-Today the installer gives you the foundation they will run on: Kubernetes,
-PostgreSQL, S3 storage, ingress, a Git host, chat, and one OpenClaw gateway you
-can talk to. This guide will grow when the rest lands.
+This repository holds the whole platform: the fleet controller with its Admin
+API, the platform API, the gateway edge and the OpenClaw gateway image. It has
+two installers.
+
+- `install.sh` installs the foundation: Kubernetes, PostgreSQL, S3 storage,
+  ingress, a Git host, chat, and one OpenClaw gateway you can talk to. It runs
+  on your own machine or on managed cloud services, and the rest of this guide
+  covers it.
+- `scripts/ops/kind-install.sh` builds the platform images from your checkout
+  and installs the full platform on a local kind cluster, with the fleet
+  controller, users and shared gateways. See
+  [The full platform on kind](kind.md).
 
 ## What you need to sign up for
 
@@ -46,13 +54,14 @@ is free only for one 30-day instance. To make the credit last, follow
 [Start small](running-in-the-cloud.md#start-small-on-the-welcome-credit) and
 [set a budget alert](https://cloud.google.com/billing/docs/how-to/budgets).
 
-### To manage gateways with `fleet`
+### To manage gateways with `octogee-fleet`
 
-The [`fleet`](https://github.com/octogee-ai/fleet) command line signs in with your Google account. It needs one more
-free item in the same Google Cloud project: an OAuth client of the type
+The [`octogee-fleet`](https://github.com/octogee-ai/octogee-fleet) command line
+signs in with your Google account. It needs one more free item in the same
+Google Cloud project: an OAuth client of the type
 **TVs and Limited Input devices**. That odd name is Google's term for sign-in
-from a command line, where `fleet` prints a code and you approve it in a
-browser. You will need this when the fleet controller lands in this repository.
+from a command line, where `octogee-fleet` prints a code and you approve it in
+a browser.
 
 ## Install
 

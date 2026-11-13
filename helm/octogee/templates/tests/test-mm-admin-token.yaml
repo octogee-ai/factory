@@ -1,0 +1,115 @@
+{{- if .Values.mattermost.enabled }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ .Release.Name }}-test-mm-admin-token"
+  labels:
+    {{- include "octogee.labels" . | nindent 4 }}
+    app: octogee-mm-admin-token-test
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  {{- with (.Values.global).nodeSelector }}
+  nodeSelector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  serviceAccountName: octogee-gateway
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 100
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: test-mm-token
+      image: "{{ .Values.global.utilityImage.repository }}:{{ .Values.global.utilityImage.tag }}@{{ required "global.utilityImage.digest is required" .Values.global.utilityImage.digest }}"
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      command:
+        - sh
+        - -ec
+        - |
+          echo "=== Validating tracked Mattermost admin PAT against API ==="
+
+          if [ -z "$MM_ADMIN_TOKEN" ] || [ -z "$MM_ADMIN_TOKEN_ID" ] || [ -z "$MM_ADMIN_TOKEN_FINGERPRINT" ] || [ -z "$MM_ADMIN_USER" ] || [ -z "$MM_ADMIN_USER_ID" ]; then
+            echo "FAIL: Mattermost admin contract inputs are empty or not injected"
+            exit 1
+          fi
+
+          echo "Admin contract inputs present"
+
+          TOKEN_FINGERPRINT=$(printf '%s' "$MM_ADMIN_TOKEN" | sha256sum | awk '{print $1}')
+          if [ "$TOKEN_FINGERPRINT" != "$MM_ADMIN_TOKEN_FINGERPRINT" ]; then
+            echo "FAIL: MM_ADMIN_TOKEN does not match its recorded PAT fingerprint"
+            exit 1
+          fi
+
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
+            "http://mattermost.{{ .Release.Namespace }}.svc.cluster.local:8065/api/v4/users/me")
+
+          echo "Mattermost /api/v4/users/me → HTTP $HTTP_CODE"
+
+          if [ "$HTTP_CODE" = "200" ]; then
+            MM_ME=$(curl -s \
+              -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
+              "http://mattermost.{{ .Release.Namespace }}.svc.cluster.local:8065/api/v4/users/me")
+            if ! printf '%s' "$MM_ME" | grep -Fq "\"id\":\"$MM_ADMIN_USER_ID\"" \
+              || ! printf '%s' "$MM_ME" | grep -Fq "\"username\":\"$MM_ADMIN_USER\"" \
+              || ! printf '%s' "$MM_ME" | grep -Fq 'system_admin'; then
+              echo "FAIL: Admin token does not resolve to the configured system administrator"
+              exit 1
+            fi
+
+            MM_PAT=$(curl -s \
+              -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
+              "http://mattermost.{{ .Release.Namespace }}.svc.cluster.local:8065/api/v4/users/tokens/$MM_ADMIN_TOKEN_ID")
+            if ! printf '%s' "$MM_PAT" | grep -Fq "\"id\":\"$MM_ADMIN_TOKEN_ID\"" \
+              || ! printf '%s' "$MM_PAT" | grep -Fq "\"user_id\":\"$MM_ADMIN_USER_ID\"" \
+              || ! printf '%s' "$MM_PAT" | grep -Fq '"description":"octogee platform admin PAT"' \
+              || ! printf '%s' "$MM_PAT" | grep -Fq '"is_active":true'; then
+              echo "FAIL: Admin token does not match the tracked active platform PAT"
+              exit 1
+            fi
+            echo "PASS: Admin token resolves to the tracked active platform PAT"
+            exit 0
+          elif [ "$HTTP_CODE" = "401" ]; then
+            echo "FAIL: Token is expired or revoked (401 Unauthorized)"
+            echo "Fix: Re-run ./scripts/setup-mattermost.sh --env=ENV to generate a fresh PAT"
+            exit 1
+          else
+            echo "FAIL: Unexpected response ($HTTP_CODE) — is Mattermost running?"
+            exit 1
+          fi
+      env:
+        - name: MM_ADMIN_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.global.mattermost.adminSecret.name }}
+              key: {{ .Values.global.mattermost.adminSecret.tokenKey | default "admin_token" }}
+        - name: MM_ADMIN_TOKEN_ID
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.global.mattermost.adminSecret.name }}
+              key: admin_token_id
+        - name: MM_ADMIN_TOKEN_FINGERPRINT
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.global.mattermost.adminSecret.name }}
+              key: admin_token_fingerprint
+        - name: MM_ADMIN_USER
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.global.mattermost.adminSecret.name }}
+              key: admin_user
+        - name: MM_ADMIN_USER_ID
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.global.mattermost.adminSecret.name }}
+              key: admin_user_id
+{{- end }}

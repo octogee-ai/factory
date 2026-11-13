@@ -1,0 +1,21 @@
+{
+  "source": {
+    "repository": "openclaw/openclaw",
+    "commit": "768954ca696dd61793a03154f9379952eac0048c",
+    "files": [
+      "ui/src/pages/chat/components/chat-composer.ts",
+      "ui/src/pages/chat/chat-send.ts",
+      "ui/src/pages/chat/run-lifecycle.ts",
+      "ui/src/pages/chat/chat-thread.ts",
+      "ui/src/pages/chat/components/chat-tool-cards.ts",
+      "ui/src/e2e/chat-flow.e2e.test.ts",
+      "ui/src/e2e/approval-flow.e2e.test.ts"
+    ]
+  },
+  "transfer": {
+    "busyPrimaryAction": "Queue message",
+    "steerPrimaryAction": "Steer message into current run",
+    "activeRunControl": "Stop",
+    "queuedReceipt": "Queued · #3"
+  }
+}

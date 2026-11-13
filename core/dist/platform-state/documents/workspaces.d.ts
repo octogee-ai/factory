@@ -1,0 +1,34 @@
+import { type RecordKey } from "../errors.js";
+import type { OpaqueMap } from "../store.js";
+import type { UserAgentIdentity, WorkspaceChannel, WorkspaceChannelScope, WorkspaceMember, WorkspaceMemberRole, WorkspaceProject, WorkspaceProjectMember, WorkspaceRecord } from "../workspaces.js";
+export declare const MEMBER_ROLES: readonly WorkspaceMemberRole[];
+export type PlainObject = Record<string, unknown>;
+export declare function isPlainObject(value: unknown): value is PlainObject;
+export declare class FirestoreFields {
+    private readonly record;
+    readonly data: PlainObject;
+    constructor(record: RecordKey, data: PlainObject);
+    private malformed;
+    value(path: string): unknown;
+    string(path: string): string;
+    nullableString(path: string): string | null;
+    number(path: string): number;
+    nullableNumber(path: string): number | null;
+    nullableBoolean(path: string): boolean | null;
+    map(path: string): OpaqueMap;
+    nullableMap(path: string): OpaqueMap | null;
+    oneOf<T extends string>(path: string, allowed: readonly T[]): T;
+}
+export declare const workspaceKey: (slug: string) => RecordKey;
+export declare const memberKey: (workspaceSlug: string, uid: string) => RecordKey;
+export declare const projectKey: (workspaceSlug: string, projectSlug: string) => RecordKey;
+export declare const projectMemberKey: (workspaceSlug: string, projectSlug: string, uid: string) => RecordKey;
+export declare const channelKey: (scope: WorkspaceChannelScope, channelId: string) => RecordKey;
+export declare const agentIdentityKey: (uid: string) => RecordKey;
+export declare function isWorkspaceReservation(data: PlainObject): boolean;
+export declare function workspaceRecordFromData(slug: string, data: PlainObject): WorkspaceRecord;
+export declare function workspaceMemberFromData(workspaceSlug: string, uid: string, data: PlainObject): WorkspaceMember;
+export declare function workspaceProjectFromData(workspaceSlug: string, projectSlug: string, data: PlainObject): WorkspaceProject;
+export declare function workspaceProjectMemberFromData(workspaceSlug: string, projectSlug: string, uid: string, data: PlainObject): WorkspaceProjectMember;
+export declare function workspaceChannelFromData(scope: WorkspaceChannelScope, channelId: string, data: PlainObject): WorkspaceChannel;
+export declare function agentIdentityFromData(uid: string, data: PlainObject): UserAgentIdentity;

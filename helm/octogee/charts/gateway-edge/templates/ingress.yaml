@@ -1,0 +1,249 @@
+{{- $ingressClass := (.Values.global).ingressClassName | default "traefik" -}}
+{{- $gke := eq $ingressClass "gce" -}}
+{{- $resourcesEnabled := or .Values.ingress.enabled (.Values.ingress.resourcesEnabled | default false) -}}
+{{- if and $gke $resourcesEnabled }}
+---
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: {{ .Values.ingress.certName }}
+spec:
+  domains:
+    - {{ .Values.ingress.host }}
+---
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: gateway-edge-backend
+spec:
+  healthCheck:
+    type: HTTP
+    requestPath: {{ .Values.healthCheck.path }}
+    port: {{ .Values.healthCheck.port }}
+  # 3600s + connectionDraining: gateway-router carries long-lived WebSocket
+  # surfaces and forwards them to the selected gateway-edge sidecar. A long
+  # timeout is harmless for the HTTP locality routes (they complete fast).
+  timeoutSec: 3600
+  connectionDraining:
+    drainingTimeoutSec: 300
+  {{- if .Values.cloudArmor.enabled }}
+  securityPolicy:
+    name: {{ .Values.cloudArmor.policyName }}
+  {{- end }}
+{{- end }}
+{{- if .Values.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gateway-edge-ingress
+  {{- if $gke }}
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    networking.gke.io/managed-certificates: {{ .Values.ingress.certName }}
+    kubernetes.io/ingress.global-static-ip-name: {{ .Values.ingress.staticIpName }}
+  {{- end }}
+spec:
+  ingressClassName: {{ $ingressClass }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          {{- $routerSvc := .Values.ingress.gatewayRouterService | default "gateway-router" }}
+          {{- $glm := .Values.ingress.glmService | default "glm-controller" }}
+          {{- $api := .Values.ingress.octogeeApiService | default "octogee-api" }}
+          {{- /* Cluster API default: every bare /api/* request lands on
+              octogee-api, which mounts the full cluster route bundle via
+              mountClusterRoutes(). Gateway-local public surfaces use /g/*
+              and are forwarded by the stable gateway-router Service.
+
+              GCE evaluates path rules in document order. The more-specific
+              glm-controller admin routes below must stay before the /api/*
+              octogee-api catch-all so the admin fleet surfaces remain live
+              even when no gateway pods are booted. */}}
+          # The fleet controller HTTP — fleet routes served from glm-controller so the
+          # admin Gateways tab keeps responding when no gateway pods are
+          # booted. GCE URL maps prefer most-specific path; these rules
+          # take precedence over the /api/* catch-all below. GCE
+          # `/foo/*` is "starts with /foo/", so the bare path `/foo`
+          # (no trailing slash) does NOT match — it needs its own rule.
+          # The original PR #855 comment claimed /* covered the bare
+          # path; turns out it doesn't, and bare /api/admin/gateways
+          # was 502-ing through to gateway-edge on no-gateway-pod
+          # clusters until both rules were present.
+          - path: {{ ternary "/api/admin/gateways/*" "/api/admin/gateways" $gke }}
+            pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/gateways
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: {{ ternary "/api/admin/operations/*" "/api/admin/operations" $gke }}
+            pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/operations
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/fleet-events
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          # restore-jobs needs both the bare path (GET list) AND `/*`
+          # (sub-paths like `<jobId>/kick`). GCE `/foo/*` is "starts with
+          # /foo/", so it does NOT match the bare path — and `/foo` does
+          # NOT match sub-paths. Hit this same pattern previously on
+          # `/api/admin/gateways` (PR #855 → 8dd0f709). Without the `/*`
+          # rule, the operator's Kick button POSTs to
+          # `/api/admin/restore-jobs/<jobId>/kick` and falls through the
+          # catch-all `/api/*` to gateway-edge, which 404s if it's
+          # running an older image without the kick endpoint.
+          - path: {{ ternary "/api/admin/restore-jobs/*" "/api/admin/restore-jobs" $gke }}
+            pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/restore-jobs
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/builds
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/rollouts
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/release-status
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/logs
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/fleet-settings
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: {{ ternary "/api/admin/placement/*" "/api/admin/placement" $gke }}
+            pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/placement
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: {{ ternary "/api/admin/gateway-migrations/*" "/api/admin/gateway-migrations" $gke }}
+            pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/user-archives
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/user-distribution
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: {{ ternary "/api/admin/user-by-slug/*" "/api/admin/user-by-slug" $gke }}
+            pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: {{ ternary "/api/admin/users/*" "/api/admin/users" $gke }}
+            pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/users
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          # ── /g/* gateway-local public router ───────────────────
+          - path: {{ ternary "/g/*" "/g" $gke }}
+            pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
+            backend:
+              service:
+                name: {{ $routerSvc }}
+                port:
+                  name: http
+          # ── /api/* cluster default → octogee-api ────────────────
+          # octogee-api serves the full cluster API bundle. Gateway-local
+          # routes are intentionally not carved out here; callers use
+          # /g/<gatewayId>/* so they reach the correct gateway pod.
+          - path: {{ ternary "/api/*" "/api" $gke }}
+            pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
+            backend:
+              service:
+                name: {{ $api }}
+                port:
+                  name: http
+          - path: /health
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
+            backend:
+              service:
+                name: {{ $routerSvc }}
+                port:
+                  name: http
+{{- end }}

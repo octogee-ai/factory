@@ -1,0 +1,115 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: glm-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: glm-controller
+rules:
+  # CRUD on every namespace-scoped kind the umbrella emits — even
+  # resources the controller never *intends* to change. `helm upgrade`
+  # patches every managed resource on every revision (release-revision
+  # annotation), so any kind reachable from the umbrella that lacks
+  # `patch` here will fail the upgrade with a 403. The PR #820 attempt
+  # to keep this least-privilege via read-only on cronjobs / serviceaccounts
+  # / configmaps was tried and reverted in TEST when helm patched all
+  # three on a routine reconcile and the controller couldn't proceed.
+  # deployments/scale is a distinct RBAC subresource — the bare `deployments`
+  # grant does NOT cover it. The fleet controller's pause/resume path runs `kubectl scale
+  # deploy/octogee-gateway-<inst>` (kube-ops.ts), which patches
+  # deployments/scale; without this the SA 403s with "cannot patch resource
+  # deployments/scale" (TEST, 2026-05-28, after the helm→kubectl pause switch
+  # in #1197). `rollout restart` patches the Deployment's pod-template
+  # annotations — covered by the bare `deployments` patch grant — so only
+  # the scale subresource needs calling out.
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/scale", "statefulsets", "replicasets", "controllerrevisions"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs", "jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services", "configmaps", "serviceaccounts", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies", "ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.gke.io"]
+    resources: ["managedcertificates"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["cloud.google.com"]
+    resources: ["backendconfigs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # The controller's own Role + RoleBinding live in the umbrella, so
+  # helm patches them on every reconcile. Without CRUD here the upgrade
+  # fails when the chart's RBAC template renders even slightly differently
+  # (e.g. helm metadata annotation drift).
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # The fleet controller needs create/patch/delete on PVCs to reconcile personal/pet
+  # gateway volumes (rendered by the controller-owned octogee-gateway chart).
+  # K8s RBAC Role verbs CANNOT be name-prefix-scoped, so this grant is
+  # namespace-wide — it does NOT by itself confine the fleet controller to gw PVCs.
+  # The actual protection of the Mattermost/Gitea pet PVCs is two real,
+  # tested layers, not this RBAC:
+  #   1. The fleet controller's mutating helm ops are structurally release-scoped to
+  #      `octogee-gw-*` (RELEASE_PREFIX / releaseNameForInstance in
+  #      helm-runner.ts; pinned by helm-runner.spec.ts "^octogee-gw-").
+  #   2. The MM + Gitea PVCs carry `helm.sh/resource-policy: keep`, so
+  #      even an errant helm uninstall cannot reclaim those volumes.
+  # If layer 1 is ever weakened, a controller-side name guard becomes
+  # mandatory (documented data-loss boundary, not a casual guard).
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "events"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["patch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # The restart-gateway op runs `kubectl exec deploy/octogee-gateway-<inst>
+  # -c gateway -- openclaw gateway restart` (restart-gateway.ts via
+  # kube-ops.ts restartOpenClawInPlace) — an in-process OpenClaw restart, not
+  # a pod reroll. `kubectl exec` opens a connection to the pods/exec
+  # subresource, which is a distinct create-only RBAC grant NOT covered by the
+  # bare `pods` get/list/watch above. Without this the SA 403s with "cannot
+  # create resource pods/exec". (The prior `kubectl rollout restart` path
+  # needed only the apps `deployments` patch grant — switching to exec is
+  # what makes this load-bearing.)
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods/ephemeralcontainers"]
+    verbs: ["patch"]
+  - apiGroups: [""]
+    resources: ["pods/attach"]
+    verbs: ["create", "get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: glm-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: glm-controller
+subjects:
+  - kind: ServiceAccount
+    name: glm-controller
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: glm-controller
+  apiGroup: rbac.authorization.k8s.io

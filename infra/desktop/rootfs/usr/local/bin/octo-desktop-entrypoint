@@ -1,0 +1,49 @@
+#!/usr/bin/bash
+set -euo pipefail
+
+uid=1000
+home=/home/octo
+seed=/opt/octo-home-seed
+runtime="/run/user/${uid}"
+
+mkdir -p "$runtime" "$home"
+chmod 0700 "$runtime"
+chown "$uid:$uid" "$runtime"
+
+if [[ ! -e "$home/.octo-seeded" ]]; then
+  cp -a "$seed"/. "$home"/
+  touch "$home/.octo-seeded"
+  chown -R "$uid:$uid" "$home"
+fi
+
+for device in /dev/dri/*; do
+  [[ -c "$device" ]] || continue
+  device_gid="$(stat -c '%g' "$device")"
+  [[ "$device_gid" != 0 ]] || continue
+  device_group="$(getent group "$device_gid" | cut -d: -f1 || true)"
+  if [[ -z "$device_group" ]]; then
+    device_group="octo-device-${device_gid}"
+    groupadd --gid "$device_gid" "$device_group"
+  fi
+  usermod -aG "$device_group" octo
+done
+
+SEATD_VTBOUND=0 seatd -u octo -l info &
+for _ in $(seq 1 50); do
+  [[ -S /run/seatd.sock ]] && break
+  sleep 0.1
+done
+[[ -S /run/seatd.sock ]] || { echo "ERROR: seatd did not create /run/seatd.sock" >&2; exit 1; }
+
+runuser -u octo -- dbus-daemon --session --address="unix:path=${runtime}/bus" --nofork --nopidfile &
+runuser -u octo -- /usr/local/bin/octo-desktop-session &
+session_pid=$!
+stop_session() {
+  trap '' TERM INT
+  runuser -u octo -- /usr/local/bin/octo-desktop-stop
+  kill "$session_pid" 2>/dev/null || true
+  wait "$session_pid" || true
+  exit 0
+}
+trap stop_session TERM INT
+wait "$session_pid"

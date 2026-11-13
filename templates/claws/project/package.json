@@ -1,0 +1,6 @@
+{
+  "name": "@octogee/project-claw",
+  "version": "0.1.0",
+  "type": "module",
+  "openclaw": { "claw": "CLAW.md" }
+}

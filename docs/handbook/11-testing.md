@@ -29,7 +29,7 @@ npm run typecheck --prefix shared
 ```
 
 Package `engines` fields and the [CI package map](../../scripts/lib/scope/manifest.ts)
-describe runtime requirements. The [CI toolchain](../../ci/Dockerfile) supplies
+describe runtime requirements. The CI toolchain image supplies
 Node 22 and 24, Java 21, and Linux tools. Firebase Functions uses Node 22.
 Do not copy another contributor's `node_modules` into your checkout.
 
@@ -117,8 +117,8 @@ suite, the longest single check, is sharded in two across unit lanes; the first 
 also typechecks the app.
 The aggregate **Required checks** succeeds only when all five pass. PR checks
 have read-only repository access and no deployment identity. Image builds,
-desktop packaging, and live TEST checks are separate operator workflows; see
-[Deploy & CI/CD](21-deploy-and-cicd.md).
+desktop packaging, and live TEST checks are separate operator workflows,
+documented with the deployment's operations chapters.
 
 ## Troubleshooting local runs
 
@@ -143,7 +143,7 @@ and redacted error when asking for help.
 |---|---|---|
 | `app/` | React components, pages, route guards, hooks | `app/src/__tests__/*.spec.{ts,tsx}` (jsdom + RTL) |
 | `gateway-edge/` | Express routes, middleware, MM/Gitea integration | `gateway-edge/src/__tests__/*.spec.ts` (Vitest + supertest, mocked db) |
-| `tests/` | Cross-package **pure logic** (formatters, slug logic, route parser, throttle math) | `tests/{chat,mattermost,provisioner,specs}/**/*.spec.ts` |
+| `tests/` | Cross-package platform specs (charts, images, Terraform, wire contracts) | `tests/specs/**/*.spec.ts` |
 | `scripts/` | provisioner + gateway scripts | `scripts/__tests__/*.spec.ts` |
 | `functions/` | Firestore triggers + scheduled (unit + emulator) | `functions/src/__tests__/*` |
 | Firestore rules | rules behavior | `firestore-rules-tests/` (emulator; `cd … && npm test`) |
@@ -155,7 +155,7 @@ single-instance rule: a separate package = a separate `react` install =
 **Specs live with the module they test.** A spec under `tests/` that imports from
 a sibling package's `lib/` passes vitest locally but breaks CI's per-package
 `tsc` (separate `node_modules`). Put it in the owning package's `__tests__/`.
-`tests/` is for cross-package *pure logic* only. See
+`tests/` is for cross-package specs only. See
 [13 — Repo Conventions](13-repo-conventions.md).
 
 ## Choose tests by behavior and risk

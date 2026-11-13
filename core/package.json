@@ -1,0 +1,893 @@
+{
+  "name": "@octogee/core",
+  "version": "1.0.0",
+  "description": "Octogee shared runtime — consumers depend on its built interface, never its source.",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    "./platform-state": {
+      "types": "./dist/platform-state/index.d.ts",
+      "default": "./dist/platform-state/index.js"
+    },
+    "./platform-state/documents/config": {
+      "types": "./dist/platform-state/documents/config.d.ts",
+      "default": "./dist/platform-state/documents/config.js"
+    },
+    "./platform-state/documents/users": {
+      "types": "./dist/platform-state/documents/users.d.ts",
+      "default": "./dist/platform-state/documents/users.js"
+    },
+    "./testing/journal-store": {
+      "types": "./dist/testing/journal-store.d.ts",
+      "default": "./dist/testing/journal-store.js"
+    },
+    "./testing/cron-custody": {
+      "types": "./dist/testing/cron-custody.d.ts",
+      "default": "./dist/testing/cron-custody.js"
+    },
+    "./testing/firestore-store": {
+      "types": "./dist/testing/firestore-store/store.d.ts",
+      "default": "./dist/testing/firestore-store/store.js"
+    },
+    "./testing/admin-dry-run-app": {
+      "types": "./dist/testing/admin-dry-run-app.d.ts",
+      "default": "./dist/testing/admin-dry-run-app.js"
+    },
+    "./testing/admin-fleet-releases-app": {
+      "types": "./dist/testing/admin-fleet-releases-app.d.ts",
+      "default": "./dist/testing/admin-fleet-releases-app.js"
+    },
+    "./testing/admin-fleet-route-app": {
+      "types": "./dist/testing/admin-fleet-route-app.d.ts",
+      "default": "./dist/testing/admin-fleet-route-app.js"
+    },
+    "./project-agent-workspaces": {
+      "types": "./dist/project-agent-workspaces.d.ts",
+      "default": "./dist/project-agent-workspaces.js"
+    },
+    "./admin-dry-run": {
+      "types": "./dist/admin-dry-run.d.ts",
+      "default": "./dist/admin-dry-run.js"
+    },
+    "./isolated-prelaunch": {
+      "types": "./dist/isolated-prelaunch.d.ts",
+      "default": "./dist/isolated-prelaunch.js"
+    },
+    "./operator-isolated-gateway": {
+      "types": "./dist/operator-isolated-gateway.d.ts",
+      "default": "./dist/operator-isolated-gateway.js"
+    },
+    "./gateway-runtime-restart": {
+      "types": "./dist/gateway-runtime-restart.d.ts",
+      "default": "./dist/gateway-runtime-restart.js"
+    },
+    "./git-metadata": {
+      "types": "./dist/git-metadata.d.ts",
+      "default": "./dist/git-metadata.js"
+    },
+    "./admin-user-directory-router": {
+      "types": "./dist/admin-user-directory-router.d.ts",
+      "default": "./dist/admin-user-directory-router.js"
+    },
+    "./admin-fleet-router": {
+      "types": "./dist/admin-fleet-router.d.ts",
+      "default": "./dist/admin-fleet-router.js"
+    },
+    "./admin-user-router": {
+      "types": "./dist/admin-user-router.d.ts",
+      "default": "./dist/admin-user-router.js"
+    },
+    "./workspace-reservation": {
+      "types": "./dist/workspace-reservation.d.ts",
+      "default": "./dist/workspace-reservation.js"
+    },
+    "./normal-fleet-mutation": {
+      "types": "./dist/normal-fleet-mutation.d.ts",
+      "default": "./dist/normal-fleet-mutation.js"
+    },
+    "./operation-audit": {
+      "types": "./dist/operation-audit.d.ts",
+      "default": "./dist/operation-audit.js"
+    },
+    "./admin-shape": {
+      "types": "./dist/admin-shape.d.ts",
+      "default": "./dist/admin-shape.js"
+    },
+    "./agent-model-token-materializer": {
+      "types": "./dist/agent-model-token-materializer.d.ts",
+      "default": "./dist/agent-model-token-materializer.js"
+    },
+    "./apply-config-patch": {
+      "types": "./dist/apply-config-patch.d.ts",
+      "default": "./dist/apply-config-patch.js"
+    },
+    "./artifact-registry": {
+      "types": "./dist/artifact-registry.d.ts",
+      "default": "./dist/artifact-registry.js"
+    },
+    "./assignment-doc": {
+      "types": "./dist/assignment-doc.d.ts",
+      "default": "./dist/assignment-doc.js"
+    },
+    "./auth-profile-sqlite": {
+      "types": "./dist/auth-profile-sqlite.d.ts",
+      "default": "./dist/auth-profile-sqlite.js"
+    },
+    "./user-account": {
+      "types": "./dist/user-account.d.ts",
+      "default": "./dist/user-account.js"
+    },
+    "./platform-state-user-accounts": {
+      "types": "./dist/platform-state-user-accounts.d.ts",
+      "default": "./dist/platform-state-user-accounts.js"
+    },
+    "./user-activation-lease": {
+      "types": "./dist/user-activation-lease.d.ts",
+      "default": "./dist/user-activation-lease.js"
+    },
+    "./byosub-onboarding": {
+      "types": "./dist/byosub-onboarding.d.ts",
+      "default": "./dist/byosub-onboarding.js"
+    },
+    "./byosub-restore": {
+      "types": "./dist/byosub-restore.d.ts",
+      "default": "./dist/byosub-restore.js"
+    },
+    "./byot-sync": {
+      "types": "./dist/byot-sync.d.ts",
+      "default": "./dist/byot-sync.js"
+    },
+    "./byot-sync-runtime": {
+      "types": "./dist/byot-sync-runtime.d.ts",
+      "default": "./dist/byot-sync-runtime.js"
+    },
+    "./codex-auth-health": {
+      "types": "./dist/codex-auth-health.d.ts",
+      "default": "./dist/codex-auth-health.js"
+    },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "default": "./dist/config.js"
+    },
+    "./connector-revocation": {
+      "types": "./dist/connector-revocation.d.ts",
+      "default": "./dist/connector-revocation.js"
+    },
+    "./system-config-invariants": {
+      "types": "./dist/system-config-invariants.d.ts",
+      "default": "./dist/system-config-invariants.js"
+    },
+    "./system-config-mutation-lease": {
+      "types": "./dist/system-config-mutation-lease.d.ts",
+      "default": "./dist/system-config-mutation-lease.js"
+    },
+    "./workspace-mutation-lease": {
+      "types": "./dist/workspace-mutation-lease.d.ts",
+      "default": "./dist/workspace-mutation-lease.js"
+    },
+    "./context-file-convergence": {
+      "types": "./dist/context-file-convergence.d.ts",
+      "default": "./dist/context-file-convergence.js"
+    },
+    "./user-lifecycle": {
+      "types": "./dist/user-lifecycle.d.ts",
+      "default": "./dist/user-lifecycle.js"
+    },
+    "./user-deletion-plan": {
+      "types": "./dist/user-deletion-plan.d.ts",
+      "default": "./dist/user-deletion-plan.js"
+    },
+    "./user-snapshot-mapping": {
+      "types": "./dist/user-snapshot-mapping.d.ts",
+      "default": "./dist/user-snapshot-mapping.js"
+    },
+    "./encryptor": {
+      "types": "./dist/encryptor.d.ts",
+      "default": "./dist/encryptor.js"
+    },
+    "./cloud-kms-encryptor": {
+      "types": "./dist/cloud-kms-encryptor.d.ts",
+      "default": "./dist/cloud-kms-encryptor.js"
+    },
+    "./deployment-environment": {
+      "types": "./dist/deployment-environment.d.ts",
+      "default": "./dist/deployment-environment.js"
+    },
+    "./public-app-origins": {
+      "types": "./dist/public-app-origins.d.ts",
+      "default": "./dist/public-app-origins.js"
+    },
+    "./user-migration-v2": {
+      "types": "./dist/user-migration-v2.d.ts",
+      "default": "./dist/user-migration-v2.js"
+    },
+    "./firebase-auth-helpers": {
+      "types": "./dist/firebase-auth-helpers.d.ts",
+      "default": "./dist/firebase-auth-helpers.js"
+    },
+    "./fleet-migration": {
+      "types": "./dist/fleet-migration.d.ts",
+      "default": "./dist/fleet-migration.js"
+    },
+    "./fleet-migration-client": {
+      "types": "./dist/fleet-migration-client.d.ts",
+      "default": "./dist/fleet-migration-client.js"
+    },
+    "./fleet-migration-runner": {
+      "types": "./dist/fleet-migration-runner.d.ts",
+      "default": "./dist/fleet-migration-runner.js"
+    },
+    "./scheduler-custody": {
+      "types": "./dist/scheduler-custody.d.ts",
+      "default": "./dist/scheduler-custody.js"
+    },
+    "./fleet-operation-lock": {
+      "types": "./dist/fleet-operation-lock.d.ts",
+      "default": "./dist/fleet-operation-lock.js"
+    },
+    "./fleet-signature": {
+      "types": "./dist/fleet-signature.d.ts",
+      "default": "./dist/fleet-signature.js"
+    },
+    "./fleet-state": {
+      "types": "./dist/fleet-state.d.ts",
+      "default": "./dist/fleet-state.js"
+    },
+    "./shared-gateway-roll-recovery": {
+      "types": "./dist/shared-gateway-roll-recovery.d.ts",
+      "default": "./dist/shared-gateway-roll-recovery.js"
+    },
+    "./gateway-device-identity": {
+      "types": "./dist/gateway-device-identity.d.ts",
+      "default": "./dist/gateway-device-identity.js"
+    },
+    "./operator-placement": {
+      "types": "./dist/operator-placement.d.ts",
+      "default": "./dist/operator-placement.js"
+    },
+    "./gateway-retirement-claim": {
+      "types": "./dist/gateway-retirement-claim.d.ts",
+      "default": "./dist/gateway-retirement-claim.js"
+    },
+    "./gateway-live-release": {
+      "types": "./dist/gateway-live-release.d.ts",
+      "default": "./dist/gateway-live-release.js"
+    },
+    "./gateway-principal-access": {
+      "types": "./dist/gateway-principal-access.d.ts",
+      "default": "./dist/gateway-principal-access.js"
+    },
+    "./gateway-rpc": {
+      "types": "./dist/gateway-rpc.d.ts",
+      "default": "./dist/gateway-rpc.js"
+    },
+    "./gitea-naming": {
+      "types": "./dist/gitea-naming.d.ts",
+      "default": "./dist/gitea-naming.js"
+    },
+    "./hosting": {
+      "types": "./dist/hosting.d.ts",
+      "default": "./dist/hosting.js"
+    },
+    "./image-tag": {
+      "types": "./dist/image-tag.d.ts",
+      "default": "./dist/image-tag.js"
+    },
+    "./internal-fetch": {
+      "types": "./dist/internal-fetch.d.ts",
+      "default": "./dist/internal-fetch.js"
+    },
+    "./local-default-agent-wired": {
+      "types": "./dist/local-default-agent-wired.d.ts",
+      "default": "./dist/local-default-agent-wired.js"
+    },
+    "./migration-activation-manifest": {
+      "types": "./dist/migration-activation-manifest.d.ts",
+      "default": "./dist/migration-activation-manifest.js"
+    },
+    "./model-credential-materializer": {
+      "types": "./dist/model-credential-materializer.d.ts",
+      "default": "./dist/model-credential-materializer.js"
+    },
+    "./model-credential-sync": {
+      "types": "./dist/model-credential-sync.d.ts",
+      "default": "./dist/model-credential-sync.js"
+    },
+    "./model-credential-sync-runtime": {
+      "types": "./dist/model-credential-sync-runtime.d.ts",
+      "default": "./dist/model-credential-sync-runtime.js"
+    },
+    "./openclaw-control-tickets": {
+      "types": "./dist/openclaw-control-tickets.d.ts",
+      "default": "./dist/openclaw-control-tickets.js"
+    },
+    "./openclaw-control-runtime-ready": {
+      "types": "./dist/openclaw-control-runtime-ready.d.ts",
+      "default": "./dist/openclaw-control-runtime-ready.js"
+    },
+    "./platform-embedding-refs": {
+      "types": "./dist/platform-embedding-refs.d.ts",
+      "default": "./dist/platform-embedding-refs.js"
+    },
+    "./secret-store": {
+      "types": "./dist/secret-store.d.ts",
+      "default": "./dist/secret-store.js"
+    },
+    "./secret-manager": {
+      "types": "./dist/secret-manager.d.ts",
+      "default": "./dist/secret-manager.js"
+    },
+    "./usage-log-line": {
+      "types": "./dist/usage-log-line.d.ts",
+      "default": "./dist/usage-log-line.js"
+    },
+    "./usage-log-tailer": {
+      "types": "./dist/usage-log-tailer.d.ts",
+      "default": "./dist/usage-log-tailer.js"
+    },
+    "./usage-tracking": {
+      "types": "./dist/usage-tracking.d.ts",
+      "default": "./dist/usage-tracking.js"
+    },
+    "./workspace-slugs": {
+      "types": "./dist/workspace-slugs.d.ts",
+      "default": "./dist/workspace-slugs.js"
+    },
+    "./ws/upgrade-router": {
+      "types": "./dist/ws/upgrade-router.d.ts",
+      "default": "./dist/ws/upgrade-router.js"
+    },
+    "./templates/project-readmes": {
+      "types": "./dist/templates/project-readmes/index.d.ts",
+      "default": "./dist/templates/project-readmes/index.js"
+    },
+    "./templates/project-seeds": {
+      "types": "./dist/templates/project-seeds/index.d.ts",
+      "default": "./dist/templates/project-seeds/index.js"
+    },
+    "./provisionSteps": {
+      "types": "./dist/provisionSteps.d.ts",
+      "default": "./dist/provisionSteps.js"
+    },
+    "./crew": {
+      "types": "./dist/crew.d.ts",
+      "default": "./dist/crew.js"
+    },
+    "./firebase": {
+      "types": "./dist/firebase.d.ts",
+      "default": "./dist/firebase.js"
+    },
+    "./gateway": {
+      "types": "./dist/gateway.d.ts",
+      "default": "./dist/gateway.js"
+    },
+    "./helpers": {
+      "types": "./dist/helpers.d.ts",
+      "default": "./dist/helpers.js"
+    },
+    "./notifications": {
+      "types": "./dist/notifications.d.ts",
+      "default": "./dist/notifications.js"
+    },
+    "./tier-template-files": {
+      "types": "./dist/tier-template-files.d.ts",
+      "default": "./dist/tier-template-files.js"
+    },
+    "./mattermost": {
+      "types": "./dist/mattermost.d.ts",
+      "default": "./dist/mattermost.js"
+    },
+    "./mattermost/admin-creds": {
+      "types": "./dist/mattermost/admin-creds.d.ts",
+      "default": "./dist/mattermost/admin-creds.js"
+    },
+    "./mattermost/avatars": {
+      "types": "./dist/mattermost/avatars.d.ts",
+      "default": "./dist/mattermost/avatars.js"
+    },
+    "./mattermost/user-pat": {
+      "types": "./dist/mattermost/user-pat.d.ts",
+      "default": "./dist/mattermost/user-pat.js"
+    },
+    "./mattermost/channel-members": {
+      "types": "./dist/mattermost/channel-members.d.ts",
+      "default": "./dist/mattermost/channel-members.js"
+    },
+    "./mattermost/channels": {
+      "types": "./dist/mattermost/channels.d.ts",
+      "default": "./dist/mattermost/channels.js"
+    },
+    "./mattermost/client": {
+      "types": "./dist/mattermost/client.d.ts",
+      "default": "./dist/mattermost/client.js"
+    },
+    "./mattermost/default-agent-pat": {
+      "types": "./dist/mattermost/default-agent-pat.d.ts",
+      "default": "./dist/mattermost/default-agent-pat.js"
+    },
+    "./mattermost/nuke": {
+      "types": "./dist/mattermost/nuke.d.ts",
+      "default": "./dist/mattermost/nuke.js"
+    },
+    "./mattermost/project-agent": {
+      "types": "./dist/mattermost/project-agent.d.ts",
+      "default": "./dist/mattermost/project-agent.js"
+    },
+    "./mattermost/provision": {
+      "types": "./dist/mattermost/provision.d.ts",
+      "default": "./dist/mattermost/provision.js"
+    },
+    "./workspace-manifest": {
+      "types": "./dist/workspace-manifest.d.ts",
+      "default": "./dist/workspace-manifest.js"
+    },
+    "./workspace-binary": {
+      "types": "./dist/workspace-binary.d.ts",
+      "default": "./dist/workspace-binary.js"
+    },
+    "./gateway-release-append": {
+      "types": "./dist/gateway-release-append.d.ts",
+      "default": "./dist/gateway-release-append.js"
+    },
+    "./shared-gateway-pool-read": {
+      "types": "./dist/shared-gateway-pool-read.d.ts",
+      "default": "./dist/shared-gateway-pool-read.js"
+    },
+    "./timestamps": {
+      "types": "./dist/timestamps.d.ts",
+      "import": "./dist/timestamps.js",
+      "default": "./dist/timestamps.js"
+    },
+    "./openclaw-workspace-bootstrap": {
+      "types": "./dist/openclaw-workspace-bootstrap.d.ts",
+      "default": "./dist/openclaw-workspace-bootstrap.js"
+    },
+    "./voice-relay-client": {
+      "types": "./dist/voice-relay-client.d.ts",
+      "default": "./dist/voice-relay-client.js"
+    },
+    "./trusted-broker-url": {
+      "types": "./dist/trusted-broker-url.d.ts",
+      "default": "./dist/trusted-broker-url.js"
+    },
+    "./voice-conversation": {
+      "types": "./dist/voice-conversation.d.ts",
+      "default": "./dist/voice-conversation.js"
+    },
+    "./native-final-reply": {
+      "types": "./dist/native-final-reply.d.ts",
+      "default": "./dist/native-final-reply.js"
+    },
+    "./gateway-restart-probe": {
+      "types": "./dist/gateway-restart-probe.d.ts",
+      "default": "./dist/gateway-restart-probe.js"
+    },
+    "./project-asset-state": {
+      "types": "./dist/project-asset-state.d.ts",
+      "default": "./dist/project-asset-state.js"
+    },
+    "./project-blob-materialization": {
+      "types": "./dist/project-blob-materialization.d.ts",
+      "default": "./dist/project-blob-materialization.js"
+    },
+    "./shared-source-recovery": {
+      "types": "./dist/shared-source-recovery.d.ts",
+      "default": "./dist/shared-source-recovery.js"
+    },
+    "./agent-store-inventory": {
+      "types": "./dist/agent-store-inventory.d.ts",
+      "default": "./dist/agent-store-inventory.js"
+    },
+    "./auth-profile-store": {
+      "types": "./dist/auth-profile-store.d.ts",
+      "default": "./dist/auth-profile-store.js"
+    },
+    "./agent-store-credentials": {
+      "types": "./dist/agent-store-credentials.d.ts",
+      "default": "./dist/agent-store-credentials.js"
+    },
+    "./agent-postgres": {
+      "types": "./dist/agent-postgres.d.ts",
+      "default": "./dist/agent-postgres.js"
+    },
+    "./channel-host": {
+      "types": "./dist/channel-host/index.d.ts",
+      "default": "./dist/channel-host/index.js"
+    },
+    "./git-host": {
+      "types": "./dist/git-host/index.d.ts",
+      "default": "./dist/git-host/index.js"
+    },
+    "./release-status": {
+      "types": "./dist/release-status.d.ts",
+      "default": "./dist/release-status.js"
+    },
+    "./fleet-logs": {
+      "types": "./dist/fleet-logs.d.ts",
+      "default": "./dist/fleet-logs.js"
+    },
+    "./admin-logs-router": {
+      "types": "./dist/admin-logs-router.d.ts",
+      "default": "./dist/admin-logs-router.js"
+    },
+    "./identity-provider": {
+      "types": "./dist/identity-provider.d.ts",
+      "default": "./dist/identity-provider.js"
+    },
+    "./operator-token": {
+      "types": "./dist/operator-token.d.ts",
+      "default": "./dist/operator-token.js"
+    },
+    "./placeholder-email": {
+      "types": "./dist/placeholder-email.d.ts",
+      "default": "./dist/placeholder-email.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "admin-user-directory-router": [
+        "dist/admin-user-directory-router.d.ts"
+      ],
+      "admin-fleet-router": [
+        "dist/admin-fleet-router.d.ts"
+      ],
+      "admin-user-router": [
+        "dist/admin-user-router.d.ts"
+      ],
+      "workspace-reservation": [
+        "dist/workspace-reservation.d.ts"
+      ],
+      "normal-fleet-mutation": [
+        "dist/normal-fleet-mutation.d.ts"
+      ],
+      "operation-audit": [
+        "dist/operation-audit.d.ts"
+      ],
+      "admin-shape": [
+        "dist/admin-shape.d.ts"
+      ],
+      "agent-model-token-materializer": [
+        "dist/agent-model-token-materializer.d.ts"
+      ],
+      "apply-config-patch": [
+        "dist/apply-config-patch.d.ts"
+      ],
+      "artifact-registry": [
+        "dist/artifact-registry.d.ts"
+      ],
+      "assignment-doc": [
+        "dist/assignment-doc.d.ts"
+      ],
+      "auth-profile-sqlite": [
+        "dist/auth-profile-sqlite.d.ts"
+      ],
+      "builder-activation-lease": [
+        "dist/user-activation-lease.d.ts"
+      ],
+      "byosub-onboarding": [
+        "dist/byosub-onboarding.d.ts"
+      ],
+      "byosub-restore": [
+        "dist/byosub-restore.d.ts"
+      ],
+      "byot-sync": [
+        "dist/byot-sync.d.ts"
+      ],
+      "byot-sync-runtime": [
+        "dist/byot-sync-runtime.d.ts"
+      ],
+      "codex-auth-health": [
+        "dist/codex-auth-health.d.ts"
+      ],
+      "config": [
+        "dist/config.d.ts"
+      ],
+      "system-config-invariants": [
+        "dist/system-config-invariants.d.ts"
+      ],
+      "system-config-mutation-lease": [
+        "dist/system-config-mutation-lease.d.ts"
+      ],
+      "context-file-convergence": [
+        "dist/context-file-convergence.d.ts"
+      ],
+      "user-lifecycle": [
+        "dist/user-lifecycle.d.ts"
+      ],
+      "user-snapshot-mapping": [
+        "dist/user-snapshot-mapping.d.ts"
+      ],
+      "encryptor": [
+        "dist/encryptor.d.ts"
+      ],
+      "cloud-kms-encryptor": [
+        "dist/cloud-kms-encryptor.d.ts"
+      ],
+      "deployment-environment": [
+        "dist/deployment-environment.d.ts"
+      ],
+      "user-migration-v2": [
+        "dist/user-migration-v2.d.ts"
+      ],
+      "firebase-auth-helpers": [
+        "dist/firebase-auth-helpers.d.ts"
+      ],
+      "fleet-migration": [
+        "dist/fleet-migration.d.ts"
+      ],
+      "fleet-migration-client": [
+        "dist/fleet-migration-client.d.ts"
+      ],
+      "fleet-migration-runner": [
+        "dist/fleet-migration-runner.d.ts"
+      ],
+      "scheduler-custody": [
+        "dist/scheduler-custody.d.ts"
+      ],
+      "fleet-operation-lock": [
+        "dist/fleet-operation-lock.d.ts"
+      ],
+      "fleet-signature": [
+        "dist/fleet-signature.d.ts"
+      ],
+      "fleet-state": [
+        "dist/fleet-state.d.ts"
+      ],
+      "shared-gateway-roll-recovery": [
+        "dist/shared-gateway-roll-recovery.d.ts"
+      ],
+      "gateway-device-identity": [
+        "dist/gateway-device-identity.d.ts"
+      ],
+      "gateway-live-release": [
+        "dist/gateway-live-release.d.ts"
+      ],
+      "gateway-principal-access": [
+        "dist/gateway-principal-access.d.ts"
+      ],
+      "operator-placement": [
+        "dist/operator-placement.d.ts"
+      ],
+      "gateway-retirement-claim": [
+        "dist/gateway-retirement-claim.d.ts"
+      ],
+      "gateway-rpc": [
+        "dist/gateway-rpc.d.ts"
+      ],
+      "gitea-naming": [
+        "dist/gitea-naming.d.ts"
+      ],
+      "hosting": [
+        "dist/hosting.d.ts"
+      ],
+      "image-tag": [
+        "dist/image-tag.d.ts"
+      ],
+      "internal-fetch": [
+        "dist/internal-fetch.d.ts"
+      ],
+      "local-default-agent-wired": [
+        "dist/local-default-agent-wired.d.ts"
+      ],
+      "migration-activation-manifest": [
+        "dist/migration-activation-manifest.d.ts"
+      ],
+      "model-credential-materializer": [
+        "dist/model-credential-materializer.d.ts"
+      ],
+      "model-credential-sync": [
+        "dist/model-credential-sync.d.ts"
+      ],
+      "model-credential-sync-runtime": [
+        "dist/model-credential-sync-runtime.d.ts"
+      ],
+      "openclaw-control-tickets": [
+        "dist/openclaw-control-tickets.d.ts"
+      ],
+      "openclaw-control-runtime-ready": [
+        "dist/openclaw-control-runtime-ready.d.ts"
+      ],
+      "platform-embedding-refs": [
+        "dist/platform-embedding-refs.d.ts"
+      ],
+      "secret-store": [
+        "dist/secret-store.d.ts"
+      ],
+      "secret-manager": [
+        "dist/secret-manager.d.ts"
+      ],
+      "usage-log-line": [
+        "dist/usage-log-line.d.ts"
+      ],
+      "usage-log-tailer": [
+        "dist/usage-log-tailer.d.ts"
+      ],
+      "usage-tracking": [
+        "dist/usage-tracking.d.ts"
+      ],
+      "workspace-slugs": [
+        "dist/workspace-slugs.d.ts"
+      ],
+      "ws/upgrade-router": [
+        "dist/ws/upgrade-router.d.ts"
+      ],
+      "templates/project-readmes": [
+        "dist/templates/project-readmes/index.d.ts"
+      ],
+      "templates/project-seeds": [
+        "dist/templates/project-seeds/index.d.ts"
+      ],
+      "provisionSteps": [
+        "dist/provisionSteps.d.ts"
+      ],
+      "crew": [
+        "dist/crew.d.ts"
+      ],
+      "firebase": [
+        "dist/firebase.d.ts"
+      ],
+      "gateway": [
+        "dist/gateway.d.ts"
+      ],
+      "helpers": [
+        "dist/helpers.d.ts"
+      ],
+      "notifications": [
+        "dist/notifications.d.ts"
+      ],
+      "tier-template-files": [
+        "dist/tier-template-files.d.ts"
+      ],
+      "mattermost": [
+        "dist/mattermost.d.ts"
+      ],
+      "mattermost/admin-creds": [
+        "dist/mattermost/admin-creds.d.ts"
+      ],
+      "mattermost/avatars": [
+        "dist/mattermost/avatars.d.ts"
+      ],
+      "mattermost/user-pat": [
+        "dist/mattermost/user-pat.d.ts"
+      ],
+      "mattermost/channel-members": [
+        "dist/mattermost/channel-members.d.ts"
+      ],
+      "mattermost/channels": [
+        "dist/mattermost/channels.d.ts"
+      ],
+      "mattermost/client": [
+        "dist/mattermost/client.d.ts"
+      ],
+      "mattermost/default-agent-pat": [
+        "dist/mattermost/default-agent-pat.d.ts"
+      ],
+      "mattermost/project-agent": [
+        "dist/mattermost/project-agent.d.ts"
+      ],
+      "mattermost/nuke": [
+        "dist/mattermost/nuke.d.ts"
+      ],
+      "mattermost/provision": [
+        "dist/mattermost/provision.d.ts"
+      ],
+      "workspace-manifest": [
+        "dist/workspace-manifest.d.ts"
+      ],
+      "workspace-binary": [
+        "dist/workspace-binary.d.ts"
+      ],
+      "gateway-release-append": [
+        "dist/gateway-release-append.d.ts"
+      ],
+      "shared-gateway-pool-read": [
+        "dist/shared-gateway-pool-read.d.ts"
+      ],
+      "timestamps": [
+        "dist/timestamps.d.ts"
+      ],
+      "openclaw-workspace-bootstrap": [
+        "dist/openclaw-workspace-bootstrap.d.ts"
+      ],
+      "voice-relay-client": [
+        "dist/voice-relay-client.d.ts"
+      ],
+      "trusted-broker-url": [
+        "dist/trusted-broker-url.d.ts"
+      ],
+      "voice-conversation": [
+        "dist/voice-conversation.d.ts"
+      ],
+      "native-final-reply": [
+        "dist/native-final-reply.d.ts"
+      ],
+      "gateway-restart-probe": [
+        "dist/gateway-restart-probe.d.ts"
+      ],
+      "project-asset-state": [
+        "dist/project-asset-state.d.ts"
+      ],
+      "project-blob-materialization": [
+        "dist/project-blob-materialization.d.ts"
+      ],
+      "agent-store-inventory": [
+        "dist/agent-store-inventory.d.ts"
+      ],
+      "auth-profile-store": [
+        "dist/auth-profile-store.d.ts"
+      ],
+      "agent-store-credentials": [
+        "dist/agent-store-credentials.d.ts"
+      ],
+      "agent-postgres": [
+        "dist/agent-postgres.d.ts"
+      ],
+      "channel-host": [
+        "dist/channel-host/index.d.ts"
+      ],
+      "git-host": [
+        "dist/git-host/index.d.ts"
+      ],
+      "release-status": [
+        "dist/release-status.d.ts"
+      ],
+      "fleet-logs": [
+        "dist/fleet-logs.d.ts"
+      ],
+      "admin-logs-router": [
+        "dist/admin-logs-router.d.ts"
+      ],
+      "identity-provider": [
+        "dist/identity-provider.d.ts"
+      ],
+      "operator-token": [
+        "dist/operator-token.d.ts"
+      ],
+      "placeholder-email": [
+        "dist/placeholder-email.d.ts"
+      ]
+    }
+  },
+  "scripts": {
+    "prebuild": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
+    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "pretypecheck": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "pretest": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@google-cloud/secret-manager": "^7.2.0",
+    "express": "^5.3.0",
+    "firebase-admin": "^14.5.0",
+    "google-auth-library": "^11.3.3",
+    "pg": "^8.23.1",
+    "unique-names-generator": "^4.7.1",
+    "ws": "^8.22.1"
+  },
+  "overrides": {
+    "brace-expansion@>=2.0.0 <3.0.0": "2.1.7",
+    "fast-xml-parser": "^5.10.1",
+    "qs": "^6.17.0",
+    "uuid": "^11.1.1",
+    "postcss": "8.5.25",
+    "rimraf@>=4.2.0 <6.1.4": "^6.1.4"
+  },
+  "devDependencies": {
+    "@octogee/shared": "file:../shared",
+    "@types/express": "^5.0.6",
+    "@types/pg": "^8.23.1",
+    "@types/supertest": "^7.2.1",
+    "@types/ws": "^8.18.2",
+    "supertest": "^7.3.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.12"
+  },
+  "peerDependencies": {
+    "@octogee/shared": "^1.0.0"
+  }
+}

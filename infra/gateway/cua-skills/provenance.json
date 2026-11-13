@@ -1,0 +1,39 @@
+{
+  "driverVersion": "0.38.0",
+  "driverSourceCommit": "85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19",
+  "skills": {
+    "cua-driver": {
+      "repository": "https://github.com/trycua/cua",
+      "commit": "85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19",
+      "path": "libs/cua-driver/rust/Skills/cua-driver",
+      "version": "0.38.0",
+      "adaptedFrom": {
+        "SKILL.md": "f771345ea9656ce7e2ace7a5940ef325e8eea3e4eada316cbeeea62747d540fd",
+        "LINUX.md": "286f3eae22b70c1dcba90ebb1d0c789546ab5f819baeb3f53c94b2b6588afa7b"
+      },
+      "files": [
+        "SKILL.md"
+      ],
+      "localEdits": [
+        "SKILL.md: adapt official driver and Linux contracts to the managed computer tool, paired node, observation references and explicit computer browser profile; omit standalone driver installation and unsupported tool routes",
+        "SKILL.md: omit standalone macOS install/permission guidance, hint/next_call refusal advice and get_guide because the managed computer tool on this Linux desktop exposes none of them"
+      ]
+    },
+    "cua-omarchy": {
+      "repository": "https://github.com/omacom/omarchy",
+      "commit": "94e97055daca90bfe4248f7a419648ed71f97c49",
+      "pullRequest": "https://github.com/omacom/omarchy/pull/11342",
+      "path": "default/agents/optional-skills/cua-omarchy",
+      "adaptedFrom": {
+        "SKILL.md": "23d635cad67c56be98f573fec39508ad9543027ca4042f8b4a0e7b713c7f796b"
+      },
+      "files": [
+        "SKILL.md"
+      ],
+      "localEdits": [
+        "SKILL.md: Familiar desktop paragraph (floating windows, snapping, dock, Super+Tab) under \"This desktop\"",
+        "SKILL.md: explicit Octogee computer browser profile under \"This desktop\""
+      ]
+    }
+  }
+}

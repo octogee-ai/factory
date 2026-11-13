@@ -1,0 +1,596 @@
+import { describe, expect, it } from 'vitest';
+import {
+  USERNAME_RE,
+  USERNAME_MIN_LENGTH,
+  USERNAME_MAX_LENGTH,
+  PROJECT_ID_MAX_LENGTH,
+  CUSTOM_CHANNEL_MAX_LENGTH,
+  CHANNEL_NAME_MAX_LENGTH,
+  PROJECT_DISCRIMINATOR,
+  COMMUNITY_PREFIX,
+  RESERVED_WORKSPACE_CHANNELS,
+  MM_SYSTEM_CHANNELS,
+  RESERVED_USERNAMES,
+  isValidUsername,
+  usernameValidationError,
+  isValidProjectId,
+  isValidCustomChannelName,
+  workspaceGeneralChannelName,
+  workspaceDefaultAgentChannelName,
+  workspaceAdminChannelName,
+  workspaceCustomChannelName,
+  projectGeneralChannelName,
+  projectChannelName,
+  isMmSystemChannel,
+  isCommunityChannel,
+  parseChannelName,
+  attributeChannelToUsername,
+  deriveJoinedUsernames,
+  deriveContactedUsernames,
+  workspaceDefaultAgentId,
+  projectAgentId,
+  workspaceDefaultAgentMmUsername,
+  projectAgentMmUsername,
+  parseAgentId,
+} from './identity.js';
+
+const MM_TEAM_NAME_RE = /^[a-z0-9]+([a-z\-0-9]+|(__)?)[a-z0-9]+$/;
+
+describe('identity: constants', () => {
+  it('USERNAME_MIN_LENGTH matches MM TeamNameMinLength (2)', () => {
+    expect(USERNAME_MIN_LENGTH).toBe(2);
+  });
+
+  it('CHANNEL_NAME_MAX_LENGTH matches MM ChannelNameMaxLength (64)', () => {
+    expect(CHANNEL_NAME_MAX_LENGTH).toBe(64);
+  });
+
+  it('USERNAME_MAX + "-proj-" + PROJECT_ID_MAX + "-" + CUSTOM_CHANNEL_MAX fits exactly the MM 64-char cap', () => {
+    const budget =
+      USERNAME_MAX_LENGTH +
+      `-${PROJECT_DISCRIMINATOR}-`.length +
+      PROJECT_ID_MAX_LENGTH +
+      '-'.length +
+      CUSTOM_CHANNEL_MAX_LENGTH;
+    expect(budget).toBe(CHANNEL_NAME_MAX_LENGTH);
+  });
+
+  it('RESERVED_USERNAMES includes every MM system + reserved suffix + discriminator + community prefix', () => {
+    expect(RESERVED_USERNAMES.has('town-square')).toBe(true);
+    expect(RESERVED_USERNAMES.has('off-topic')).toBe(true);
+    expect(RESERVED_USERNAMES.has('general')).toBe(true);
+    expect(RESERVED_USERNAMES.has('coach')).toBe(true);
+    expect(RESERVED_USERNAMES.has('admin')).toBe(true);
+    expect(RESERVED_USERNAMES.has(PROJECT_DISCRIMINATOR)).toBe(true);
+    expect(RESERVED_USERNAMES.has(COMMUNITY_PREFIX)).toBe(true);
+  });
+
+  it('RESERVED_WORKSPACE_CHANNELS is general, defaultAgent, admin (in that order)', () => {
+    expect([...RESERVED_WORKSPACE_CHANNELS]).toEqual(['general', 'coach', 'admin']);
+  });
+
+  it('MM_SYSTEM_CHANNELS is town-square + off-topic', () => {
+    expect(MM_SYSTEM_CHANNELS.has('town-square')).toBe(true);
+    expect(MM_SYSTEM_CHANNELS.has('off-topic')).toBe(true);
+    expect(MM_SYSTEM_CHANNELS.size).toBe(2);
+  });
+});
+
+describe('identity: USERNAME_RE', () => {
+  it.each([
+    ['kyle'],
+    ['ab'],
+    ['a1'],
+    ['kyle2'],
+    ['christopher-eckert'],
+    ['ai-2026'],
+    ['one-two-three-four'],
+  ])('accepts %s', (name) => {
+    expect(USERNAME_RE.test(name)).toBe(true);
+  });
+
+  it.each([
+    ['', 'empty'],
+    ['-kyle', 'leading hyphen'],
+    ['kyle-', 'trailing hyphen'],
+    ['kyle--dev', 'double hyphen'],
+    ['Kyle', 'uppercase'],
+    ['kyle_dev', 'underscore'],
+    ['kyle.dev', 'dot'],
+    ['kyle dev', 'space'],
+    ['kyle/dev', 'slash'],
+  ])('rejects %s (%s)', (name) => {
+    expect(USERNAME_RE.test(name)).toBe(false);
+  });
+});
+
+describe('identity: isValidUsername', () => {
+  it('accepts realistic handles', () => {
+    expect(isValidUsername('kyle')).toBe(true);
+    expect(isValidUsername('christopher-eckert')).toBe(true);
+    expect(isValidUsername('a1')).toBe(true);
+  });
+
+  it('rejects below USERNAME_MIN_LENGTH', () => {
+    expect(isValidUsername('a')).toBe(false);
+    expect(isValidUsername('')).toBe(false);
+  });
+
+  it('rejects above USERNAME_MAX_LENGTH', () => {
+    expect(isValidUsername('a'.repeat(USERNAME_MAX_LENGTH + 1))).toBe(false);
+  });
+
+  it('accepts exactly USERNAME_MAX_LENGTH', () => {
+    expect(isValidUsername('a'.repeat(USERNAME_MAX_LENGTH))).toBe(true);
+  });
+
+  it('rejects every reserved username', () => {
+    for (const reserved of RESERVED_USERNAMES) {
+      expect(isValidUsername(reserved)).toBe(false);
+    }
+  });
+
+  it('rejects Mattermost-reserved team prefixes', () => {
+    for (const prefix of ['admin', 'api', 'channel', 'post', 'signup', 'plugins']) {
+      expect(isValidUsername(`${prefix}user`)).toBe(false);
+    }
+  });
+
+  it('rejects non-string input', () => {
+    expect(isValidUsername(undefined as unknown as string)).toBe(false);
+    expect(isValidUsername(null as unknown as string)).toBe(false);
+    expect(isValidUsername(123 as unknown as string)).toBe(false);
+  });
+
+  it('rejects reserved words embedded as hyphen-delimited segments', () => {
+    expect(isValidUsername('foo-proj-bar')).toBe(false);
+    expect(isValidUsername('foo-general-bar')).toBe(false);
+    expect(isValidUsername('foo-admin-bar')).toBe(false);
+    expect(isValidUsername('foo-coach')).toBe(false);
+    expect(isValidUsername('foo-community')).toBe(false);
+    expect(isValidUsername('generally')).toBe(true);
+    expect(isValidUsername('projector')).toBe(true);
+  });
+});
+
+describe('identity: usernameValidationError', () => {
+  it('returns null for a valid handle', () => {
+    expect(usernameValidationError('kyle')).toBeNull();
+  });
+
+  it('returns a message for empty', () => {
+    expect(usernameValidationError('')).toMatch(/required/i);
+  });
+
+  it('returns a length message for too-short', () => {
+    const err = usernameValidationError('a');
+    expect(err).toMatch(new RegExp(String(USERNAME_MIN_LENGTH)));
+  });
+
+  it('returns a length message for too-long', () => {
+    const err = usernameValidationError('a'.repeat(USERNAME_MAX_LENGTH + 1));
+    expect(err).toMatch(new RegExp(String(USERNAME_MAX_LENGTH)));
+  });
+
+  it('returns a shape message for bad characters', () => {
+    expect(usernameValidationError('Kyle')).toMatch(/lowercase|letters|hyphen/i);
+    expect(usernameValidationError('kyle--dev')).toMatch(/lowercase|letters|hyphen/i);
+    expect(usernameValidationError('-kyle')).toMatch(/lowercase|letters|hyphen/i);
+  });
+
+  it('returns a reserved message for reserved names', () => {
+    expect(usernameValidationError('general')).toMatch(/reserved/i);
+    expect(usernameValidationError('town-square')).toMatch(/reserved/i);
+  });
+});
+
+describe('identity: isValidProjectId', () => {
+  it('accepts lowercase alphanumeric', () => {
+    expect(isValidProjectId('dragonfly')).toBe(true);
+    expect(isValidProjectId('ai2026')).toBe(true);
+    expect(isValidProjectId('a')).toBe(true);
+  });
+
+  it('rejects hyphens, uppercase, and other characters', () => {
+    expect(isValidProjectId('ai-coach')).toBe(false);
+    expect(isValidProjectId('Dragonfly')).toBe(false);
+    expect(isValidProjectId('ai_coach')).toBe(false);
+  });
+
+  it('rejects empty and over-max', () => {
+    expect(isValidProjectId('')).toBe(false);
+    expect(isValidProjectId('a'.repeat(PROJECT_ID_MAX_LENGTH + 1))).toBe(false);
+  });
+
+  it('accepts exactly PROJECT_ID_MAX_LENGTH', () => {
+    expect(isValidProjectId('a'.repeat(PROJECT_ID_MAX_LENGTH))).toBe(true);
+  });
+});
+
+describe('identity: isValidCustomChannelName', () => {
+  it('accepts lowercase alphanumeric, no hyphens', () => {
+    expect(isValidCustomChannelName('standups')).toBe(true);
+    expect(isValidCustomChannelName('q1goals')).toBe(true);
+    expect(isValidCustomChannelName('a')).toBe(true);
+  });
+
+  it('rejects hyphens and other characters', () => {
+    expect(isValidCustomChannelName('daily-standup')).toBe(false);
+    expect(isValidCustomChannelName('standup ')).toBe(false);
+    expect(isValidCustomChannelName('Standups')).toBe(false);
+  });
+
+  it('rejects empty and over-max', () => {
+    expect(isValidCustomChannelName('')).toBe(false);
+    expect(isValidCustomChannelName('a'.repeat(CUSTOM_CHANNEL_MAX_LENGTH + 1))).toBe(false);
+  });
+
+  it('accepts exactly CUSTOM_CHANNEL_MAX_LENGTH', () => {
+    expect(isValidCustomChannelName('a'.repeat(CUSTOM_CHANNEL_MAX_LENGTH))).toBe(true);
+  });
+});
+
+describe('identity: generators', () => {
+  it('workspaceGeneralChannelName', () => {
+    expect(workspaceGeneralChannelName('kyle')).toBe('kyle-general');
+    expect(workspaceGeneralChannelName('christopher-eckert')).toBe('christopher-eckert-general');
+  });
+
+  it('workspaceDefaultAgentChannelName', () => {
+    expect(workspaceDefaultAgentChannelName('kyle')).toBe('kyle-coach');
+  });
+
+  it('workspaceAdminChannelName', () => {
+    expect(workspaceAdminChannelName('kyle')).toBe('kyle-admin');
+  });
+
+  it('workspaceCustomChannelName', () => {
+    expect(workspaceCustomChannelName('kyle', 'standups')).toBe('kyle-standups');
+  });
+
+  it('projectGeneralChannelName', () => {
+    expect(projectGeneralChannelName('kyle', 'dragonfly')).toBe('kyle-proj-dragonfly-general');
+  });
+
+  it('projectChannelName', () => {
+    expect(projectChannelName('kyle', 'dragonfly', 'retro')).toBe('kyle-proj-dragonfly-retro');
+  });
+
+  it('longest possible generated name fits MM 64-char cap exactly', () => {
+    const u = 'a'.repeat(USERNAME_MAX_LENGTH);
+    const p = 'a'.repeat(PROJECT_ID_MAX_LENGTH);
+    const c = 'a'.repeat(CUSTOM_CHANNEL_MAX_LENGTH);
+    const longest = projectChannelName(u, p, c);
+    expect(longest.length).toBe(CHANNEL_NAME_MAX_LENGTH);
+  });
+});
+
+describe('identity: recognizers', () => {
+  it('isMmSystemChannel', () => {
+    expect(isMmSystemChannel('town-square')).toBe(true);
+    expect(isMmSystemChannel('off-topic')).toBe(true);
+    expect(isMmSystemChannel('kyle-general')).toBe(false);
+  });
+
+  it('isCommunityChannel', () => {
+    expect(isCommunityChannel('community-general')).toBe(true);
+    expect(isCommunityChannel('community-announcements')).toBe(true);
+    expect(isCommunityChannel('kyle-general')).toBe(false);
+    expect(isCommunityChannel('community')).toBe(false);
+    expect(isCommunityChannel('')).toBe(false);
+  });
+});
+
+describe('identity: parseChannelName', () => {
+  it('parses workspace reserved: {u}-general', () => {
+    expect(parseChannelName('kyle-general', 'kyle')).toEqual({
+      kind: 'workspace',
+      username: 'kyle',
+      channel: 'general',
+      reserved: true,
+    });
+  });
+
+  it('parses workspace reserved: {u}-coach', () => {
+    expect(parseChannelName('kyle-coach', 'kyle')).toEqual({
+      kind: 'workspace',
+      username: 'kyle',
+      channel: 'coach',
+      reserved: true,
+    });
+  });
+
+  it('parses workspace reserved: {u}-admin', () => {
+    expect(parseChannelName('kyle-admin', 'kyle')).toEqual({
+      kind: 'workspace',
+      username: 'kyle',
+      channel: 'admin',
+      reserved: true,
+    });
+  });
+
+  it('parses workspace custom: {u}-{custom}', () => {
+    expect(parseChannelName('kyle-standups', 'kyle')).toEqual({
+      kind: 'workspace',
+      username: 'kyle',
+      channel: 'standups',
+      reserved: false,
+    });
+  });
+
+  it('parses project general: {u}-proj-{p}-general', () => {
+    expect(parseChannelName('kyle-proj-dragonfly-general', 'kyle')).toEqual({
+      kind: 'project',
+      username: 'kyle',
+      project: 'dragonfly',
+      channel: 'general',
+    });
+  });
+
+  it('parses project custom: {u}-proj-{p}-{c}', () => {
+    expect(parseChannelName('kyle-proj-dragonfly-retro', 'kyle')).toEqual({
+      kind: 'project',
+      username: 'kyle',
+      project: 'dragonfly',
+      channel: 'retro',
+    });
+  });
+
+  it('handles hyphenated usernames cleanly (no ambiguity)', () => {
+    expect(parseChannelName('christopher-eckert-standups', 'christopher-eckert')).toEqual({
+      kind: 'workspace',
+      username: 'christopher-eckert',
+      channel: 'standups',
+      reserved: false,
+    });
+  });
+
+  it('handles hyphenated usernames with project channels', () => {
+    expect(parseChannelName('christopher-eckert-proj-ai-retro', 'christopher-eckert')).toEqual({
+      kind: 'project',
+      username: 'christopher-eckert',
+      project: 'ai',
+      channel: 'retro',
+    });
+  });
+
+  it('returns kind:system for MM system channels regardless of username', () => {
+    expect(parseChannelName('town-square', 'kyle')).toEqual({ kind: 'system', name: 'town-square' });
+    expect(parseChannelName('off-topic', 'kyle')).toEqual({ kind: 'system', name: 'off-topic' });
+  });
+
+  it('returns kind:community for community-* channels', () => {
+    expect(parseChannelName('community-general', 'kyle')).toEqual({
+      kind: 'community',
+      name: 'community-general',
+    });
+  });
+
+  it('returns kind:foreign when the prefix does not match the username', () => {
+    expect(parseChannelName('christopher-eckert-general', 'kyle')).toEqual({
+      kind: 'foreign',
+      name: 'christopher-eckert-general',
+    });
+  });
+
+  it('returns kind:unknown for channels that fit no rule', () => {
+    expect(parseChannelName('kyle-proj-dragonfly-with-dash', 'kyle').kind).toBe('unknown');
+    expect(parseChannelName('kyle-', 'kyle').kind).toBe('unknown');
+  });
+
+  it('returns kind:unknown for empty input', () => {
+    expect(parseChannelName('', 'kyle').kind).toBe('unknown');
+  });
+});
+
+describe('identity: attributeChannelToUsername', () => {
+  it('returns the owning username for workspace channels', () => {
+    expect(attributeChannelToUsername('kyle-general', ['kyle', 'chris'])).toBe('kyle');
+  });
+
+  it('returns the owning username for project channels', () => {
+    expect(attributeChannelToUsername('chris-proj-ai-retro', ['kyle', 'chris'])).toBe('chris');
+  });
+
+  it('returns null for MM system channels', () => {
+    expect(attributeChannelToUsername('town-square', ['kyle'])).toBeNull();
+  });
+
+  it('returns null for community channels', () => {
+    expect(attributeChannelToUsername('community-general', ['kyle'])).toBeNull();
+  });
+
+  it('returns null when no known username matches', () => {
+    expect(attributeChannelToUsername('alice-general', ['kyle', 'chris'])).toBeNull();
+  });
+
+  it('disambiguates prefix-ambiguous usernames by longest match', () => {
+    expect(attributeChannelToUsername('kyle-x-general', ['kyle', 'kyle-x'])).toBe('kyle-x');
+    expect(attributeChannelToUsername('kyle-x-general', ['kyle-x', 'kyle'])).toBe('kyle-x');
+  });
+});
+
+describe('identity: deriveJoinedUsernames', () => {
+  it('collects usernames from each reserved-suffix channel', () => {
+    const channels = [
+      { name: 'kyle-general', type: 'P' },
+      { name: 'chris-coach', type: 'P' },
+      { name: 'alice-admin', type: 'P' },
+    ];
+    expect(deriveJoinedUsernames(channels, null)).toEqual(['alice', 'chris', 'kyle']);
+  });
+
+  it('handles hyphenated usernames by stripping only the reserved suffix', () => {
+    const channels = [
+      { name: 'christopher-eckert-general', type: 'P' },
+      { name: 'ai-2026-coach', type: 'P' },
+    ];
+    expect(deriveJoinedUsernames(channels, null)).toEqual(['ai-2026', 'christopher-eckert']);
+  });
+
+  it('excludes the caller\'s own username', () => {
+    const channels = [
+      { name: 'kyle-general', type: 'P' },
+      { name: 'chris-general', type: 'P' },
+    ];
+    expect(deriveJoinedUsernames(channels, 'kyle')).toEqual(['chris']);
+  });
+
+  it('ignores DM channels, project channels, custom workspace channels, community, and MM system', () => {
+    const channels = [
+      { name: 'user1__user2', type: 'D' },
+      { name: 'kyle-proj-dragonfly-general', type: 'P' },
+      { name: 'kyle-standups', type: 'P' },
+      { name: 'town-square', type: 'O' },
+      { name: 'community-general', type: 'O' },
+      { name: 'kyle-general', type: 'P' },
+    ];
+    expect(deriveJoinedUsernames(channels, null)).toEqual(['kyle']);
+  });
+
+  it('does NOT surface project-only guests (prevents MenuBar tile regression)', () => {
+    const channels = [
+      { name: 'kyle-proj-dragonfly-general', type: 'P' },
+      { name: 'alice-general', type: 'P' },
+    ];
+    expect(deriveJoinedUsernames(channels, null)).toEqual(['alice']);
+  });
+
+  it('deduplicates — one user with multiple reserved channels counts once', () => {
+    const channels = [
+      { name: 'kyle-general', type: 'P' },
+      { name: 'kyle-coach', type: 'P' },
+      { name: 'kyle-admin', type: 'P' },
+    ];
+    expect(deriveJoinedUsernames(channels, null)).toEqual(['kyle']);
+  });
+
+  it('returns empty for empty input', () => {
+    expect(deriveJoinedUsernames([], null)).toEqual([]);
+  });
+});
+
+describe('identity: deriveContactedUsernames', () => {
+  it('surfaces owners from project-only guest collaborations', () => {
+    const channels = [
+      { name: 'kyle-proj-dragonfly-general', type: 'P' },
+      { name: 'kyle-proj-dragonfly-design', type: 'P' },
+      { name: 'alice-general', type: 'P' },
+    ];
+    expect(deriveContactedUsernames(channels, 'alice')).toEqual(['kyle']);
+  });
+
+  it('unions full-membership and project-only signals', () => {
+    const channels = [
+      { name: 'kyle-general', type: 'P' },
+      { name: 'alice-proj-widget-general', type: 'P' },
+      { name: 'chris-proj-car-general', type: 'P' },
+    ];
+    expect(deriveContactedUsernames(channels, null)).toEqual(['alice', 'chris', 'kyle']);
+  });
+
+  it('handles hyphenated owner slug in project channels', () => {
+    const channels = [
+      { name: 'christopher-eckert-proj-car-general', type: 'P' },
+    ];
+    expect(deriveContactedUsernames(channels, null)).toEqual(['christopher-eckert']);
+  });
+
+  it('rejects project-channel patterns with invalid owner slugs', () => {
+    const channels = [
+      { name: '-proj-x-general', type: 'P' },
+      { name: 'general-proj-x-general', type: 'P' },
+    ];
+    expect(deriveContactedUsernames(channels, null)).toEqual([]);
+  });
+
+  it('excludes the caller\'s own username across both signals', () => {
+    const channels = [
+      { name: 'alice-general', type: 'P' },
+      { name: 'alice-proj-x-general', type: 'P' },
+      { name: 'kyle-general', type: 'P' },
+    ];
+    expect(deriveContactedUsernames(channels, 'alice')).toEqual(['kyle']);
+  });
+});
+
+describe('identity: MM compatibility', () => {
+  it('every valid username also satisfies MM\'s team-name regex', () => {
+    const cases = [
+      'ab', 'kyle', 'christopher-eckert', 'ai-2026', 'a1', 'one-two-three-four',
+      'a'.repeat(USERNAME_MAX_LENGTH),
+    ];
+    for (const name of cases) {
+      expect(isValidUsername(name)).toBe(true);
+      expect(MM_TEAM_NAME_RE.test(name)).toBe(true);
+    }
+  });
+});
+
+describe('agent ids', () => {
+  it('builds agent and project agent ids and MM usernames', () => {
+    expect(workspaceDefaultAgentId('alice')).toBe('octogee-alice-coach');
+    expect(projectAgentId('alice', 'orbit')).toBe('octogee-alice-proj-orbit-coach');
+    expect(workspaceDefaultAgentMmUsername('alice')).toBe('alice-coach');
+    expect(projectAgentMmUsername('alice', 'orbit')).toBe('alice-proj-orbit-coach');
+  });
+
+  it('parses agent agent ids', () => {
+    expect(parseAgentId('octogee-alice-coach')).toEqual({ kind: 'coach', username: 'alice' });
+    expect(parseAgentId('octogee-christopher-eckert-coach')).toEqual({
+      kind: 'coach',
+      username: 'christopher-eckert',
+    });
+  });
+
+  it('parses project agent ids, including hyphenated workspace slugs', () => {
+    expect(parseAgentId('octogee-alice-proj-orbit-coach')).toEqual({
+      kind: 'project',
+      username: 'alice',
+      project: 'orbit',
+    });
+    expect(parseAgentId('octogee-christopher-eckert-proj-x1-coach')).toEqual({
+      kind: 'project',
+      username: 'christopher-eckert',
+      project: 'x1',
+    });
+  });
+
+  it('rejects ids outside the octogee agent namespace', () => {
+    expect(parseAgentId('alice-coach')).toEqual({ kind: 'unknown', id: 'alice-coach' });
+    expect(parseAgentId('octogee-alice')).toEqual({ kind: 'unknown', id: 'octogee-alice' });
+    expect(parseAgentId('octogee-coach')).toEqual({ kind: 'unknown', id: 'octogee-coach' });
+    expect(parseAgentId('octogee--coach')).toEqual({ kind: 'unknown', id: 'octogee--coach' });
+    expect(parseAgentId('octogee-alice-proj--coach')).toEqual({
+      kind: 'unknown',
+      id: 'octogee-alice-proj--coach',
+    });
+    expect(parseAgentId('octogee-alice-proj-My_App-coach')).toEqual({
+      kind: 'unknown',
+      id: 'octogee-alice-proj-My_App-coach',
+    });
+  });
+
+  it('round-trips: parse(build) is identity for valid inputs', () => {
+    expect(parseAgentId(workspaceDefaultAgentId('ai-2026'))).toEqual({
+      kind: 'coach',
+      username: 'ai-2026',
+    });
+    expect(parseAgentId(projectAgentId('ai-2026', 'orbit9'))).toEqual({
+      kind: 'project',
+      username: 'ai-2026',
+      project: 'orbit9',
+    });
+  });
+});
+
+describe('agent ids: MM username envelope', () => {
+  it('worst-case project agent MM username fits Mattermost UserNameMaxLength (64, verified against MM 11.8.1 model/user.go)', () => {
+    const worst = projectAgentMmUsername(
+      'a'.repeat(USERNAME_MAX_LENGTH),
+      'b'.repeat(PROJECT_ID_MAX_LENGTH),
+    );
+    expect(worst.length).toBe(52);
+    expect(worst.length).toBeLessThanOrEqual(64);
+  });
+});

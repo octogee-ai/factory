@@ -1,0 +1,283 @@
+
+
+export type OpenclawWireErrorCode =
+  | "connect-failed"
+  | "auth-failed"
+  | "hash-mismatch"
+  | "invalid-patch"
+  | "timeout"
+  | "invalid-response"
+  | "rpc-error";
+
+const CONNECT_FAILED: OpenclawWireErrorCode = "connect-failed";
+
+export class OpenclawWireError extends Error {
+  override readonly name = "OpenclawWireError";
+  constructor(
+    readonly code: OpenclawWireErrorCode,
+    message: string,
+    readonly details?: unknown,
+  ) {
+    super(message);
+  }
+}
+
+export interface WireSocket {
+  on(event: string, listener: (...args: unknown[]) => void): void;
+  once(event: string, listener: (...args: unknown[]) => void): void;
+  removeListener(event: string, listener: (...args: unknown[]) => void): void;
+  send(data: string): void;
+  terminate(): void;
+}
+
+interface Utf8Decodable {
+  toString(encoding?: string): string;
+}
+
+export interface ResponseFrame {
+  type: "res";
+  id: string;
+  ok: boolean;
+  payload?: unknown;
+  error?: { code: string; message: string; details?: unknown };
+}
+
+export function isResponseFrame(v: unknown): v is ResponseFrame {
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    (v as { type?: unknown }).type === "res" &&
+    typeof (v as { id?: unknown }).id === "string" &&
+    typeof (v as { ok?: unknown }).ok === "boolean"
+  );
+}
+
+function frameToString(data: unknown): string | undefined {
+  if (typeof data === "string") return data;
+  if (data instanceof ArrayBuffer) {
+    return new TextDecoder("utf-8").decode(new Uint8Array(data));
+  }
+  if (Array.isArray(data)) {
+    const parts = data.map(frameToString);
+    return parts.some((p) => p === undefined)
+      ? undefined
+      : parts.join("");
+  }
+  if (data && typeof (data as Utf8Decodable).toString === "function") {
+    return (data as Utf8Decodable).toString("utf-8");
+  }
+  return undefined;
+}
+
+function parseFrame(data: unknown): unknown {
+  const s = frameToString(data);
+  if (s === undefined) return undefined;
+  try {
+    return JSON.parse(s);
+  } catch {
+    return undefined;
+  }
+}
+
+export function waitForWsOpen(
+  ws: WireSocket,
+  timeoutMs: number,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      try {
+        ws.terminate();
+      } catch {
+        /* */
+      }
+      reject(
+        new OpenclawWireError(
+          CONNECT_FAILED,
+          `WS open timed out after ${timeoutMs}ms`,
+        ),
+      );
+    }, timeoutMs);
+    const onOpen = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (...args: unknown[]) => {
+      cleanup();
+      try {
+        ws.terminate();
+      } catch {
+        /* */
+      }
+      reject(
+        new OpenclawWireError(
+          CONNECT_FAILED,
+          `WS open failed: ${(args[0] as Error).message}`,
+        ),
+      );
+    };
+    function cleanup() {
+      clearTimeout(timer);
+      ws.removeListener("open", onOpen);
+      ws.removeListener("error", onError);
+    }
+    ws.once("open", onOpen);
+    ws.once("error", onError);
+  });
+}
+
+export function startConnectChallengeTracker(ws: WireSocket): {
+  wait: (timeoutMs: number) => Promise<string>;
+} {
+  let cached: string | null = null;
+  let pendingResolve: ((nonce: string) => void) | null = null;
+  let pendingReject: ((err: Error) => void) | null = null;
+
+  const onMessage = (...args: unknown[]) => {
+    if (cached !== null) return;
+    const parsed = parseFrame(args[0]);
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      (parsed as { type?: unknown }).type !== "event" ||
+      (parsed as { event?: unknown }).event !== "connect.challenge"
+    ) {
+      return;
+    }
+    const nonce = (parsed as { payload?: { nonce?: unknown } }).payload?.nonce;
+    if (typeof nonce !== "string" || nonce.length === 0) {
+      if (pendingReject) {
+        pendingReject(
+          new OpenclawWireError(
+            "invalid-response",
+            "connect.challenge event has no string nonce",
+          ),
+        );
+      }
+      return;
+    }
+    cached = nonce;
+    if (pendingResolve) pendingResolve(nonce);
+  };
+  ws.on("message", onMessage);
+
+  return {
+    wait(timeoutMs: number): Promise<string> {
+      if (cached !== null) return Promise.resolve(cached);
+      return new Promise<string>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          cleanup();
+          reject(
+            new OpenclawWireError(
+              CONNECT_FAILED,
+              `connect.challenge not received within ${timeoutMs}ms`,
+            ),
+          );
+        }, timeoutMs);
+        const onClose = () => {
+          cleanup();
+          reject(
+            new OpenclawWireError(
+              CONNECT_FAILED,
+              "socket closed before connect.challenge arrived",
+            ),
+          );
+        };
+        pendingResolve = (nonce) => {
+          cleanup();
+          resolve(nonce);
+        };
+        pendingReject = (err) => {
+          cleanup();
+          reject(err);
+        };
+        function cleanup() {
+          clearTimeout(timer);
+          ws.removeListener("close", onClose);
+          pendingResolve = null;
+          pendingReject = null;
+        }
+        ws.on("close", onClose);
+      });
+    },
+  };
+}
+
+export interface SendWsRequestParams {
+  ws: WireSocket;
+  id: string;
+  method: string;
+  params: unknown;
+  timeoutMs: number;
+  mapConnectErrors?: boolean;
+}
+
+export function sendWsRequest({
+  ws,
+  id,
+  method,
+  params,
+  timeoutMs,
+  mapConnectErrors = false,
+}: SendWsRequestParams): Promise<unknown> {
+  return new Promise<unknown>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(
+        new OpenclawWireError(
+          "timeout",
+          `${method} response timed out after ${timeoutMs}ms`,
+        ),
+      );
+    }, timeoutMs);
+
+    const onMessage = (...args: unknown[]) => {
+      const parsed = parseFrame(args[0]);
+      if (!isResponseFrame(parsed) || parsed.id !== id) return;
+      cleanup();
+      if (parsed.ok) {
+        resolve(parsed.payload);
+        return;
+      }
+      const serverCode = parsed.error?.code ?? "UNKNOWN";
+      const errMsg = parsed.error?.message ?? "gateway error";
+      reject(
+        new OpenclawWireError(
+          mapConnectErrors ? "auth-failed" : "rpc-error",
+          errMsg,
+          { serverCode, details: parsed.error?.details },
+        ),
+      );
+    };
+    const onClose = () => {
+      cleanup();
+      reject(
+        new OpenclawWireError(
+          CONNECT_FAILED,
+          `socket closed before ${method} response`,
+        ),
+      );
+    };
+    const onError = (...args: unknown[]) => {
+      cleanup();
+      reject(
+        new OpenclawWireError(
+          CONNECT_FAILED,
+          `socket error during ${method}: ${(args[0] as Error).message}`,
+        ),
+      );
+    };
+
+    function cleanup() {
+      clearTimeout(timer);
+      ws.removeListener("message", onMessage);
+      ws.removeListener("close", onClose);
+      ws.removeListener("error", onError);
+    }
+
+    ws.on("message", onMessage);
+    ws.on("close", onClose);
+    ws.on("error", onError);
+    ws.send(JSON.stringify({ type: "req", id, method, params }));
+  });
+}

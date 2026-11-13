@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh octo's SSH keys from GCE instance metadata
+
+[Timer]
+OnBootSec=5s
+OnUnitActiveSec=60s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

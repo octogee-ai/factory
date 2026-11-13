@@ -1,0 +1,20 @@
+import { afterEach, expect, it } from "vitest";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { readMaterializedProjectAssets, withMaterializedProjectAssets } from "@octogee/core/project-asset-state";
+const roots: string[] = [];
+afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
+it.skipIf(process.platform !== "linux")("reads materialization ownership without altering the ledger, and refuses another checkout's deletion intent", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "export-assets-")); roots.push(parent);
+  const root = join(parent, "demo"); await mkdir(join(root, ".git"), { recursive: true });
+  const prefix = "customers/alice/projects/demo";
+  const entry = { type: "blob" as const, gcsPath: `${prefix}/portrait.png`, size: 3, mimeType: "image/png", uploadedAt: "2026-10-23" };
+  await withMaterializedProjectAssets(root, prefix, async files => { files["portrait.png"] = entry; });
+  const ledger = join(parent, ".octogee-state/demo.assets.json"); const before = await readFile(ledger, "utf8");
+  expect(await readMaterializedProjectAssets(root, prefix)).toEqual({ "portrait.png": entry });
+  expect(await readFile(ledger, "utf8")).toBe(before);
+  await writeFile(join(root, ".git/octogee-checkout.json"), JSON.stringify({ version: 1, id: "00000000-0000-0000-0000-000000000000" }));
+  expect(await readMaterializedProjectAssets(root, prefix)).toEqual({});
+  expect(await readFile(ledger, "utf8")).toBe(before);
+});

@@ -1,0 +1,188 @@
+{
+  "schemaVersion": 1,
+  "groups": [
+    {
+      "id": "core",
+      "enabled": true,
+      "delivery": "base",
+      "baseImagePackages": [
+        "ca-certificates",
+        "curl",
+        "git",
+        "jq",
+        "openssh-client",
+        "rsync",
+        "tar"
+      ]
+    },
+    {
+      "id": "agent-clis",
+      "enabled": true,
+      "delivery": "npm",
+      "npmPackages": {
+        "@anthropic-ai/claude-code": "2.1.322",
+        "@openai/codex": "0.167.1"
+      },
+      "commands": ["claude", "codex"]
+    },
+    {
+      "id": "browser",
+      "enabled": true,
+      "delivery": "npm",
+      "npmPackages": {
+        "@sparticuz/chromium": "153.0.0"
+      },
+      "commands": ["chromium"]
+    },
+    {
+      "id": "computer",
+      "enabled": true,
+      "delivery": "base",
+      "debianPackages": ["dbus-bin", "wtype"],
+      "commands": ["dbus-send", "wtype"]
+    },
+    {
+      "id": "web-development",
+      "enabled": true,
+      "delivery": "npm",
+      "npmPackages": {
+        "firebase-tools": "15.35.0",
+        "npm-check-updates": "23.1.1",
+        "pnpm": "12.18.0",
+        "tsx": "4.23.15",
+        "typescript": "7.0.2"
+      },
+      "commands": [
+        "firebase",
+        "npm-check-updates",
+        "ncu",
+        "pnpm",
+        "pnpx",
+        "tsc",
+        "tsx"
+      ]
+    },
+    {
+      "id": "languages",
+      "enabled": true,
+      "delivery": "base",
+      "debianPackages": ["pipx", "python3", "python3-pip", "python3-venv"],
+      "commands": ["pip3", "pipx", "python3"]
+    },
+    {
+      "id": "build",
+      "enabled": true,
+      "delivery": "base",
+      "debianPackages": ["build-essential", "cmake", "make", "pkg-config"],
+      "commands": ["cmake", "g++", "gcc", "make", "pkg-config"]
+    },
+    {
+      "id": "shell",
+      "enabled": true,
+      "delivery": "base",
+      "debianPackages": [
+        "bash-completion",
+        "bc",
+        "cloc",
+        "file",
+        "fzf",
+        "less",
+        "nano",
+        "pandoc",
+        "ripgrep",
+        "tree",
+        "unzip",
+        "vim",
+        "wget",
+        "xxd",
+        "zip",
+        "zsh"
+      ],
+      "commands": [
+        "bc", "cloc", "fd", "file", "fdfind", "fzf", "less", "nano", "pandoc",
+        "rg", "tree", "unzip", "vim", "wget", "xxd", "zip", "zsh"
+      ]
+    },
+    {
+      "id": "media",
+      "enabled": true,
+      "delivery": "base",
+      "debianPackages": [
+        "ffmpeg",
+        "fonts-liberation",
+        "fonts-noto-color-emoji",
+        "imagemagick"
+      ],
+      "commands": ["convert", "ffmpeg", "ffprobe", "identify"]
+    },
+    {
+      "id": "diagnostics",
+      "enabled": true,
+      "delivery": "base",
+      "debianPackages": [
+        "dnsutils",
+        "htop",
+        "iproute2",
+        "iputils-ping",
+        "lsof",
+        "net-tools",
+        "netcat-openbsd",
+        "procps",
+        "psmisc",
+        "socat",
+        "strace",
+        "traceroute"
+      ],
+      "commands": [
+        "dig", "htop", "ifconfig", "ip", "lsof", "nc", "netstat", "pgrep", "ping",
+        "ps", "socat", "strace", "traceroute"
+      ]
+    },
+    {
+      "id": "data",
+      "enabled": true,
+      "delivery": "base",
+      "debianPackages": ["postgresql-client", "redis-tools", "sqlite3"],
+      "commands": ["psql", "redis-cli", "sqlite3"]
+    },
+    {
+      "id": "version-control",
+      "enabled": true,
+      "delivery": "base",
+      "debianPackages": ["git-lfs"],
+      "commands": ["git-lfs"]
+    },
+    {
+      "id": "cloud",
+      "enabled": true,
+      "delivery": "base",
+      "commands": [
+        "bq",
+        "gcloud",
+        "gh",
+        "gke-gcloud-auth-plugin",
+        "gsutil",
+        "helm",
+        "kubectl",
+        "terraform",
+        "yq"
+      ]
+    }
+  ],
+  "pythonPackages": [
+    "PyYAML==6.0.3",
+    "beautifulsoup4==4.15.0",
+    "pandas==3.1.1",
+    "matplotlib==3.11.2"
+  ],
+  "standaloneTools": {
+    "gcloud": {
+      "version": "593.0.0",
+      "sha256": "42c32b7553c712f71fcf6f124546c0519437f53755f47f9bd0c957998cd6b826"
+    },
+    "gh": { "version": "2.103.3" },
+    "helm": { "version": "4.3.1" },
+    "terraform": { "version": "1.17.2" },
+    "yq": { "version": "4.54.3" }
+  }
+}

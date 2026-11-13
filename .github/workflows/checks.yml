@@ -19,6 +19,9 @@ jobs:
   checks:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: scripts
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -32,8 +35,9 @@ jobs:
         with:
           node-version: 24.22.1
           cache: npm
+          cache-dependency-path: scripts/package-lock.json
       - run: npm ci
       - run: npm audit --audit-level=moderate
       - run: npx tsc --noEmit
-      - run: npx vitest run
-      - run: npx tsx scripts/ci/factory-deny-list-scan.ts
+      - run: npx vitest run __tests__/ci-checks.spec.ts __tests__/deploy/
+      - run: npm run gate
