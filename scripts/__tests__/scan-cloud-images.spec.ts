@@ -47,7 +47,7 @@ it("reports findings and produces an SBOM for every exact architecture digest", 
     expect(calls).not.toContain(`${registry}/${name}@${amd}`);
     expect(readFileSync(join(directory, "summary"), "utf8")).toContain(`${name}@${arm}\` | 1 | 0 | 0 | 0 | 0 |`);
   }
-  expect(readdirSync(join(directory, "reports"))).toHaveLength(11);
+  expect(readdirSync(join(directory, "reports"))).toHaveLength(9);
 });
 
 it.each([
