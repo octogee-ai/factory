@@ -204,27 +204,27 @@ describe('connector registry (gateway-edge)', () => {
   it('google deep probe checks each granted capability and names them all', async () => {
     const calls = mockFetchJson([
       {
-        url: /www\.googleapis\.com\/calendar\/v3\/calendars\/primary\/events/,
+        url: /^https:\/\/www\.googleapis\.com\/calendar\/v3\/calendars\/primary\/events(?:\?|$)/,
         auth: 'Bearer g-tok',
         body: { items: [] },
       },
       {
-        url: /gmail\.googleapis\.com\/gmail\/v1\/users\/me\/profile/,
+        url: /^https:\/\/gmail\.googleapis\.com\/gmail\/v1\/users\/me\/profile(?:\?|$)/,
         auth: 'Bearer g-tok',
         body: { emailAddress: 'dan@x.com' },
       },
       {
-        url: /www\.googleapis\.com\/drive\/v3\/about/,
+        url: /^https:\/\/www\.googleapis\.com\/drive\/v3\/about(?:\?|$)/,
         auth: 'Bearer g-tok',
         body: { user: { emailAddress: 'dan@x.com' } },
       },
       {
-        url: /tasks\.googleapis\.com\/tasks\/v1\/users\/@me\/lists/,
+        url: /^https:\/\/tasks\.googleapis\.com\/tasks\/v1\/users\/@me\/lists(?:\?|$)/,
         auth: 'Bearer g-tok',
         body: { items: [] },
       },
       {
-        url: /people\.googleapis\.com\/v1\/people\/me\/connections/,
+        url: /^https:\/\/people\.googleapis\.com\/v1\/people\/me\/connections(?:\?|$)/,
         auth: 'Bearer g-tok',
         body: { connections: [] },
       },
@@ -271,7 +271,7 @@ describe('connector registry (gateway-edge)', () => {
   it('google deep probe only probes the granted capability', async () => {
     const calls = mockFetchJson([
       {
-        url: /gmail\.googleapis\.com\/gmail\/v1\/users\/me\/profile/,
+        url: /^https:\/\/gmail\.googleapis\.com\/gmail\/v1\/users\/me\/profile(?:\?|$)/,
         auth: 'Bearer g-tok',
         body: { emailAddress: 'dan@x.com' },
       },
@@ -287,7 +287,7 @@ describe('connector registry (gateway-edge)', () => {
   it('google deep probe with only tasks granted probes tasklists alone', async () => {
     const calls = mockFetchJson([
       {
-        url: /tasks\.googleapis\.com\/tasks\/v1\/users\/@me\/lists/,
+        url: /^https:\/\/tasks\.googleapis\.com\/tasks\/v1\/users\/@me\/lists(?:\?|$)/,
         auth: 'Bearer g-tok',
         body: { items: [] },
       },
@@ -301,7 +301,7 @@ describe('connector registry (gateway-edge)', () => {
   it('google deep probe with only contacts granted probes people connections alone', async () => {
     const calls = mockFetchJson([
       {
-        url: /people\.googleapis\.com\/v1\/people\/me\/connections/,
+        url: /^https:\/\/people\.googleapis\.com\/v1\/people\/me\/connections(?:\?|$)/,
         auth: 'Bearer g-tok',
         body: { connections: [] },
       },
@@ -326,7 +326,7 @@ describe('connector registry (gateway-edge)', () => {
   it('google deep probe throws on a non-OK capability response (scope missing/revoked)', async () => {
     mockFetchJson([
       {
-        url: /gmail\.googleapis\.com\/gmail\/v1\/users\/me\/profile/,
+        url: /^https:\/\/gmail\.googleapis\.com\/gmail\/v1\/users\/me\/profile(?:\?|$)/,
         body: { error: 'forbidden' },
         status: 403,
       },
@@ -374,7 +374,7 @@ describe('connectorRedirectUri', () => {
 describe('github identity', () => {
   it('fetches GET /user with the bearer token and returns login as accountLabel', async () => {
     const calls = mockFetchJson([
-      { url: /api\.github\.com\/user$/, auth: 'Bearer gho_tok', body: { login: 'chris-e' } },
+      { url: /^https:\/\/api\.github\.com\/user$/, auth: 'Bearer gho_tok', body: { login: 'chris-e' } },
     ]);
 
     const identity = await getConnector('github')!.fetchIdentity('gho_tok');
@@ -384,13 +384,13 @@ describe('github identity', () => {
 
   it('throws on a non-OK response (bad PAT)', async () => {
     mockFetchJson([
-      { url: /api\.github\.com\/user$/, body: { message: 'Bad credentials' }, status: 401 },
+      { url: /^https:\/\/api\.github\.com\/user$/, body: { message: 'Bad credentials' }, status: 401 },
     ]);
     await expect(getConnector('github')!.fetchIdentity('bad')).rejects.toThrow('401');
   });
 
   it('throws when the response has no login', async () => {
-    mockFetchJson([{ url: /api\.github\.com\/user$/, body: {} }]);
+    mockFetchJson([{ url: /^https:\/\/api\.github\.com\/user$/, body: {} }]);
     await expect(getConnector('github')!.fetchIdentity('tok')).rejects.toThrow('login');
   });
 });
@@ -398,7 +398,7 @@ describe('github identity', () => {
 describe('PAT connector identities (vercel, cloudflare, gemini)', () => {
   it('vercel: GET /v2/user with the bearer token, username as accountLabel', async () => {
     mockFetchJson([
-      { url: /api\.vercel\.com\/v2\/user$/, auth: 'Bearer vc-tok', body: { user: { username: 'chris' } } },
+      { url: /^https:\/\/api\.vercel\.com\/v2\/user$/, auth: 'Bearer vc-tok', body: { user: { username: 'chris' } } },
     ]);
     await expect(getConnector('vercel')!.fetchIdentity('vc-tok')).resolves.toEqual({
       accountLabel: 'chris',
@@ -406,14 +406,14 @@ describe('PAT connector identities (vercel, cloudflare, gemini)', () => {
   });
 
   it('vercel: throws on a rejected token', async () => {
-    mockFetchJson([{ url: /api\.vercel\.com\/v2\/user$/, body: { error: 'forbidden' }, status: 403 }]);
+    mockFetchJson([{ url: /^https:\/\/api\.vercel\.com\/v2\/user$/, body: { error: 'forbidden' }, status: 403 }]);
     await expect(getConnector('vercel')!.fetchIdentity('bad')).rejects.toThrow('403');
   });
 
   it('cloudflare: verifies the token is active via tokens/verify', async () => {
     mockFetchJson([
       {
-        url: /api\.cloudflare\.com\/client\/v4\/user\/tokens\/verify$/,
+        url: /^https:\/\/api\.cloudflare\.com\/client\/v4\/user\/tokens\/verify$/,
         auth: 'Bearer cf-tok',
         body: { success: true, result: { id: 'abc123def456', status: 'active' } },
       },
@@ -426,7 +426,7 @@ describe('PAT connector identities (vercel, cloudflare, gemini)', () => {
   it('cloudflare: throws when the token is not active', async () => {
     mockFetchJson([
       {
-        url: /api\.cloudflare\.com\/client\/v4\/user\/tokens\/verify$/,
+        url: /^https:\/\/api\.cloudflare\.com\/client\/v4\/user\/tokens\/verify$/,
         body: { success: true, result: { id: 'x', status: 'disabled' } },
       },
     ]);
@@ -435,7 +435,7 @@ describe('PAT connector identities (vercel, cloudflare, gemini)', () => {
 
   it('gemini: validates the AI Studio key via the models list header auth (key never in URL)', async () => {
     const calls = mockFetchJson([
-      { url: /generativelanguage\.googleapis\.com\/v1beta\/models$/, body: { models: [{ name: 'gemini' }] } },
+      { url: /^https:\/\/generativelanguage\.googleapis\.com\/v1beta\/models$/, body: { models: [{ name: 'gemini' }] } },
     ]);
     await expect(getConnector('gemini')!.fetchIdentity('AIza-key')).resolves.toEqual({
       accountLabel: 'AI Studio key',
@@ -446,7 +446,7 @@ describe('PAT connector identities (vercel, cloudflare, gemini)', () => {
 
   it('gemini: throws on an invalid key', async () => {
     mockFetchJson([
-      { url: /generativelanguage\.googleapis\.com\/v1beta\/models$/, body: { error: {} }, status: 400 },
+      { url: /^https:\/\/generativelanguage\.googleapis\.com\/v1beta\/models$/, body: { error: {} }, status: 400 },
     ]);
     await expect(getConnector('gemini')!.fetchIdentity('bad')).rejects.toThrow('400');
   });
@@ -455,7 +455,7 @@ describe('PAT connector identities (vercel, cloudflare, gemini)', () => {
 describe('PAT connector identities (netlify, npm)', () => {
   it('netlify: GET /api/v1/user, email as accountLabel', async () => {
     mockFetchJson([
-      { url: /api\.netlify\.com\/api\/v1\/user$/, auth: 'Bearer nf-tok', body: { email: 'c@x.com' } },
+      { url: /^https:\/\/api\.netlify\.com\/api\/v1\/user$/, auth: 'Bearer nf-tok', body: { email: 'c@x.com' } },
     ]);
     await expect(getConnector('netlify')!.fetchIdentity('nf-tok')).resolves.toEqual({
       accountLabel: 'c@x.com',
@@ -464,12 +464,12 @@ describe('PAT connector identities (netlify, npm)', () => {
 
   it('npm: whoami username as accountLabel; throws on rejection', async () => {
     mockFetchJson([
-      { url: /registry\.npmjs\.org\/-\/whoami$/, auth: 'Bearer npm_x', body: { username: 'chris' } },
+      { url: /^https:\/\/registry\.npmjs\.org\/-\/whoami$/, auth: 'Bearer npm_x', body: { username: 'chris' } },
     ]);
     await expect(getConnector('npm')!.fetchIdentity('npm_x')).resolves.toEqual({
       accountLabel: 'chris',
     });
-    mockFetchJson([{ url: /registry\.npmjs\.org\/-\/whoami$/, body: {}, status: 401 }]);
+    mockFetchJson([{ url: /^https:\/\/registry\.npmjs\.org\/-\/whoami$/, body: {}, status: 401 }]);
     await expect(getConnector('npm')!.fetchIdentity('bad')).rejects.toThrow('401');
   });
 });
@@ -477,7 +477,7 @@ describe('PAT connector identities (netlify, npm)', () => {
 describe('fields-credential validation (docker, azure, gcp)', () => {
   it('docker: logs in to Docker Hub with username+token; username as accountLabel', async () => {
     mockFetchJson([
-      { url: /hub\.docker\.com\/v2\/users\/login$/, body: { token: 'jwt' } },
+      { url: /^https:\/\/hub\.docker\.com\/v2\/users\/login$/, body: { token: 'jwt' } },
     ]);
     await expect(
       getConnector('docker')!.validateFields!({ username: 'chris', token: 'dckr_pat_x' }),
@@ -486,7 +486,7 @@ describe('fields-credential validation (docker, azure, gcp)', () => {
 
   it('docker: throws on rejected login', async () => {
     mockFetchJson([
-      { url: /hub\.docker\.com\/v2\/users\/login$/, body: { detail: 'nope' }, status: 401 },
+      { url: /^https:\/\/hub\.docker\.com\/v2\/users\/login$/, body: { detail: 'nope' }, status: 401 },
     ]);
     await expect(
       getConnector('docker')!.validateFields!({ username: 'chris', token: 'bad' }),
@@ -496,7 +496,7 @@ describe('fields-credential validation (docker, azure, gcp)', () => {
   it('azure: mints a client-credentials token against the tenant', async () => {
     const calls = mockFetchJson([
       {
-        url: /login\.microsoftonline\.com\/[^/]+\/oauth2\/v2\.0\/token$/,
+        url: /^https:\/\/login\.microsoftonline\.com\/[^/]+\/oauth2\/v2\.0\/token$/,
         body: { access_token: 'az-tok' },
       },
     ]);
@@ -514,7 +514,7 @@ describe('fields-credential validation (docker, azure, gcp)', () => {
 
   it('azure: rejects a non-tenant-shaped id before any network call', async () => {
     const calls = mockFetchJson([
-      { url: /login\.microsoftonline\.com/, body: { access_token: 'x' } },
+      { url: /^https:\/\/login\.microsoftonline\.com\/[^/]+\/oauth2\/v2\.0\/token$/, body: { access_token: 'x' } },
     ]);
     await expect(
       getConnector('azure')!.validateFields!({ tenantId: 'not a tenant', clientId: 'c', clientSecret: 's' }),
@@ -523,7 +523,7 @@ describe('fields-credential validation (docker, azure, gcp)', () => {
   });
 
   it('azure: accepts a GUID tenant and a domain tenant', async () => {
-    mockFetchJson([{ url: /login\.microsoftonline\.com/, body: { access_token: 'tok' } }]);
+    mockFetchJson([{ url: /^https:\/\/login\.microsoftonline\.com\/[^/]+\/oauth2\/v2\.0\/token$/, body: { access_token: 'tok' } }]);
     await expect(
       getConnector('azure')!.validateFields!({
         tenantId: '11111111-2222-3333-4444-555555555555',
@@ -531,7 +531,7 @@ describe('fields-credential validation (docker, azure, gcp)', () => {
         clientSecret: 's',
       }),
     ).resolves.toMatchObject({ accountLabel: expect.stringContaining('abcd1234') });
-    mockFetchJson([{ url: /login\.microsoftonline\.com/, body: { access_token: 'tok' } }]);
+    mockFetchJson([{ url: /^https:\/\/login\.microsoftonline\.com\/[^/]+\/oauth2\/v2\.0\/token$/, body: { access_token: 'tok' } }]);
     await expect(
       getConnector('azure')!.validateFields!({
         tenantId: 'contoso.onmicrosoft.com',
@@ -543,7 +543,7 @@ describe('fields-credential validation (docker, azure, gcp)', () => {
 
   it('azure: throws when the principal is rejected', async () => {
     mockFetchJson([
-      { url: /login\.microsoftonline\.com/, body: { error: 'invalid_client' }, status: 401 },
+      { url: /^https:\/\/login\.microsoftonline\.com\/[^/]+\/oauth2\/v2\.0\/token$/, body: { error: 'invalid_client' }, status: 401 },
     ]);
     await expect(
       getConnector('azure')!.validateFields!({
@@ -569,7 +569,7 @@ describe('fields-credential validation (docker, azure, gcp)', () => {
 describe('google + microsoft identity', () => {
   it('google: returns the userinfo email', async () => {
     mockFetchJson([
-      { url: /googleapis\.com\/oauth2\/v2\/userinfo$/, auth: 'Bearer g-tok', body: { email: 'a@b.com' } },
+      { url: /^https:\/\/www\.googleapis\.com\/oauth2\/v2\/userinfo$/, auth: 'Bearer g-tok', body: { email: 'a@b.com' } },
     ]);
     await expect(getConnector('google')!.fetchIdentity('g-tok')).resolves.toEqual({
       accountLabel: 'a@b.com',
@@ -578,7 +578,7 @@ describe('google + microsoft identity', () => {
 
   it('microsoft: prefers mail, falls back to userPrincipalName', async () => {
     mockFetchJson([
-      { url: /graph\.microsoft\.com\/v1\.0\/me$/, body: { userPrincipalName: 'upn@b.com' } },
+      { url: /^https:\/\/graph\.microsoft\.com\/v1\.0\/me$/, body: { userPrincipalName: 'upn@b.com' } },
     ]);
     await expect(getConnector('microsoft')!.fetchIdentity('m-tok')).resolves.toEqual({
       accountLabel: 'upn@b.com',

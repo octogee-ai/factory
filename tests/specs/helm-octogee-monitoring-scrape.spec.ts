@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { parseDocument } from "yaml";
 import { findDoc, useUmbrellaChart } from "./helpers/umbrella-chart";
 
 // The umbrella's allow-monitoring-scrape NetworkPolicy opens gitea :3000 to the
@@ -16,16 +17,15 @@ describe("umbrella — allow-monitoring-scrape NetworkPolicy (gitea metrics)", (
   it("scopes the policy to gitea pods only", () => {
     const np = findDoc(helmTemplate(), "NetworkPolicy", "allow-monitoring-scrape");
     expect(np).not.toBeNull();
-    expect(np!).toMatch(/podSelector:[\s\S]*?app\.kubernetes\.io\/name:\s*gitea/);
+    expect(parseDocument(np!).toJSON().spec.podSelector.matchLabels).toEqual({ "app.kubernetes.io/name": "gitea" });
   });
 
   it("admits the GMP collector namespace (gke-gmp-system), not the monitoring namespace, to gitea :3000", () => {
     const np = findDoc(helmTemplate(), "NetworkPolicy", "allow-monitoring-scrape");
     expect(np).not.toBeNull();
-    expect(np!).toMatch(/namespaceSelector:[\s\S]*?kubernetes\.io\/metadata\.name:\s*gke-gmp-system/);
-    expect(np!).toMatch(/port:\s*3000/);
-    // Regression guard: the pre-GMP monitoring-namespace allowance firewalls the
-    // managed collectors and takes gitea metrics dark.
-    expect(np!).not.toMatch(/kubernetes\.io\/metadata\.name:\s*monitoring\b/);
+    expect(parseDocument(np!).toJSON().spec.ingress).toEqual([{
+      from: [{ namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "gke-gmp-system" } } }],
+      ports: [{ port: 3000, protocol: "TCP" }],
+    }]);
   });
 });
