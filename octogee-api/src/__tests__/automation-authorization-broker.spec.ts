@@ -10,6 +10,8 @@ import {
   createTenantBindingMetrics,
   createTenantBindingMiddleware,
 } from "../middleware/tenant-binding.js";
+import { brokerRequestLimit } from "../middleware/broker-request-limit.js";
+import { authenticationFailureLimit } from "../middleware/authenticated-request-limit.js";
 import { createTenantEnforcementMiddleware } from "../middleware/tenant-enforcement.js";
 import type { Reviewer } from "../lib/token-review.js";
 import { requireAuthenticatedUid } from "../../../gateway-edge/src/middleware/auth.js";
@@ -100,7 +102,7 @@ function middlewareStackApp(saName: string) {
   app.use("/internal", createTenantEnforcementMiddleware({ readFlowGateway: async () => null, store }));
   app.use(
     "/internal/automations",
-    requireAuthenticatedUid,
+    authenticationFailureLimit, requireAuthenticatedUid, brokerRequestLimit(240, "user"),
     createAutomationAuthorizationBrokerRoutes({ store }),
   );
   return app;
@@ -131,6 +133,17 @@ function appForTest(input: {
 }
 
 describe("POST /internal/automations/authorize", () => {
+  it("bounds repeated requests from the same verified gateway and owner", async () => {
+    const client = request(middlewareStackApp("octogee-gw-default"));
+    const authorize = () => client.post("/internal/automations/authorize")
+      .set(K8S_SA_TOKEN_HEADER, WELL_FORMED_SA_TOKEN)
+      .set("Authorization", "Bearer fixture-firebase-token")
+      .send({ gatewayId: "default" });
+    for (let attempt = 0; attempt < 240; attempt++) await authorize().expect(200);
+    const limited = await authorize().expect(429);
+    expect(limited.body).toEqual({ error: "rate_limited" });
+  });
+
   it("authorizes current shared/default KSA through the tenant-bound middleware stack", async () => {
     const response = await request(middlewareStackApp("octogee-gw-default"))
       .post("/internal/automations/authorize")
