@@ -38,13 +38,13 @@ function runGuardBlock(envToken: string | undefined): {
     log() { echo "$*" >&2; }
     # Mirror the exact guard from entrypoint.sh — keep this in sync if the
     # message format changes there.
-    sed -n '/^# ── Require OPENCLAW_GATEWAY_TOKEN/,/^# ── End require/p' "${ENTRYPOINT}" | sh
+    sed -n '/^# ── Require OPENCLAW_GATEWAY_TOKEN/,/^# ── End require/p' "$1" | sh
   `;
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH ?? "/usr/bin:/bin",
   };
   if (envToken !== undefined) env.OPENCLAW_GATEWAY_TOKEN = envToken;
-  const r = spawnSync("sh", ["-c", script], { encoding: "utf8", env });
+  const r = spawnSync("sh", ["-c", script, "--", ENTRYPOINT], { encoding: "utf8", env });
   return { status: r.status, stderr: r.stderr };
 }
 
@@ -86,7 +86,7 @@ function runPublishBlock(opts: {
     const fakeNode = path.join(bin, "node");
     fs.writeFileSync(
       fakeNode,
-      `#!/bin/sh\necho called > "${marker}"\nexit ${opts.nodeExit ?? 0}\n`,
+      `#!/bin/sh\necho called > "$FAKE_NODE_MARKER"\nexit ${opts.nodeExit ?? 0}\n`,
     );
     fs.chmodSync(fakeNode, 0o755);
 
@@ -98,12 +98,13 @@ function runPublishBlock(opts: {
       export GATEWAY_PROFILE="${opts.profile ?? ""}"
       export GATEWAY_AUTH_SECRET_MANAGER_PUBLISH="${opts.publish ?? ""}"
       export OPENCLAW_GATEWAY_TOKEN=token-for-test
-      eval "$(sed -n '/^# Publish the fresh gateway auth token/,/^# ── End gateway auth token publish/p' "${ENTRYPOINT}")"
+      eval "$(sed -n '/^# Publish the fresh gateway auth token/,/^# ── End gateway auth token publish/p' "$1")"
     `;
-    const r = spawnSync("sh", ["-c", script], {
+    const r = spawnSync("sh", ["-c", script, "--", ENTRYPOINT], {
       encoding: "utf8",
       env: {
         PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+        FAKE_NODE_MARKER: marker,
       },
     });
     return {
@@ -177,7 +178,7 @@ function runRunnerBlock(
       TSX=/octogee/scripts/node_modules/.bin/tsx
       ${runnerBlockSource()}
     `;
-    const r = spawnSync("sh", ["-c", script], {
+    const r = spawnSync("sh", ["-c", script, "--", ENTRYPOINT], {
       encoding: "utf8",
       env: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
     });

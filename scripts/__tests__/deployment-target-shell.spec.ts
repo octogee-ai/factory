@@ -7,7 +7,7 @@ const repoRoot = resolve(import.meta.dirname, "../..");
 const helper = resolve(repoRoot, "scripts/lib/deployment-target.sh");
 
 function bash(command: string) {
-  return spawnSync("bash", ["-c", command], {
+  return spawnSync("bash", ["-c", command, "--", helper], {
     cwd: repoRoot,
     encoding: "utf8",
   });
@@ -16,7 +16,7 @@ function bash(command: string) {
 describe("deployment target shell loader", () => {
   it("loads a Central target without reconstructing regional resource paths", () => {
     const result = bash(`
-      source "${helper}"
+      source "$1"
       octogee_load_deployment_target --target=prod-central
       printf '%s\n' "$TARGET_ID" "$TARGET_REGION" "$TARGET_KUBE_CONTEXT" "$TARGET_AR_REPOSITORY" "$TARGET_CLOUD_SQL_CONNECTION" "$TARGET_CLOUD_SQL_PITR_ENABLED" "$TARGET_KMS_KEY_NAME"
     `);
@@ -35,7 +35,7 @@ describe("deployment target shell loader", () => {
 
   it("propagates resolver failures", () => {
     const result = bash(`
-      source "${helper}"
+      source "$1"
       octogee_load_deployment_target --environment=dev
     `);
 
@@ -46,7 +46,7 @@ describe("deployment target shell loader", () => {
   it("fails immediately when the resolver exits successfully without output", () => {
     const result = bash(`
       node() { return 0; }
-      source "${helper}"
+      source "$1"
       octogee_load_deployment_target --target=prod-central
     `);
 
@@ -56,7 +56,7 @@ describe("deployment target shell loader", () => {
 
   it("reads one field of another target without replacing the loaded target", () => {
     const result = bash(`
-      source "${helper}"
+      source "$1"
       octogee_load_deployment_target --environment=test
       test_namespace="$TARGET_NAMESPACE"
       octogee_load_deployment_target --target=prod-central
@@ -69,7 +69,7 @@ describe("deployment target shell loader", () => {
 
   it("fails when the requested field is absent", () => {
     const result = bash(`
-      source "${helper}"
+      source "$1"
       octogee_deployment_target_field --environment=test no_such_field
     `);
 

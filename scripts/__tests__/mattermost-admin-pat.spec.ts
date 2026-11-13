@@ -26,7 +26,7 @@ function validate(input: {
     is_active: true,
   });
   const result = spawnSync("bash", ["-euo", "pipefail", "-c", [
-    `source ${JSON.stringify(helper)}`,
+    'source "$1"',
     `MM_ME_RESPONSE=${JSON.stringify(admin)}`,
     `MM_PAT_RESPONSE=${JSON.stringify(accessToken)}`,
     "curl() {",
@@ -37,7 +37,7 @@ function validate(input: {
     "  esac",
     "}",
     `mm_admin_pat_is_valid ${JSON.stringify(input.token)} ${JSON.stringify(username)} ${JSON.stringify(userId)} ${JSON.stringify(input.tokenId ?? patId)} ${JSON.stringify(input.tokenFingerprint ?? fingerprint(platformPat))} https://mattermost.test`,
-  ].join("\n")], { cwd: repoRoot, encoding: "utf8" });
+  ].join("\n"), "--", helper], { cwd: repoRoot, encoding: "utf8" });
   return result;
 }
 

@@ -17,13 +17,13 @@ function runSummary(lifecycle: string, requirement: string, value: string, phase
   stdout: string;
 } {
   const script = [
-    `source ${JSON.stringify(helperPath)}`,
+    'source "$1"',
     "RED=''; GREEN=''; YELLOW=''; NC=''",
     "OCTOGEE_SECRET_COMPLETENESS_FAILURES=0",
-    `octogee_secret_completeness_entry 'example / value' ${JSON.stringify(value)} ${JSON.stringify(requirement)} ${JSON.stringify(lifecycle)} ${JSON.stringify(phase)}`,
+    "octogee_secret_completeness_entry 'example / value' \"$2\" \"$3\" \"$4\" \"$5\"",
     'printf "failures=%s\\n" "$OCTOGEE_SECRET_COMPLETENESS_FAILURES"',
   ].join("\n");
-  const result = spawnSync("bash", ["-euo", "pipefail", "-c", script], {
+  const result = spawnSync("bash", ["-euo", "pipefail", "-c", script, "--", helperPath, value, requirement, lifecycle, phase], {
     cwd: repoRoot,
     encoding: "utf-8",
   });
@@ -49,10 +49,10 @@ describe("secret completeness", () => {
 
   it("derives OAuth completeness from product provider availability", () => {
     const script = [
-      `source ${JSON.stringify(helperPath)}`,
+      'source "$1"',
       "printf '%s %s %s' \"$(octogee_oauth_provider_requirement github)\" \"$(octogee_oauth_provider_requirement google)\" \"$(octogee_oauth_provider_requirement microsoft)\"",
     ].join("\n");
-    const result = spawnSync("bash", ["-euo", "pipefail", "-c", script], {
+    const result = spawnSync("bash", ["-euo", "pipefail", "-c", script, "--", helperPath], {
       cwd: repoRoot,
       encoding: "utf-8",
     });

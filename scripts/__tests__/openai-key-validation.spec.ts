@@ -25,9 +25,9 @@ printf '%s' "$FAKE_CURL_STATUS"
   chmodSync(curl, 0o755);
 
   const result = spawnSync("bash", ["-euo", "pipefail", "-c", [
-    `source ${JSON.stringify(helper)}`,
+    'source "$1"',
     'validate_openai_api_key "$OPENAI_KEY"',
-  ].join("\n")], {
+  ].join("\n"), "--", helper], {
     cwd: repoRoot,
     encoding: "utf8",
     env: {
