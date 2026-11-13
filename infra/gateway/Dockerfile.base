@@ -32,7 +32,7 @@ RUN chmod 1777 /tmp && apt-get update && apt-get install -y --no-install-recomme
     bash-completion vim less ripgrep tree cloc \
     make build-essential wget unzip zip file bc \
     ffmpeg imagemagick chromium fonts-liberation fonts-noto-color-emoji \
-    pandoc htop strace dnsutils net-tools fzf \
+    pandoc htop strace net-tools fzf \
     btrfs-progs gettext-base libx11-6 libxi6 libxkbcommon0 \
     tigervnc-standalone-server tigervnc-tools openbox tint2 sakura pcmanfm mousepad \
     adwaita-icon-theme fonts-noto-core dbus-x11 at-spi2-core wmctrl x11-utils \
