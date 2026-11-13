@@ -13,10 +13,11 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock("../middleware/auth.js", () => ({
-  requireAuth: (req: express.Request, _res: express.Response, next: express.NextFunction) => {
+  requireAuthenticatedUid: (req: express.Request, _res: express.Response, next: express.NextFunction) => {
     Object.assign(req, { uid: "alice-uid", user: { username: "alice", provisioning: { openclaw: { gatewayId: "alice" } } } });
     next();
   },
+  requireActiveAccount: (_req: express.Request, _res: express.Response, next: express.NextFunction) => next(),
 }));
 vi.mock("../lib/db.js", () => ({
   db: { doc: (path: string) => ({

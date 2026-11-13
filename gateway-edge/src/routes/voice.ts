@@ -1,3 +1,4 @@
+import { authenticatedRequestLimit, authenticationFailureLimit } from "../middleware/authenticated-request-limit.js";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { rateLimit } from "express-rate-limit";
 import {
@@ -11,7 +12,7 @@ import {
   isTalkVoiceId,
   type TalkVoiceCatalog,
 } from "@octogee/shared/types/voice";
-import { requireAuth } from "../middleware/auth.js";
+import { requireActiveAccount, requireAuthenticatedUid } from "../middleware/auth.js";
 import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
 import { logger } from "../middleware/logging.js";
 import {
@@ -103,7 +104,7 @@ export function createVoiceRoutes({ featurePolicy, catalog, resolveConversation,
     }
   };
 
-  router.get('/context/:channelId', requireAuth, gate('voice-context'), async (req, res, next) => {
+  router.get('/context/:channelId', authenticationFailureLimit, requireAuthenticatedUid, authenticatedRequestLimit(120), requireActiveAccount, gate('voice-context'), async (req, res, next) => {
     try {
       const channelId = req.params.channelId;
       if (!isMattermostPostId(channelId)) { res.status(400).json({ error: 'invalid_voice_conversation' }); return; }
@@ -117,7 +118,7 @@ export function createVoiceRoutes({ featurePolicy, catalog, resolveConversation,
 
   const ticketRateLimit = rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: 'draft-7', legacyHeaders: false,
     keyGenerator: req => req.uid!, message: { error: 'too_many_voice_tickets' } });
-  router.post("/ticket", requireAuth, gate("voice-ticket"), ticketRateLimit, async (req: Request, res: Response, next: NextFunction) => {
+  router.post("/ticket", authenticationFailureLimit, requireAuthenticatedUid, ticketRateLimit, requireActiveAccount, gate("voice-ticket"), async (req: Request, res: Response, next: NextFunction) => {
     try {
       const uid = req.uid!;
       const body: unknown = req.body;
@@ -149,7 +150,7 @@ export function createVoiceRoutes({ featurePolicy, catalog, resolveConversation,
     }
   });
 
-  router.get("/voices", requireAuth, gate("voice-catalog"), async (_req: Request, res: Response, next: NextFunction) => {
+  router.get("/voices", authenticationFailureLimit, requireAuthenticatedUid, authenticatedRequestLimit(120), requireActiveAccount, gate("voice-catalog"), async (_req: Request, res: Response, next: NextFunction) => {
     try {
       if (!catalog) {
         res.status(503).json({ error: "voice_catalog_unavailable" });
@@ -162,7 +163,7 @@ export function createVoiceRoutes({ featurePolicy, catalog, resolveConversation,
     }
   });
 
-  router.post("/preview", requireAuth, gate("voice-preview"), previewRateLimit, async (req: Request, res: Response) => {
+  router.post("/preview", authenticationFailureLimit, requireAuthenticatedUid, previewRateLimit, requireActiveAccount, gate("voice-preview"), async (req: Request, res: Response) => {
     try {
       if (!catalog) {
         res.status(503).json({ error: "voice_catalog_unavailable" });

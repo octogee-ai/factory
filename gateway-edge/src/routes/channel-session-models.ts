@@ -1,3 +1,4 @@
+import { authenticatedRequestLimit, authenticationFailureLimit } from "../middleware/authenticated-request-limit.js";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import rateLimit from "express-rate-limit";
 import { parseAgentModelSelections } from "@octogee/shared/types/agent-models";
@@ -17,7 +18,7 @@ import {
   type AuthorizedChannel,
 } from "../lib/channel-session-authorization.js";
 import { db, FieldValue } from "../lib/db.js";
-import { requireAuth } from "../middleware/auth.js";
+import { requireActiveAccount, requireAuthenticatedUid } from "../middleware/auth.js";
 import { logger } from "../middleware/logging.js";
 
 const router = Router();
@@ -247,7 +248,7 @@ async function executeModelOperation(request: ModelOperationRequest): Promise<Re
   }
 }
 
-router.get("/:channelId", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+router.get("/:channelId", authenticationFailureLimit, requireAuthenticatedUid, authenticatedRequestLimit(120), requireActiveAccount, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const channelId = channelIdParam(req);
     if (!channelId) { res.status(400).json({ error: "Invalid channel ID" }); return; }
@@ -265,7 +266,7 @@ router.get("/:channelId", requireAuth, async (req: Request, res: Response, next:
   } catch (error) { handleRouteError(error, res, next); }
 });
 
-router.post("/:channelId", requireAuth, channelSessionModelRateLimit, async (req: Request, res: Response, next: NextFunction) => {
+router.post("/:channelId", authenticationFailureLimit, requireAuthenticatedUid, channelSessionModelRateLimit, requireActiveAccount, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const request = await resolveModelOperationRequest(req, res);
     if (request) res.json(await executeModelOperation(request));

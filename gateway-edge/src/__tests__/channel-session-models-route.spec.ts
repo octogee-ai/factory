@@ -21,7 +21,8 @@ function snap(path: string) {
 }
 
 vi.mock("../middleware/auth.js", () => ({
-  requireAuth: (req: { uid?: string }, _res: unknown, next: () => void) => { req.uid = h.uid; next(); },
+  requireActiveAccount: (_req: unknown, _res: unknown, next: () => void) => next(),
+  requireAuthenticatedUid: (req: { uid?: string }, _res: unknown, next: () => void) => { req.uid = h.uid; next(); },
 }));
 vi.mock("../middleware/security.js", () => ({ strictRateLimit: (_req: unknown, _res: unknown, next: () => void) => next() }));
 vi.mock("../middleware/logging.js", () => ({
