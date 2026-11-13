@@ -30,8 +30,11 @@ function isGlobal(path: string): boolean {
 }
 
 const PRODUCT_DIR = "product/";
-const overlaidPlatformPath = (path: string) =>
-  path.startsWith(PRODUCT_DIR) ? `platform/${path.slice(PRODUCT_DIR.length)}` : path;
+
+function overlaidPlatformPath(path: string): string {
+  if (!path.startsWith(PRODUCT_DIR) || longestOwner(path)?.dir !== PRODUCT_DIR) return path;
+  return `platform/${path.slice(PRODUCT_DIR.length)}`;
+}
 
 const MANIFEST_PATHS: readonly string[] = [
   ...OWNERSHIP.map((o) => o.dir),

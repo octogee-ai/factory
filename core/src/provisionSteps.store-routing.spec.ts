@@ -88,20 +88,6 @@ describe("markProvisioningComplete store routing", () => {
     expect(update).toHaveBeenCalledWith(expect.objectContaining({ "provisioning.openclaw.status": "complete" }));
   });
 
-  it("keeps only product fields on the Firestore user document", async () => {
-    await markProvisioningComplete(ctx, mmUpdate, ["octogee-acme-coach"]);
-
-    expect(firestoreWrite("users/u1")).toEqual({
-      tier: "pro",
-      "mattermost.username": "acme",
-      "mattermost.teamId": "mm-team",
-      "mattermost.channelId": "mm-coach-dm",
-      "mattermost.channelName": "octogee-acme-coach",
-      "mattermost.generalChannelId": "mm-general",
-      "mattermost.coachUserId": "mm-coach",
-    });
-  });
-
   it("records the workspace and owner through the store, leaving Firestore the display names", async () => {
     await markProvisioningComplete(ctx, mmUpdate, []);
 

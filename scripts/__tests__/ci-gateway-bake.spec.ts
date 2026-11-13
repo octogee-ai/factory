@@ -112,10 +112,18 @@ describe("gateway bake plan", () => {
     const root = mkdtempSync(join(tmpdir(), "gateway-bake-product-"));
     mkdirSync(join(root, "product/gateway-edge"), { recursive: true });
     const { target } = plan({ base: false, isolatedBase: false, images }, root);
-    expect(target["gateway-edge"].contexts).toEqual({ overlay: "product/gateway-edge" });
+    expect(target["gateway-edge"].contexts).toEqual({ product: "product", overlay: "product/gateway-edge" });
     expect(target["octogee-gateway"].contexts).toMatchObject({ product: "product" });
     expect(target["octogee-gateway-builder"].contexts).toMatchObject({ product: "product" });
     expect(plan({ base: false, isolatedBase: false, images }).target["gateway-edge"]).not.toHaveProperty("contexts");
+  });
+
+  it("passes the product libraries to gateway-edge while the product tree exists", () => {
+    const root = mkdtempSync(join(tmpdir(), "gateway-bake-libraries-"));
+    mkdirSync(join(root, "product/core"), { recursive: true });
+    const { target } = plan({ base: true, isolatedBase: false, images }, root);
+    expect(target["gateway-edge"].contexts).toEqual({ product: "product" });
+    expect(target["octogee-gateway-base"]).not.toHaveProperty("contexts");
   });
 
   it("is empty when everything is already published", () => {

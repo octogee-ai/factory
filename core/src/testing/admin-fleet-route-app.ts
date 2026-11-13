@@ -3,14 +3,14 @@ import express from "express";
 import type { Firestore } from "firebase-admin/firestore";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION } from "@octogee/shared/types/glm";
 
-import { addAdminFleetRoutes, type FleetRouterDeps, type GatewayPodDiagnostics } from "../../admin-fleet-router.js";
-import type { PlatformStateStore } from "../../platform-state/store.js";
+import { addAdminFleetRoutes, type FleetRouterDeps, type GatewayPodDiagnostics } from "../admin-fleet-router.js";
+import type { PlatformStateStore } from "../platform-state/store.js";
 import {
   createJournalFixtureStore,
   journalRowsIn,
   type FixtureDocuments,
-} from "../../testing/journal-store.js";
-import { firestoreUserAccountReader } from "../../user-account.js";
+} from "./journal-store.js";
+import { firestoreUserAccountReader } from "../user-account.js";
 
 export function valueAtPath(data: Record<string, unknown>, path: string): unknown {
   let cursor: unknown = data;
@@ -110,17 +110,21 @@ export function harnessDocuments(input: {
   assignments: Record<string, HarnessDocs>;
   singletons: Record<string, { get: () => Record<string, unknown> | undefined; set: (row: Record<string, unknown>) => void }>;
 }): FixtureDocuments {
+  const docsIn = (byName: Record<string, HarnessDocs>, name: string): HarnessDocs => {
+    byName[name] ??= {};
+    return byName[name];
+  };
   const locate = (path: string): readonly [HarnessDocs, string] => {
     const segments = path.split("/");
-    if (segments.length === 2) return [input.collections[segments[0]] ??= {}, segments[1]];
+    if (segments.length === 2) return [docsIn(input.collections, segments[0]), segments[1]];
     if (segments.length === 4 && segments[0] === "gateways" && segments[2] === "assignments") {
-      return [input.assignments[segments[1]] ??= {}, segments[3]];
+      return [docsIn(input.assignments, segments[1]), segments[3]];
     }
     if (segments.length === 4 && segments[0] === "gateways" && segments[2] === "releases") {
-      return [input.collections[`gateways/${segments[1]}/releases`] ??= {}, segments[3]];
+      return [docsIn(input.collections, `gateways/${segments[1]}/releases`), segments[3]];
     }
     if (segments.length === 4 && segments[0] === "users" && segments[2] === "system") {
-      return [input.collections[`users/${segments[1]}/system`] ??= {}, segments[3]];
+      return [docsIn(input.collections, `users/${segments[1]}/system`), segments[3]];
     }
     throw new Error(`the admin fleet route harness does not store ${path}`);
   };
@@ -175,6 +179,30 @@ export function rosterAssignmentSeed(gatewayId: string, uid: string, row: Record
   };
 }
 
+function sharedGatewayIdsOf(config: Record<string, unknown>): unknown {
+  return typeof config.defaultGatewayId === "string" && config.sharedGatewayIds === undefined
+    ? [config.defaultGatewayId]
+    : config.sharedGatewayIds;
+}
+
+function podDiagnosticsReader(podDiagnostics: Record<string, GatewayPodDiagnostics> | undefined) {
+  if (!podDiagnostics) return {};
+  return {
+    readGatewayPodDiagnostics: vi.fn(async (gatewayId: string): Promise<GatewayPodDiagnostics> =>
+      podDiagnostics[gatewayId] ?? {
+        status: "unknown",
+        totalPods: 0,
+        readyPods: 0,
+        totalRestarts: 0,
+        spotPods: 0,
+        onDemandPods: 0,
+        unknownCapacityPods: 0,
+        pods: [],
+        error: "diagnostics unavailable",
+      }),
+  };
+}
+
 export function mkAdminFleetRouteApp(opts: {
   config: Record<string, unknown>;
   users: Record<string, Record<string, unknown>>;
@@ -194,10 +222,7 @@ export function mkAdminFleetRouteApp(opts: {
   }) => void;
   productRoutesOnly?: boolean;
 }) {
-  const sharedGatewayIds = typeof opts.config.defaultGatewayId === "string" &&
-    opts.config.sharedGatewayIds === undefined
-    ? [opts.config.defaultGatewayId]
-    : opts.config.sharedGatewayIds;
+  const sharedGatewayIds = sharedGatewayIdsOf(opts.config);
   const state = {
     config: {
       ...opts.config,
@@ -254,19 +279,7 @@ export function mkAdminFleetRouteApp(opts: {
     provisionGatewayAuthSecret: vi.fn(async () => ({})),
     listGatewayBuilds: vi.fn(async () => []),
     requestNativeReturnSourceRecovery: opts.requestNativeReturnSourceRecovery,
-    ...(opts.podDiagnostics
-      ? {
-          readGatewayPodDiagnostics: vi.fn(async (gatewayId: string) =>
-            opts.podDiagnostics?.[gatewayId] ?? {
-              status: "unknown",
-              totalPods: 0,
-              readyPods: 0,
-              totalRestarts: 0,
-              pods: [],
-              error: "diagnostics unavailable",
-            }),
-        }
-      : {}),
+    ...podDiagnosticsReader(opts.podDiagnostics),
     suspendAuthUser: vi.fn(async () => undefined),
     revokeConnectorGrantsForUser: vi.fn(async () => undefined),
   });

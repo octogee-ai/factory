@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { delimiter, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkPlan, executeChecks, jobLabel, nodeVersionCheck, selectCheckLane, dependencyInstaller, vitestOptions, type CheckJob } from "../lib/ci-checks.js";
+import { checkPlan, executeChecks, jobLabel, nodeVersionCheck, overlayPackages, selectCheckLane, dependencyInstaller, vitestOptions, type CheckJob } from "../lib/ci-checks.js";
 
 const root = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
 const args = process.argv.slice(2);
@@ -23,8 +23,7 @@ if (!value("head")) {
   for (const path of changed("--diff-filter=D", "HEAD")) deleted.add(path);
 }
 const full = args.includes("--all");
-const productRoot = resolve(root, "product");
-const products = new Set(existsSync(productRoot) ? readdirSync(productRoot, { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name) : []);
+const products = overlayPackages(resolve(root, "product"));
 const jobs = selectCheckLane(checkPlan(paths, group as "all" | "tests" | "quality", value("check") === "desktop-package", full, { deleted, products }), value("lane")).filter(job => !value("check") || job.name === value("check"));
 if (value("check") && !jobs.length) throw new Error(`Check ${value("check")} is not in scope`);
 if (args.includes("--plan")) {

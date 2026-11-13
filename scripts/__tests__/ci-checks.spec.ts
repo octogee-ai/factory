@@ -13,7 +13,7 @@ function fakeNode(version: string): string {
   return `${bin}:${process.env.PATH}`;
 }
 import { ALL_JOBS, UNIT_PACKAGES } from "../lib/scope/manifest.js";
-import { CHECK_LANES, OVERLAY_COMMAND, checkPlan, checkSeconds, executeChecks, jobLabel, jobSeconds, nodeVersionCheck, selectCheckLane, dependencyInstaller, vitestOptions } from "../lib/ci-checks.js";
+import { CHECK_LANES, OVERLAY_COMMAND, checkPlan, checkSeconds, executeChecks, jobLabel, jobSeconds, nodeVersionCheck, overlayPackages, selectCheckLane, dependencyInstaller, vitestOptions } from "../lib/ci-checks.js";
 
 describe("portable Linux PR checks", () => {
   it("runs every registered test on a global change, leaving installer construction out of default CI", () => {
@@ -170,7 +170,7 @@ describe("portable Linux PR checks", () => {
     expect(occupied).toHaveLength(2);
   });
 
-  it("adds a product check in the overlay for a platform package that has a product package", () => {
+  it("adds a product check in the overlay that packs the overlay libraries before its commands", () => {
     const jobs = checkPlan(["platform/glm-controller/src/index.ts"], "tests", false, false, { products: new Set(["glm-controller", "scripts"]) });
     const platform = jobs.find(job => job.name === "glm-controller")!;
     expect(platform).toMatchObject({ directory: "platform/glm-controller", installs: ["platform/scripts", "platform/glm-controller"] });
@@ -181,6 +181,7 @@ describe("portable Linux PR checks", () => {
       directory: ".overlay/glm-controller",
       setup: [OVERLAY_COMMAND],
       installs: [".overlay/scripts", ".overlay/glm-controller"],
+      commands: ["node ../../platform/scripts/ops/sync-local-file-deps.mjs --consumer ../scripts --consumer .", ...platform.commands],
     });
     expect(unitLanes.filter(lane => selectCheckLane(jobs, lane).some(job => job.name === "glm-controller-product"))).toHaveLength(1);
     expect(jobSeconds(jobs.find(job => job.name === "glm-controller-product")!)).toBe(checkSeconds("glm-controller"));
@@ -192,7 +193,7 @@ describe("portable Linux PR checks", () => {
       directory: ".overlay/glm-controller",
       setup: [OVERLAY_COMMAND],
       installs: ["platform/scripts", ".overlay/glm-controller"],
-      commands: ["npm run test:emulator"],
+      commands: ["node ../../platform/scripts/ops/sync-local-file-deps.mjs --consumer .", "npm run test:emulator"],
     })]);
     expect(selectCheckLane(jobs, "emulators").map(job => job.name)).toContain("glm-controller-emulator");
   });
@@ -200,6 +201,16 @@ describe("portable Linux PR checks", () => {
   it("checks a product package change against both its platform package and the overlay", () => {
     const names = checkPlan(["product/glm-controller/src/main.ts"], "tests", false, false, { products: new Set(["glm-controller"]) }).map(job => job.name);
     expect(names).toEqual(expect.arrayContaining(["glm-controller", "glm-controller-product", "glm-controller-emulator"]));
+  });
+
+  it("overlays every product directory except a standalone package with its own manifest", () => {
+    const productRoot = mkdtempSync(join(tmpdir(), "octogee-products-"));
+    mkdirSync(join(productRoot, "glm-controller/src"), { recursive: true });
+    mkdirSync(join(productRoot, "core"));
+    writeFileSync(join(productRoot, "core/package.json"), "{}");
+    writeFileSync(join(productRoot, "README.md"), "");
+    expect(overlayPackages(productRoot)).toEqual(new Set(["glm-controller"]));
+    expect(overlayPackages(join(productRoot, "missing"))).toEqual(new Set());
   });
 
   it("plans no overlay when no product package exists", () => {

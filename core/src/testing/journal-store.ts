@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
 import {
   isGatewayDesiredDoc,
   isGatewayRuntimeDoc,
@@ -31,6 +30,7 @@ import type {
 import {
   requireSizingProfile,
   type ConfigRepositories,
+  type GatewaySizingProfile,
   type OrchestratorConfig,
   type PlatformConfigEntry,
   type PlatformConfigKey,
@@ -60,7 +60,7 @@ import {
   userRecordFromData,
   userRoleFromData,
 } from "../platform-state/documents/users.js";
-import { parseOrchestratorConfig, parsePlatformConfigValue, platformConfigEntryFromData, seedSizingProfiles } from "../platform-state/documents/config.js";
+import { parseOrchestratorConfig, parsePlatformConfigValue, platformConfigEntryFromData } from "../platform-state/documents/config.js";
 import { SCALER_KEY, parseSharedPoolScalerState } from "../platform-state/documents/controller-state.js";
 import { assertAbsentFence, assertFenceEquals, assertFenceOneOf } from "../platform-state/documents/fences.js";
 import { migrationTransferTaskFromData } from "../platform-state/documents/migration-tasks.js";
@@ -1588,7 +1588,48 @@ function controllerStateRepositories(documents: FixtureDocuments, write: Write):
   });
 }
 
-export const FIXTURE_SIZING_PROFILES = seedSizingProfiles(BUILDER_TIERS);
+export const FIXTURE_SIZING_PROFILES: Record<string, GatewaySizingProfile> = {
+  hobby: {
+    isolation: "isolated",
+    sizingTier: "s",
+    computer: {
+      runtime: "gce-vm",
+      desktop: "x11",
+      machineType: "e2-medium",
+      provisioningModel: "STANDARD",
+      bootDisk: { sizeGb: 80, type: "pd-balanced" },
+      homeSizeGiB: 10,
+    },
+    fallbackStorageGb: 100,
+  },
+  pro: {
+    isolation: "isolated",
+    sizingTier: "m",
+    computer: {
+      runtime: "gce-vm",
+      desktop: "omarchy",
+      machineType: "e2-standard-2",
+      provisioningModel: "STANDARD",
+      bootDisk: { sizeGb: 80, type: "pd-ssd" },
+      homeSizeGiB: 50,
+    },
+    fallbackStorageGb: 500,
+  },
+  team: {
+    isolation: "isolated",
+    sizingTier: "l",
+    computer: {
+      runtime: "gce-vm",
+      desktop: "omarchy",
+      machineType: "e2-standard-4",
+      provisioningModel: "STANDARD",
+      bootDisk: { sizeGb: 80, type: "pd-ssd" },
+      homeSizeGiB: 100,
+    },
+    fallbackStorageGb: 1024,
+  },
+  enterprise: { isolation: "shared" },
+};
 
 export async function seedFixtureSizingProfiles(db: {
   doc(path: string): { set(data: Record<string, unknown>, options: { merge: boolean }): Promise<unknown> };

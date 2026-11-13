@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 export const REPLACEABLE = "src/main.ts";
 const BUILD_OUTPUTS = new Set(["node_modules", "dist"]);
 const UNLINKED = new Set([".git", ...BUILD_OUTPUTS]);
+const STANDALONE_MANIFEST = "package.json";
 
 function sourceEntries(root) {
   const entries = new Map();
@@ -69,9 +70,11 @@ function mergePackage(platformPackage, productPackage, outPackage) {
 }
 
 export function overlayTree({ platform, product, out }) {
-  const overlays = fs.readdirSync(product, { withFileTypes: true });
-  for (const entry of overlays) {
+  const overlays = fs.readdirSync(product, { withFileTypes: true }).filter((entry) => {
     if (!entry.isDirectory()) throw new Error(`${path.join(product, entry.name)} is not a package directory`);
+    return !fs.existsSync(path.join(product, entry.name, STANDALONE_MANIFEST));
+  });
+  for (const entry of overlays) {
     if (!fs.statSync(path.join(platform, entry.name), { throwIfNoEntry: false })?.isDirectory()) {
       throw new Error(`${path.join(product, entry.name)} has no platform package at ${path.join(platform, entry.name)}`);
     }

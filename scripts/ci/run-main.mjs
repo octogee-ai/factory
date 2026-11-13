@@ -1,13 +1,14 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mainBuild } from './main-build.mjs';
 import { withBuildLock } from './build-lock.mjs';
-import { PLATFORM_CONTEXT, buildImage, buildSummary, isolatedBaseRecipe, ensureImage as ensureRegistryImage, gatewayBaseRecipe } from './image-build.mjs';
+import { PLATFORM_CONTEXT, PRODUCT_ROOT, buildImage, buildSummary, isolatedBaseRecipe, ensureImage as ensureRegistryImage, gatewayBaseRecipe } from './image-build.mjs';
 import { buildGatewayImages } from './gateway-bake.mjs';
 import { awaitDiskRoom } from './disk-room.mjs';
+import { stageOverlayDependencies } from '../ops/sync-local-file-deps.mjs';
 import { gcsObjectIdentityFromMetadata, openclawBaseKey } from '../../../.github/actions/openclaw-base-key/base-key.mjs';
 
 const project = 'octogee';
@@ -47,6 +48,7 @@ async function build(plan) {
   if (process.env.GITHUB_ACTIONS === 'true') await execute('docker', ['buildx', 'prune', '--all', '--force']);
 }
 const summary = [];
+if (existsSync(PRODUCT_ROOT)) stageOverlayDependencies(PRODUCT_ROOT);
 const ensureImage = async image => summary.push(await ensureRegistryImage(image, { repository, sha, force }, {
   exists: async ref => Boolean(lookup(ref)),
   script: async (file, args) => run('bash', [file, ...args]),

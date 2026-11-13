@@ -1,4 +1,3 @@
-import { octogeeUserEntitlements } from "@octogee/shared/types/octogee-entitlements";
-import { installUserEntitlements } from "@octogee/shared/types/user-entitlements";
+import { installUserEntitlements, staticUserEntitlements } from "@octogee/shared/types/user-entitlements";
 
-installUserEntitlements(octogeeUserEntitlements);
+installUserEntitlements(staticUserEntitlements);

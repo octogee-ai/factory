@@ -25,6 +25,7 @@ const LOCK_METADATA_FIELDS = [
   "cpu",
   "libc",
 ];
+export const OVERLAY_DEPENDENCIES = "overlay-dependencies.json";
 const SKIP_DIRS = new Set([
   ".git",
   ".claude",
@@ -59,12 +60,78 @@ export function discoverLocalFileDeps({ rootDir, consumerDirs = [] }) {
       }
     }
 
-    return Array.from(deps.values());
+    return [...deps.values(), ...overlayDependencies(consumerDir)];
   });
 }
 
-export function inspectLocalFileDep({ consumerDir, packageName, spec, sourceDir }) {
-  const installedDir = path.join(consumerDir, "node_modules", ...packageName.split("/"));
+export function overlayDependencies(packageDir) {
+  const manifestPath = path.join(packageDir, OVERLAY_DEPENDENCIES);
+  if (!fs.existsSync(manifestPath)) return [];
+  return Object.entries(readJson(manifestPath).dependencies ?? {}).map(([packageName, spec]) => {
+    if (typeof spec !== "string" || !isLocalDirectorySpec(spec)) {
+      throw new Error(`${manifestPath}: ${packageName} must be a file: directory dependency`);
+    }
+    return {
+      consumerDir: packageDir,
+      packageName,
+      spec,
+      sourceDir: path.resolve(packageDir, spec.slice("file:".length)),
+      overlay: true,
+    };
+  });
+}
+
+export function stageOverlayDependencies(productRoot) {
+  for (const entry of fs.readdirSync(productRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    for (const dep of overlayDependencies(path.join(productRoot, entry.name))) packDirectoryPackage(dep);
+  }
+}
+
+function installedDirOf({ consumerDir, packageName }) {
+  return path.join(consumerDir, "node_modules", ...packageName.split("/"));
+}
+
+function packDirectoryPackage(dep) {
+  const installedDir = installedDirOf(dep);
+  const { files } = readJson(path.join(dep.sourceDir, "package.json"));
+  if (!Array.isArray(files)) throw new Error(`${dep.packageName} must list its packed files`);
+  fs.rmSync(installedDir, { recursive: true, force: true });
+  fs.mkdirSync(installedDir, { recursive: true });
+  fs.copyFileSync(path.join(dep.sourceDir, "package.json"), path.join(installedDir, "package.json"));
+  for (const entry of files) fs.cpSync(path.join(dep.sourceDir, entry), path.join(installedDir, entry), { recursive: true });
+}
+
+function resolvesFrom(directory, packageName) {
+  for (let dir = directory; ; dir = path.dirname(dir)) {
+    if (path.basename(dir) !== "node_modules"
+      && fs.existsSync(path.join(dir, "node_modules", ...packageName.split("/"), "package.json"))) return true;
+    if (dir === path.dirname(dir)) return false;
+  }
+}
+
+function assertDependenciesInstalled(dep) {
+  const installedDir = installedDirOf(dep);
+  const manifest = readJson(path.join(installedDir, "package.json"));
+  for (const name of Object.keys({ ...manifest.dependencies, ...manifest.peerDependencies })) {
+    if (!resolvesFrom(installedDir, name)) {
+      throw new Error(`${dep.packageName} needs ${name}, which ${dep.consumerDir} does not install`);
+    }
+  }
+}
+
+function packedOverlayDependency(state) {
+  if (!fs.existsSync(path.join(state.installedDir, "package.json"))) {
+    throw new Error(`${state.packageName} has no source at ${state.sourceDir} and no packed copy in ${state.installedDir}`);
+  }
+  return { ...state, installed: true, staleReasons: [] };
+}
+
+export function inspectLocalFileDep({ consumerDir, packageName, spec, sourceDir, overlay = false }) {
+  const installedDir = installedDirOf({ consumerDir, packageName });
+  if (overlay && !fs.existsSync(path.join(sourceDir, "package.json"))) {
+    return packedOverlayDependency({ consumerDir, packageName, spec, sourceDir, installedDir });
+  }
   const staleReasons = [];
   const sourcePackageJson = readJson(path.join(sourceDir, "package.json"));
 
@@ -79,12 +146,14 @@ export function inspectLocalFileDep({ consumerDir, packageName, spec, sourceDir 
       staleReasons.push("installed-dist");
     }
   }
-  staleReasons.push(...compareLockMetadata({
-    consumerDir,
-    packageName,
-    sourcePackageJson,
-    spec,
-  }));
+  if (!overlay) {
+    staleReasons.push(...compareLockMetadata({
+      consumerDir,
+      packageName,
+      sourcePackageJson,
+      spec,
+    }));
+  }
 
   return {
     consumerDir,
@@ -104,7 +173,8 @@ export function syncLocalFileDeps({
   stdio = "inherit",
   installConsumerDepsFn = installConsumerDeps,
 } = {}) {
-  const stale = discoverLocalFileDeps({ rootDir, consumerDirs })
+  const discovered = discoverLocalFileDeps({ rootDir, consumerDirs });
+  const stale = discovered
     .map((dep) => ({ dep, state: inspectLocalFileDep(dep) }))
     .filter(({ state }) => state.staleReasons.length > 0);
 
@@ -118,7 +188,7 @@ export function syncLocalFileDeps({
   }
 
   const byConsumer = new Map();
-  for (const item of stale) {
+  for (const item of stale.filter(({ dep }) => !dep.overlay)) {
     const existing = byConsumer.get(item.dep.consumerDir) ?? [];
     existing.push(item);
     byConsumer.set(item.dep.consumerDir, existing);
@@ -169,6 +239,16 @@ export function syncLocalFileDeps({
       }
     }
     syncedConsumers.push(consumerDir);
+  }
+
+  const overlays = discovered.filter((dep) => dep.overlay && inspectLocalFileDep(dep).staleReasons.length > 0);
+  for (const dep of overlays) {
+    console.error(`[file-deps] packing ${path.relative(rootDir, dep.consumerDir) || "."}:${dep.packageName}`);
+    packDirectoryPackage(dep);
+  }
+  for (const dep of overlays) {
+    assertDependenciesInstalled(dep);
+    if (!syncedConsumers.includes(dep.consumerDir)) syncedConsumers.push(dep.consumerDir);
   }
 
   return { staleCount: stale.length, syncedConsumers };

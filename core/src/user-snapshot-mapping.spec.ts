@@ -9,7 +9,6 @@ import {
   mapProjectAgentState,
   collectStoredProjectAgentStates,
 } from "./user-snapshot-mapping.js";
-import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { MalformedRecordError } from "./platform-state/errors.js";
 import { createDocumentFixtureStore } from "./testing/journal-store.js";
 
@@ -28,54 +27,10 @@ describe("deriveSlug", () => {
 describe("mapUserDocToSnapshot — users/{uid} doc → UserSnapshot", () => {
   const ch: never[] = [];
 
-  it("maps a fully-populated doc verbatim", () => {
-    const snap = mapUserDocToSnapshot(
-      "u1",
-      {
-        username: "acme",
-        displayName: "Acme Inc",
-        tier: "pro",
-        mattermost: { userId: "mm-1" },
-        provisioning: {
-          openclaw: {
-            slug: "acme",
-            gatewayId: "gw-3",
-            status: "complete",
-            agentIds: ["octogee-acme-coach"],
-          },
-          git: { repoUrl: "git@x:acme.git" },
-        },
-      },
-      ch,
-    );
-    expect(snap).toEqual({
-      uid: "u1",
-      slug: "acme",
-      contextTemplateKey: "default",
-      planInputs: { tier: "pro" },
-      persona: null,
-      gatewayId: "gw-3",
-      status: "complete",
-      agentIds: ["octogee-acme-coach"],
-      repoUrl: "git@x:acme.git",
-      mattermostUserId: "mm-1",
-      channels: ch,
-      ownerName: "Acme Inc",
-      byotActive: false,
-    });
-  });
-
   it("byotActive mirrors Boolean(data.byotActive) — the mount re-assert reads it to avoid clobbering BYOT", () => {
     expect(mapUserDocToSnapshot("u", { username: "a", byotActive: true }, ch).byotActive).toBe(true);
     expect(mapUserDocToSnapshot("u", { username: "a", byotActive: false }, ch).byotActive).toBe(false);
     expect(mapUserDocToSnapshot("u", { username: "a" }, ch).byotActive).toBe(false);
-  });
-
-  it("takes the context template key from the entitlement resolver, never from a default of its own", () => {
-    expect(mapUserDocToSnapshot("u", { username: "a", tier: "free" }, ch).contextTemplateKey).toBe("free");
-    expect(mapUserDocToSnapshot("u", { username: "a", subscription: { tier: "team" } }, ch).contextTemplateKey).toBe("default");
-    expect(mapUserDocToSnapshot("u", { username: "a" }, ch).contextTemplateKey)
-      .toBe(userEntitlements().seedContextTemplateKey({}));
   });
 
   it("ownerName fallback: displayName → username → slug", () => {
@@ -98,39 +53,6 @@ describe("mapUserDocToSnapshot — users/{uid} doc → UserSnapshot", () => {
     const channels = [{ scope: "workspace" as const, kind: "general", channelId: "C1" }];
     expect(mapUserDocToSnapshot("u", { username: "a" }, channels).channels).toBe(channels);
     expect(() => mapUserDocToSnapshot("u2", {}, ch)).toThrow(/cannot derive slug/);
-  });
-
-  it("carries every plan-resolution input, including the immutable trial grant", () => {
-    const trialGrant = {
-      schemaVersion: 3,
-      offerId: "builder-signup",
-      offerVersion: 1,
-      personalTier: "personal",
-      builderTier: "hobby",
-      configHash: "config-a",
-      claimedAt: "2026-07-08T00:00:00.000Z",
-      endsAt: "2026-07-15T00:00:00.000Z",
-    };
-    const snap = mapUserDocToSnapshot(
-      "u1",
-      {
-        username: "acme",
-        tier: "personal_free",
-        selectedTier: "personal_pro",
-        subscription: { tier: "personal_pro", status: "active" },
-        builderSubscription: { tier: "hobby", status: "active" },
-        trialGrant,
-      },
-      ch,
-    );
-    expect(snap.planInputs).toEqual({
-      tier: "personal_free",
-      selectedTier: "personal_pro",
-      subscription: { tier: "personal_pro", status: "active" },
-      builderSubscription: { tier: "hobby", status: "active" },
-      trialGrant,
-    });
-    expect(snap.planInputs.trialGrant).toBe(trialGrant);
   });
 
   it("carries plan inputs only inside the bag and leaves an account without any with an empty one", () => {

@@ -2,12 +2,12 @@ import { execFileSync } from 'node:child_process';
 import { readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { siteSsrRepository } from './frontend-registry.mjs';
-import { materializeFunctionsShared } from './functions-source.mjs';
+import { materializeFunctionsSources } from './functions-source.mjs';
 
 const run = (file, args, options = {}) => execFileSync(file, args, { encoding: 'utf8', ...options });
 const target = Object.fromEntries(run('node', ['platform/core/dist/resolve-deployment-target.js', `--environment=${process.env.RELEASE_ENVIRONMENT}`, '--reject-candidate-target']).trim().split('\n').map(line => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
 run('node', ['platform/scripts/ci/frontend.mjs'], { stdio: 'inherit' });
-materializeFunctionsShared('.');
+materializeFunctionsSources('.');
 const remaining = directory => readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
   const path = join(directory, entry.name);
   if (entry.name === 'node_modules') return [];

@@ -5,7 +5,9 @@ import { describe, expect, it } from "vitest";
 import {
   isProductModule,
   loadPlatformBoundaryManifest,
+  outsideDependenciesOf,
   platformBoundaryReport,
+  platformDependencyReport,
   platformFiles,
   platformReferenceReport,
   productReferencesOf,
@@ -18,17 +20,19 @@ const repoRoot = resolve(import.meta.dirname, "../../..");
 const manifest = loadPlatformBoundaryManifest(repoRoot);
 const report = platformBoundaryReport(manifest, repoRoot);
 const referenceReport = platformReferenceReport(manifest, repoRoot);
+const dependencyReport = platformDependencyReport(manifest, repoRoot);
 
 const fixtureManifest: PlatformBoundaryManifest = {
   platformEntrypoints: [],
   platformRoots: ["platform/scripts/", "platform/infra/"],
-  productModules: ["platform/scripts/product/", "platform/infra/gateway/extensions/product/", "platform/shared/types/billing.ts"],
+  productModules: ["product/", "platform/scripts/product/", "platform/infra/gateway/extensions/product/", "platform/shared/types/feature-flags.ts"],
   ratchet: [],
   referenceRatchet: [],
+  dependencyRatchet: [],
 };
 
 describe("platform boundary", () => {
-  it("resolves relative, package and alias imports to repository sources", () => {
+  it("resolves relative, package and alias imports to repository sources, declared or not", () => {
     const from = resolve(repoRoot, "platform/octogee-api/src/main.ts");
     expect(resolveImport("./app.js", from, repoRoot)).toBe(resolve(repoRoot, "platform/octogee-api/src/app.ts"));
     expect(resolveImport("@octogee/core/deployment-environment", from, repoRoot))
@@ -37,6 +41,13 @@ describe("platform boundary", () => {
       .toBe(resolve(repoRoot, "platform/shared/types/feature-flags.ts"));
     expect(resolveImport("../../gateway-edge/src/routes/sharing/index.js", from, repoRoot))
       .toBe(resolve(repoRoot, "platform/gateway-edge/src/routes/sharing/index.ts"));
+    expect(resolveImport("@octogee/product-core/customer-hosting", from, repoRoot))
+      .toBe(resolve(repoRoot, "product/core/src/customer-hosting.ts"));
+    expect(resolveImport("@octogee/product-shared/types/billing", from, repoRoot))
+      .toBe(resolve(repoRoot, "product/shared/types/billing.ts"));
+    expect(resolveImport("@octogee/product-core/not-exported", from, repoRoot)).toBeNull();
+    expect(resolveImport("@octogee/product-shared/types/billing", resolve(repoRoot, "platform/core/src/index.ts"), repoRoot))
+      .toBe(resolve(repoRoot, "product/shared/types/billing.ts"));
     expect(resolveImport("express", from, repoRoot)).toBeNull();
   });
 
@@ -108,8 +119,10 @@ describe("platform boundary", () => {
   });
 
   it("finds product modules a platform TypeScript file imports", () => {
-    expect(productReferencesOf("platform/scripts/ops/report.ts", 'import { TIERS } from "../../shared/types/billing.js";\n', fixtureManifest, repoRoot))
-      .toEqual(["platform/shared/types/billing.ts"]);
+    expect(productReferencesOf("platform/scripts/ops/report.ts", 'import { FLAGS } from "../../shared/types/feature-flags.js";\n', fixtureManifest, repoRoot))
+      .toEqual(["platform/shared/types/feature-flags.ts"]);
+    expect(productReferencesOf("platform/scripts/ops/report.ts", 'import { TIERS } from "@octogee/product-shared/types/billing";\n', fixtureManifest, repoRoot))
+      .toEqual(["product/"]);
     expect(productReferencesOf("platform/scripts/ops/report.ts", 'import { glm } from "../../shared/types/glm.js";\n', fixtureManifest, repoRoot))
       .toEqual([]);
   });
@@ -127,5 +140,34 @@ describe("platform boundary", () => {
 
   it("keeps the reference ratchet honest: every entry is still referenced", () => {
     expect(referenceReport.staleRatchet, "referenceRatchet entries no longer referenced; remove them from platform/scripts/lib/platform-boundary.json").toEqual([]);
+  });
+
+  it("finds packages a platform manifest or lockfile installs from outside platform/", () => {
+    const manifestSource = JSON.stringify({
+      dependencies: { "@octogee/core": "file:../core", "@octogee/product-core": "file:../../product/core", express: "^5.0.0" },
+      devDependencies: { "@octogee/product-shared": "file:../../product/shared" },
+    });
+    expect(outsideDependenciesOf("platform/glm-controller/package.json", manifestSource, repoRoot))
+      .toEqual(["platform/glm-controller/package.json -> @octogee/product-core", "platform/glm-controller/package.json -> @octogee/product-shared"]);
+    const lockSource = JSON.stringify({
+      packages: {
+        "": { dependencies: { "@octogee/product-core": "file:../../product/core" } },
+        "node_modules/@octogee/core": { resolved: "file:../core" },
+        "node_modules/@octogee/product-core": { resolved: "file:../../product/core" },
+        "../../product/shared": { name: "@octogee/product-shared" },
+        "node_modules/@octogee/product-shared": { resolved: "../../product/shared", link: true },
+        "node_modules/express": { resolved: "https://registry.npmjs.org/express/-/express-5.0.0.tgz" },
+      },
+    });
+    expect(outsideDependenciesOf("platform/glm-controller/package-lock.json", lockSource, repoRoot))
+      .toEqual(["platform/glm-controller/package-lock.json -> @octogee/product-core", "platform/glm-controller/package-lock.json -> @octogee/product-shared"]);
+  });
+
+  it("names every platform package dependency from outside platform/ in the dependency ratchet", () => {
+    expect(dependencyReport.newViolations, "platform package manifests or lockfiles install packages from outside platform/; list product libraries in the product overlay's overlay-dependencies.json").toEqual([]);
+  });
+
+  it("keeps the dependency ratchet honest: every entry is still installed", () => {
+    expect(dependencyReport.staleRatchet, "dependencyRatchet entries no longer installed; remove them from platform/scripts/lib/platform-boundary.json").toEqual([]);
   });
 });

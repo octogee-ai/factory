@@ -38,6 +38,8 @@
     "@google-cloud/kms": "^6.3.0",
     "@google-cloud/secret-manager": "^7.0.0",
     "@octogee/core": "file:../core",
+    "@octogee/product-core": "file:../../product/core",
+    "@octogee/product-shared": "file:../../product/shared",
     "@octogee/shared": "file:../shared",
     "busboy": "^1.6.0",
     "cors": "^2.8.6",

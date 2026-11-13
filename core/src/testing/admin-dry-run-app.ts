@@ -9,11 +9,11 @@ import {
 } from "@octogee/shared/types/gateway-releases";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION } from "@octogee/shared/types/glm";
 
-import { addAdminFleetRoutes, type FleetRouterDeps } from "../../admin-fleet-router.js";
-import type { CentralReleaseAuthority, ReleaseDigestManifest } from "../../artifact-registry.js";
-import type { PlatformStateStore } from "../../platform-state/store.js";
-import { createDocumentFixtureStore } from "../../testing/journal-store.js";
-import { noUserAccounts } from "../../user-account.js";
+import { addAdminFleetRoutes, type FleetRouterDeps } from "../admin-fleet-router.js";
+import type { CentralReleaseAuthority, ReleaseDigestManifest } from "../artifact-registry.js";
+import type { PlatformStateStore } from "../platform-state/store.js";
+import { createDocumentFixtureStore } from "./journal-store.js";
+import { noUserAccounts } from "../user-account.js";
 
 export type Seed = Record<string, Record<string, unknown>>;
 

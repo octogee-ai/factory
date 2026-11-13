@@ -50,14 +50,6 @@
       "types": "./dist/types/automations.d.ts",
       "default": "./dist/types/automations.js"
     },
-    "./types/billing": {
-      "types": "./dist/types/billing.d.ts",
-      "default": "./dist/types/billing.js"
-    },
-    "./types/billing-tiers": {
-      "types": "./dist/types/billing-tiers.d.ts",
-      "default": "./dist/types/billing-tiers.js"
-    },
     "./types/gateway-control": {
       "types": "./dist/types/gateway-control.d.ts",
       "default": "./dist/types/gateway-control.js"
@@ -89,10 +81,6 @@
     "./types/google-capabilities": {
       "types": "./dist/types/google-capabilities.d.ts",
       "default": "./dist/types/google-capabilities.js"
-    },
-    "./types/commercial-entitlements": {
-      "types": "./dist/types/commercial-entitlements.d.ts",
-      "default": "./dist/types/commercial-entitlements.js"
     },
     "./types/cost-estimator": {
       "types": "./dist/types/cost-estimator.d.ts",
@@ -162,10 +150,6 @@
       "types": "./dist/types/index.d.ts",
       "default": "./dist/types/index.js"
     },
-    "./types/legal": {
-      "types": "./dist/types/legal.d.ts",
-      "default": "./dist/types/legal.js"
-    },
     "./types/member": {
       "types": "./dist/types/member.d.ts",
       "default": "./dist/types/member.js"
@@ -190,29 +174,13 @@
       "types": "./dist/types/model-credentials.d.ts",
       "default": "./dist/types/model-credentials.js"
     },
-    "./types/notifications": {
-      "types": "./dist/types/notifications.d.ts",
-      "default": "./dist/types/notifications.js"
-    },
     "./types/platform-config": {
       "types": "./dist/types/platform-config.d.ts",
       "default": "./dist/types/platform-config.js"
     },
-    "./types/signup-offer-config": {
-      "types": "./dist/types/signup-offer-config.d.ts",
-      "default": "./dist/types/signup-offer-config.js"
-    },
-    "./types/octogee-entitlements": {
-      "types": "./dist/types/octogee-entitlements.d.ts",
-      "default": "./dist/types/octogee-entitlements.js"
-    },
     "./types/user-entitlements": {
       "types": "./dist/types/user-entitlements.d.ts",
       "default": "./dist/types/user-entitlements.js"
-    },
-    "./types/signup-offer": {
-      "types": "./dist/types/signup-offer.d.ts",
-      "default": "./dist/types/signup-offer.js"
     },
     "./types/secret-redaction": {
       "types": "./dist/types/secret-redaction.d.ts",
@@ -238,17 +206,9 @@
       "types": "./dist/types/openclaw-proxy-identity.d.ts",
       "default": "./dist/types/openclaw-proxy-identity.js"
     },
-    "./types/post": {
-      "types": "./dist/types/post.d.ts",
-      "default": "./dist/types/post.js"
-    },
     "./types/project": {
       "types": "./dist/types/project.d.ts",
       "default": "./dist/types/project.js"
-    },
-    "./types/product-analytics": {
-      "types": "./dist/types/product-analytics.d.ts",
-      "default": "./dist/types/product-analytics.js"
     },
     "./types/project-retention": {
       "types": "./dist/types/project-retention.d.ts",
@@ -314,12 +274,6 @@
       "types/automations": [
         "dist/types/automations.d.ts"
       ],
-      "types/billing": [
-        "dist/types/billing.d.ts"
-      ],
-      "types/billing-tiers": [
-        "dist/types/billing-tiers.d.ts"
-      ],
       "types/gateway-control": [
         "dist/types/gateway-control.d.ts"
       ],
@@ -343,9 +297,6 @@
       ],
       "types/google-capabilities": [
         "dist/types/google-capabilities.d.ts"
-      ],
-      "types/commercial-entitlements": [
-        "dist/types/commercial-entitlements.d.ts"
       ],
       "types/cost-estimator": [
         "dist/types/cost-estimator.d.ts"
@@ -392,9 +343,6 @@
       "types/index": [
         "dist/types/index.d.ts"
       ],
-      "types/legal": [
-        "dist/types/legal.d.ts"
-      ],
       "types/member": [
         "dist/types/member.d.ts"
       ],
@@ -412,9 +360,6 @@
       ],
       "types/model-credentials": [
         "dist/types/model-credentials.d.ts"
-      ],
-      "types/notifications": [
-        "dist/types/notifications.d.ts"
       ],
       "types/secret-redaction": [
         "dist/types/secret-redaction.d.ts"
@@ -434,20 +379,11 @@
       "types/openclaw-proxy-identity": [
         "dist/types/openclaw-proxy-identity.d.ts"
       ],
-      "types/post": [
-        "dist/types/post.d.ts"
-      ],
       "types/project": [
         "dist/types/project.d.ts"
       ],
-      "types/product-analytics": [
-        "dist/types/product-analytics.d.ts"
-      ],
       "types/project-retention": [
         "dist/types/project-retention.d.ts"
-      ],
-      "types/signup-offer": [
-        "dist/types/signup-offer.d.ts"
       ],
       "types/sizing": [
         "dist/types/sizing.d.ts"

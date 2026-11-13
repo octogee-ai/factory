@@ -22,6 +22,8 @@
     "@aws-sdk/client-s3": "3.1163.0",
     "@google-cloud/kms": "^6.3.0",
     "@octogee/core": "file:../core",
+    "@octogee/product-core": "file:../../product/core",
+    "@octogee/product-shared": "file:../../product/shared",
     "@octogee/shared": "file:../shared",
     "express": "^5.2.1",
     "firebase-admin": "^14.3.0",

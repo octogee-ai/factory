@@ -1,8 +1,7 @@
 import request from "supertest";
 import { describe, expect, it } from "vitest";
 import { platformReleaseRecord, releasePayloadHash, type ReleasePayload } from "@octogee/shared/types/gateway-releases";
-import { durableGatewayRoot, mkAdminFleetRouteApp } from "./__tests__/fixtures/admin-fleet-route-app.js";
-import { addAdminSharedGatewayAutomationRoutes } from "./admin-shared-gateway-automation-routes.js";
+import { durableGatewayRoot, mkAdminFleetRouteApp } from "./testing/admin-fleet-route-app.js";
 
 describe("users per shared gateway is the product's", () => {
   const config = { defaultGatewayId: "shared-a", sharedGatewayAutoscaling: { enabled: true, buildersPerGateway: 4 } };
@@ -16,18 +15,6 @@ describe("users per shared gateway is the product's", () => {
     expect((await request(app).patch("/placement/capacity").send({ usersPerGateway: 6 })).status).toBe(404);
     expect(state.config.sharedGatewayAutoscaling).toEqual({ enabled: true, buildersPerGateway: 4 });
     expect(Object.values(state.operations)).toEqual([]);
-  });
-
-  it("is reported by GET /placement when the product's routes are mounted", async () => {
-    const { app } = mkAdminFleetRouteApp({ config, users: {}, addProductRoutes: addAdminSharedGatewayAutomationRoutes });
-
-    const placement = await request(app).get("/placement").expect(200);
-
-    expect(placement.body.config).toEqual({
-      defaultGatewayId: "shared-a",
-      sharedGatewayIds: ["shared-a"],
-      sharedGatewayAutoscaling: { enabled: true, usersPerGateway: 4 },
-    });
   });
 });
 

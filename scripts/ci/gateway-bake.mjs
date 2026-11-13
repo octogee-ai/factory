@@ -1,6 +1,4 @@
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { PLATFORM_CONTEXT, PRODUCT_ROOT, findReusable, overlayContexts, publishImage } from "./image-build.mjs";
+import { PLATFORM_CONTEXT, findReusable, overlayContexts, productContext, publishImage } from "./image-build.mjs";
 
 const BASE = "octogee-gateway-base";
 const ISOLATED_BASE = "octogee-gateway-builder-base";
@@ -42,7 +40,7 @@ export function gatewayBakePlan({ repository, sha, base, isolatedBase, toolchain
     args: { BUILD_SHA: short, ...extra.args },
     labels: { "org.opencontainers.image.revision": sha },
   });
-  const productContext = existsSync(join(cwd, PRODUCT_ROOT)) ? { product: PRODUCT_ROOT } : {};
+  const product = productContext(cwd);
   const runtimeArgs = { OPENCLAW_RUNTIME_PLUGINS: "mattermost,parallel-plugin,codex", ...systemArg };
   const candidates = {
     [BASE]: build.base && {
@@ -53,12 +51,12 @@ export function gatewayBakePlan({ repository, sha, base, isolatedBase, toolchain
       contexts: { [BASE]: from(BASE), ...systemContext },
       args: { ...systemArg, BUILDER_TOOLCHAIN_LOCK_SHA256: toolchain.lockSha256, BUILDER_TOOL_GROUPS_SHA256: toolchain.groupsSha256 },
     },
-    "gateway-edge": build.images.includes("gateway-edge") && image("gateway-edge", { dockerfile: "gateway-edge/Dockerfile", ...withContexts(overlayContexts({ overlay: "gateway-edge" }, cwd)) }),
+    "gateway-edge": build.images.includes("gateway-edge") && image("gateway-edge", { dockerfile: "gateway-edge/Dockerfile", ...withContexts({ ...product, ...overlayContexts({ overlay: "gateway-edge" }, cwd) }) }),
     "octogee-gateway": build.images.includes("octogee-gateway") && image("octogee-gateway", {
-      dockerfile: "infra/gateway/Dockerfile", contexts: { [BASE]: from(BASE), ...systemContext, ...productContext }, args: runtimeArgs,
+      dockerfile: "infra/gateway/Dockerfile", contexts: { [BASE]: from(BASE), ...systemContext, ...product }, args: runtimeArgs,
     }),
     "octogee-gateway-builder": build.images.includes("octogee-gateway-builder") && image("octogee-gateway-builder", {
-      dockerfile: "infra/gateway/Dockerfile", contexts: { [BASE]: from(BASE), [ISOLATED_BASE]: from(ISOLATED_BASE), ...systemContext, ...productContext },
+      dockerfile: "infra/gateway/Dockerfile", contexts: { [BASE]: from(BASE), [ISOLATED_BASE]: from(ISOLATED_BASE), ...systemContext, ...product },
       args: { ...runtimeArgs, RUNTIME_BASE_IMAGE: ISOLATED_BASE, IMAGE_PROFILE: "builder" },
     }),
   };

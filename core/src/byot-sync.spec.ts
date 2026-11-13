@@ -224,49 +224,6 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     ).toBe(false);
   });
 
-  it("free post-trial non-BYOK derives the compiled Errands house pin without local BYOT materialization", () => {
-    const desired = deriveDesiredByotState({
-      ...ON,
-      byotActive: false,
-      planInputs: { selectedTier: "free" },
-    });
-    expect(desired.enabled).toBe(false);
-    expect(desired.input).toBeNull();
-    expect(desired.defaultAgentModelInput).toEqual({
-      slug: "tester-70",
-      model: "platform-openai/gpt-6-luna",
-      source: "house-model",
-    });
-  });
-
-  it("free-tier pin follows the snapshot's operator dial (freeTierModelRef)", () => {
-    const desired = deriveDesiredByotState({
-      ...ON,
-      byotActive: false,
-      planInputs: { selectedTier: "free" },
-      freeTierModelRef: "platform-openai/gpt-6-luna",
-    });
-    expect(desired.defaultAgentModelInput).toEqual({
-      slug: "tester-70",
-      model: "platform-openai/gpt-6-luna",
-      source: "house-model",
-    });
-  });
-
-  it("a non-catalog freeTierModelRef is rejected at the trust boundary — compiled default pin", () => {
-    const desired = deriveDesiredByotState({
-      ...ON,
-      byotActive: false,
-      planInputs: { selectedTier: "free" },
-      freeTierModelRef: "platform-openrouter/evil/model",
-    });
-    expect(desired.defaultAgentModelInput).toEqual({
-      slug: "tester-70",
-      model: "platform-openai/gpt-6-luna",
-      source: "house-model",
-    });
-  });
-
   it("BYOK agent input carries the dial ref so the fallback chain follows the operator", () => {
     const desired = deriveDesiredByotState({
       ...ON,
@@ -336,31 +293,6 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     // catalog access = no free-tier house-model pin (the split-brain bug: this
     // was pinned to the house model before resolveBillingProfile).
     expect(desired.defaultAgentModelInput).toBeNull();
-  });
-
-  it("resolves the plan only from planInputs — a plan field beside the bag grants nothing", () => {
-    const paidBesideTheBag = {
-      ...ON,
-      byotActive: false,
-      planInputs: {},
-      selectedTier: "personal",
-      subscription: { tier: "personal", status: "active" },
-    };
-    expect(deriveDesiredByotState(paidBesideTheBag).defaultAgentModelInput).toEqual({
-      slug: "tester-70",
-      model: "platform-openai/gpt-6-luna",
-      source: "house-model",
-    });
-    expect(deriveDesiredByotState({
-      ...ON,
-      byotActive: false,
-      planInputs: { selectedTier: "personal", subscription: { tier: "personal", status: "active" } },
-    }).defaultAgentModelInput).toBeNull();
-  });
-
-  it("refuses to derive a house pin for a user whose plan inputs never arrived", () => {
-    const { planInputs: _planInputs, ...withoutPlanInputs } = { ...ON, byotActive: false };
-    expect(() => deriveDesiredByotState(withoutPlanInputs as Parameters<typeof deriveDesiredByotState>[0])).toThrow();
   });
 
   it("unknown/absent provider falls back to anthropic (api_key default)", () => {
@@ -2484,39 +2416,6 @@ describe("standard gateway — BYOS materialization", () => {
     expect(configWriter).toHaveBeenCalledTimes(1);
   });
 
-  it("free post-trial non-BYOK user removes local BYOT state, patches GLM, and reloads", async () => {
-    const applyByotStateFn = vi.fn(() => false);
-    const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
-    const applyDefaultAgentModelPatchFn = vi.fn(async () => true);
-    const triggerSecretsReloadFn = vi.fn(async () => {});
-
-    await syncByotForUser(
-      {
-        byotActive: false,
-        username: "tester-70",
-        provisioning: { openclaw: { status: "complete" } },
-        planInputs: { selectedTier: "free" },
-      },
-      {
-        usesLlmBrokerToken: () => true,
-        purgeUserOauthRuntime: noUserOauthRuntimePurge,
-        applyByotState: applyByotStateFn,
-        restoreOauthStoreForSlug: restoreOauthFn,
-        applyDefaultAgentModelPatch: applyDefaultAgentModelPatchFn,
-        triggerSecretsReload: triggerSecretsReloadFn,
-      },
-    );
-
-    expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null);
-    expect(restoreOauthFn).not.toHaveBeenCalled();
-    expect(applyDefaultAgentModelPatchFn).toHaveBeenCalledWith({
-      slug: "tester-70",
-      model: "platform-openai/gpt-6-luna",
-      source: "house-model",
-    });
-    expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
-  });
-
   it("trial non-BYOK user leaves the template model untouched — but tools convergence still runs (catalog strip)", async () => {
     const applyByotStateFn = vi.fn(() => false);
     const applyDefaultAgentModelPatchFn = vi.fn(async () => true);
@@ -2658,89 +2557,6 @@ describe("standard gateway — BYOS materialization", () => {
     expect(requestGatewayRestartFn).not.toHaveBeenCalled();
   });
 
-  it("does not restore or allowlist OAuth agent runtimes on a user gateway", async () => {
-    const applyByotStateFn = vi.fn(() => false);
-    const restoreOauthFn = vi.fn(async () => ({
-      restored: true,
-      present: true,
-      providers: ["openai", "anthropic"] as const,
-    }));
-    const applyDefaultAgentModelPatchFn = vi.fn(async () => true);
-    const applyOauthRuntimeModelAllowlistFn = vi.fn(async () => ({
-      patched: false,
-      changed: false,
-      restartRequired: false,
-    }));
-    const requestGatewayRestartFn = vi.fn(async () => true);
-    const triggerSecretsReloadFn = vi.fn(async () => {});
-
-    await syncByotForUser(
-      {
-        byotActive: true,
-        username: "tester-70",
-        planInputs: {},
-        provisioning: { openclaw: { status: "complete" } },
-        systemConfig: { byot: { provider: "openai-codex" } },
-      },
-      {
-        purgeUserOauthRuntime: noUserOauthRuntimePurge,
-        applyByotState: applyByotStateFn,
-        restoreOauthStoreForSlug: restoreOauthFn,
-        applyDefaultAgentModelPatch: applyDefaultAgentModelPatchFn,
-        applyOauthRuntimeModelAllowlist: applyOauthRuntimeModelAllowlistFn,
-        requestGatewayRestart: requestGatewayRestartFn,
-        triggerSecretsReload: triggerSecretsReloadFn,
-      },
-    );
-
-    expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null, undefined, {
-      preserveAuthProfileStore: false,
-    });
-    expect(restoreOauthFn).not.toHaveBeenCalled();
-    expect(applyOauthRuntimeModelAllowlistFn).toHaveBeenCalledWith([], STANDARD_CODEX_APP_SERVER);
-    expect(applyDefaultAgentModelPatchFn).toHaveBeenCalledWith({
-      slug: "tester-70",
-      model: "platform-openai/gpt-6-luna",
-      source: "house-model",
-    });
-    expect(requestGatewayRestartFn).not.toHaveBeenCalled();
-    expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not probe an OAuth credential while user agent runtimes are disabled", async () => {
-    const applyByotStateFn = vi.fn(() => false);
-    const restoreOauthFn = vi.fn(async () => ({ restored: false, present: false }));
-    const applyDefaultAgentModelPatchFn = vi.fn(async () => true);
-    const triggerSecretsReloadFn = vi.fn(async () => {});
-
-    await syncByotForUser(
-      {
-        byotActive: true,
-        username: "tester-70",
-        planInputs: {},
-        provisioning: { openclaw: { status: "complete" } },
-        systemConfig: { byot: { provider: "openai-codex" } },
-      },
-      {
-        purgeUserOauthRuntime: noUserOauthRuntimePurge,
-        applyByotState: applyByotStateFn,
-        restoreOauthStoreForSlug: restoreOauthFn,
-        applyDefaultAgentModelPatch: applyDefaultAgentModelPatchFn,
-        triggerSecretsReload: triggerSecretsReloadFn,
-      },
-    );
-
-    expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null, undefined, {
-      preserveAuthProfileStore: false,
-    });
-    expect(restoreOauthFn).not.toHaveBeenCalled();
-    expect(applyDefaultAgentModelPatchFn).toHaveBeenCalledWith({
-      slug: "tester-70",
-      model: "platform-openai/gpt-6-luna",
-      source: "house-model",
-    });
-    expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
-  });
 });
 
 describe("Isolated gateway — native subscription runtime", () => {
@@ -3986,57 +3802,6 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
     );
   });
 
-  it("house-only OAuth suppression keeps the agent pin and actively resets project runtime refs", async () => {
-    const applyDefaultAgentModelPatchFn = vi.fn(async () => true);
-    const applyAgentModelOverridesFn = vi.fn(async () => true);
-
-    await syncByotForUser(
-      {
-        byotActive: true,
-        username: "tester-70",
-        planInputs: { selectedTier: "free" },
-        provisioning: { openclaw: { status: "complete" } },
-        systemConfig: {
-          byot: { provider: "claude-cli" },
-          agentModels: {
-            "octogee-tester-70-coach": {
-              primary: "claude-cli/claude-opus-4-8",
-              fallbacks: [],
-            },
-            "octogee-tester-70-proj-web-coach": {
-              primary: "claude-cli/claude-opus-4-8",
-              fallbacks: [],
-            },
-          },
-        },
-      },
-      {
-        purgeUserOauthRuntime: noUserOauthRuntimePurge,
-        applyByotState: vi.fn(() => false),
-        applyDefaultAgentModelPatch: applyDefaultAgentModelPatchFn,
-        triggerSecretsReload: vi.fn(async () => {}),
-        applyAgentModelOverrides: applyAgentModelOverridesFn,
-        logFn: () => {},
-      },
-    );
-
-    expect(applyDefaultAgentModelPatchFn).toHaveBeenCalledWith({
-      slug: "tester-70",
-      model: "platform-openai/gpt-6-luna",
-      source: "house-model",
-    });
-    expect(applyAgentModelOverridesFn).toHaveBeenCalledWith(
-      "tester-70",
-      {
-        "octogee-tester-70-proj-web-coach": {
-          primary: "platform-openai/gpt-6-luna",
-          fallbacks: [],
-        },
-      },
-      { houseOnly: false },
-    );
-  });
-
   it("user sync resets malformed owned selections instead of leaving a prior runtime pin", async () => {
     const applyAgentModelOverridesFn = vi.fn(async () => true);
 
@@ -4172,38 +3937,6 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
     });
   });
 
-  it("a BYOT agent keeps its own model while its project agents get the platform default; house-only gets neither", async () => {
-    const byotOverrides = vi.fn(async () => true);
-    await syncByotForUser(
-      {
-        byotActive: true,
-        username: "tester-70",
-        provisioning: { openclaw: { status: "complete" } },
-        planInputs: { selectedTier: "personal" },
-        systemConfig: { byot: { provider: "anthropic" } },
-        builderAgentDefault: userAgentDefault,
-      },
-      userDefaultDeps(byotOverrides),
-    );
-    expect(byotOverrides).toHaveBeenCalledWith("tester-70", undefined, {
-      houseOnly: false,
-      projectAgentDefault: userAgentDefault,
-    });
-
-    const houseOnlyOverrides = vi.fn(async () => true);
-    await syncByotForUser(
-      {
-        byotActive: false,
-        username: "tester-70",
-        provisioning: { openclaw: { status: "complete" } },
-        planInputs: { selectedTier: "free" },
-        builderAgentDefault: userAgentDefault,
-      },
-      userDefaultDeps(houseOnlyOverrides),
-    );
-    expect(houseOnlyOverrides).toHaveBeenCalledWith("tester-70", undefined, { houseOnly: true });
-  });
-
   it("a malformed platform-default stamp is discarded, not applied", async () => {
     const applyAgentModelOverridesFn = vi.fn(async () => true);
 
@@ -4242,42 +3975,6 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
     });
   });
 
-  it("shared gateway: a free-plan owner's overrides arrive houseOnly:true (deferred)", async () => {
-    const applyAgentModelOverridesFn = vi.fn(async () => false);
-
-    await syncByotForUser(
-      {
-        byotActive: false,
-        username: "tester-70",
-        provisioning: { openclaw: { status: "complete" } },
-        planInputs: { selectedTier: "free" },
-        systemConfig: {
-          agentModels: {
-            "octogee-tester-70-coach": {
-              primary: "anthropic/claude-sonnet-4-6",
-              fallbacks: [] as string[],
-            },
-          },
-        },
-      },
-      {
-        isSharedGateway: () => true,
-        purgeUserOauthRuntime: noUserOauthRuntimePurge,
-        applyByotState: vi.fn(() => false),
-        applyDefaultAgentModelPatch: vi.fn(async () => false),
-        materializePlatformBrokerSurfaces: vi.fn(() => false),
-        triggerSecretsReload: vi.fn(async () => {}),
-        applyAgentModelOverrides: applyAgentModelOverridesFn,
-      },
-    );
-
-    expect(applyAgentModelOverridesFn).toHaveBeenCalledWith(
-      "tester-70",
-      expect.objectContaining({ "octogee-tester-70-coach": expect.anything() }),
-      { houseOnly: true },
-    );
-  });
-
   it("a builderSubscription owner (no paid Personal plan) is NOT house-only — catalog picks apply", async () => {
     const applyAgentModelOverridesFn = vi.fn(async () => true);
     const agentModels = {
@@ -4312,31 +4009,6 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
 });
 
 describe("syncByotForUser — tools convergence wiring", () => {
-  it("house-only free user: the default-agent-model patch carries the trim; the standalone convergence does not double-fire", async () => {
-    const applyDefaultAgentModelPatchFn = vi.fn(async () => true);
-    const applyDefaultAgentToolsConvergenceFn = vi.fn(async () => true);
-
-    await syncByotForUser(
-      {
-        byotActive: false,
-        username: "tester-70",
-        provisioning: { openclaw: { status: "complete" } },
-        planInputs: { selectedTier: "free" },
-      },
-      {
-        purgeUserOauthRuntime: noUserOauthRuntimePurge,
-        applyByotState: vi.fn(() => false),
-        applyDefaultAgentModelPatch: applyDefaultAgentModelPatchFn,
-        applyDefaultAgentToolsConvergence: applyDefaultAgentToolsConvergenceFn,
-        triggerSecretsReload: vi.fn(async () => {}),
-      },
-    );
-
-    expect(applyDefaultAgentModelPatchFn).toHaveBeenCalledWith(
-      expect.objectContaining({ source: "house-model" }),
-    );
-    expect(applyDefaultAgentToolsConvergenceFn).not.toHaveBeenCalled();
-  });
 
   it("paid catalog user with no model pick: the standalone convergence strips a lingering trim (upgrade path)", async () => {
     const applyDefaultAgentModelPatchFn = vi.fn(async () => true);

@@ -12,13 +12,6 @@ describe("userAccountFromData", () => {
     expect(userAccountFromData("u1", { lastActive }).lastActive).toBe(expected);
   });
 
-  it("keeps the plan inputs, including a legacy tier, and drops empty identity strings", () => {
-    const account = userAccountFromData("u1", { username: "", email: "a@b.co", tier: "pro" });
-
-    expect(account).toMatchObject({ uid: "u1", username: null, email: "a@b.co" });
-    expect(account.planInputs).toMatchObject({ tier: "pro" });
-  });
-
   it("projects the admin profile fields and drops non-string Mattermost usernames", () => {
     expect(userAccountFromData("u1", {
       displayName: "User",

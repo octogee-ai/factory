@@ -5,11 +5,11 @@ import { FieldValue } from "firebase-admin/firestore";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION } from "@octogee/shared/types/glm";
 import { GATEWAY_RELEASES_SUBCOLLECTION, releasePayloadHash, type ReleasePayload } from "@octogee/shared/types/gateway-releases";
 
-import { addAdminFleetRoutes } from "../../admin-fleet-router.js";
-import type { CentralReleaseAuthority } from "../../artifact-registry.js";
-import type { PlatformStateStore } from "../../platform-state/store.js";
-import { createJournalFixtureStore, fixtureDocumentsAt, journalRowsAtPaths } from "../../testing/journal-store.js";
-import { firestoreUserAccountReader } from "../../user-account.js";
+import { addAdminFleetRoutes } from "../admin-fleet-router.js";
+import type { CentralReleaseAuthority } from "../artifact-registry.js";
+import type { PlatformStateStore } from "../platform-state/store.js";
+import { createJournalFixtureStore, fixtureDocumentsAt, journalRowsAtPaths } from "./journal-store.js";
+import { firestoreUserAccountReader } from "../user-account.js";
 
 // ── Path-based in-memory Firestore ─────────────────────────────────────────
 // Supports the exact surface the release endpoints touch: doc get/set(merge)/
@@ -38,6 +38,11 @@ function applyDottedPatch(target: Record<string, unknown>, patch: Record<string,
     if (value === FieldValue.delete()) delete cursor[key];
     else cursor[key] = value;
   }
+}
+
+function compareNumbers(a: number, b: number): number {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
 }
 
 const PLATFORM_GATEWAY_REPOSITORY = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
@@ -73,6 +78,7 @@ export function makeDb(
 ) {
   const store = new Map<string, Record<string, unknown>>(Object.entries(seed));
   let auto = 0;
+  const nextAutoId = () => `auto-${++auto}`;
   let synchronizedReads = 0;
   let releaseSynchronizedReads: (() => void) | null = null;
   const synchronizedReadsReady = new Promise<void>((resolve) => {
@@ -88,6 +94,10 @@ export function makeDb(
       out.push({ id: rest, path });
     }
     return out;
+  }
+
+  function snapshotOf(child: { id: string; path: string }) {
+    return { id: child.id, exists: true, data: () => store.get(child.path) };
   }
 
   function docRef(path: string): Record<string, unknown> {
@@ -136,11 +146,7 @@ export function makeDb(
         orderBy: (field: string, dir = "asc") => query(filters, { field, dir }),
         limit: () => query(filters, order),
         get: async () => {
-          let docs = childrenOf(prefix).map((c) => ({
-            id: c.id,
-            exists: true,
-            data: () => store.get(c.path),
-          }));
+          let docs = childrenOf(prefix).map(snapshotOf);
           for (const f of filters) {
             docs = docs.filter((d) => {
               const v = valueAtPath(d.data() ?? {}, f.field);
@@ -152,18 +158,18 @@ export function makeDb(
             docs.sort((a, b) => {
               const av = (a.data() ?? {})[order.field] as number;
               const bv = (b.data() ?? {})[order.field] as number;
-              const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+              const cmp = compareNumbers(av, bv);
               return order.dir === "desc" ? -cmp : cmp;
             });
           }
           return { docs, size: docs.length };
         },
         add: async (data: Record<string, unknown>) => {
-          const gid = `auto-${++auto}`;
+          const gid = nextAutoId();
           store.set(`${prefix}/${gid}`, { ...data });
           return { id: gid };
         },
-        doc: (docId?: string) => docRef(`${prefix}/${docId ?? `auto-${++auto}`}`),
+        doc: (docId?: string) => docRef(`${prefix}/${docId ?? nextAutoId()}`),
       };
     }
     return query([], null);

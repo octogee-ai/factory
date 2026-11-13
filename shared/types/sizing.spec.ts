@@ -8,7 +8,6 @@ import {
   type SizingTier,
 } from './sizing.js';
 import { GATEWAY_CLASSES, GATEWAY_PROFILES } from './glm.js';
-import { BUILDER_TIERS } from './billing-tiers.js';
 
 describe('sizing-tier SSOT', () => {
   it('declares tiers in ascending size order', () => {
@@ -69,10 +68,6 @@ describe('sizing-tier SSOT', () => {
   it('isolated class defaults to s and the shared gateway defaults to l', () => {
     expect(GATEWAY_CLASS_DEFAULT_TIER.builder).toBe('s');
     expect(GATEWAY_CLASS_DEFAULT_TIER.shared).toBe('m');
-  });
-
-  it('provisions the entry user entitlement with browser headroom', () => {
-    expect(BUILDER_TIERS.hobby.instance).toBe('s');
   });
 
   it('s gives the one active Hobby user browser and desktop headroom', () => {

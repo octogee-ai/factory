@@ -1,3 +1,4 @@
+import { type GatewaySizingProfile } from "../platform-state/config.js";
 import type { PlatformStateStore } from "../platform-state/store.js";
 export interface JournalRows {
     get(id: string): Record<string, unknown> | undefined;
@@ -15,7 +16,7 @@ export interface FixtureDocuments {
 }
 export type FixtureDocumentRecords = Map<string, Record<string, unknown>> | Record<string, Record<string, unknown> | undefined>;
 export declare function fixtureDocumentsAt(records: FixtureDocumentRecords): FixtureDocuments;
-export declare const FIXTURE_SIZING_PROFILES: Record<string, import("../platform-state/config.js").GatewaySizingProfile>;
+export declare const FIXTURE_SIZING_PROFILES: Record<string, GatewaySizingProfile>;
 export declare function seedFixtureSizingProfiles(db: {
     doc(path: string): {
         set(data: Record<string, unknown>, options: {

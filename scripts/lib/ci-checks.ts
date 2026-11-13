@@ -1,4 +1,6 @@
+import { existsSync, readdirSync } from "node:fs";
 import { availableParallelism } from "node:os";
+import { join, posix } from "node:path";
 import { ALL_JOBS, JOBS, UNIT_PACKAGES, type JobKey } from "./scope/manifest.js";
 import { resolveScope } from "./scope/resolve.js";
 
@@ -170,6 +172,14 @@ function qualityJobs(paths: string[], full: boolean): CheckJob[] {
 }
 
 export const OVERLAY_COMMAND = "node platform/scripts/ops/overlay.mjs platform product .overlay";
+const OVERLAY_DEPENDENCY_SYNC = "platform/scripts/ops/sync-local-file-deps.mjs";
+
+export function overlayPackages(productRoot: string): Set<string> {
+  if (!existsSync(productRoot)) return new Set();
+  return new Set(readdirSync(productRoot, { withFileTypes: true })
+    .filter(entry => entry.isDirectory() && !existsSync(join(productRoot, entry.name, "package.json")))
+    .map(entry => entry.name));
+}
 
 function productOverlay(job: CheckJob, products: ReadonlySet<string>): CheckJob[] {
   const overlaid = (directory: string) => {
@@ -177,7 +187,11 @@ function productOverlay(job: CheckJob, products: ReadonlySet<string>): CheckJob[
     return products.has(name) ? `.overlay/${name}` : directory;
   };
   if (overlaid(job.directory) === job.directory) return [job];
-  const overlay = { ...job, directory: overlaid(job.directory), setup: [OVERLAY_COMMAND], installs: job.installs.map(overlaid) };
+  const directory = overlaid(job.directory);
+  const installs = job.installs.map(overlaid);
+  const consumers = installs.filter(install => install.startsWith(".overlay/")).map(install => `--consumer ${posix.relative(directory, install) || "."}`);
+  const packLibraries = `node ${posix.relative(directory, OVERLAY_DEPENDENCY_SYNC)} ${consumers.join(" ")}`;
+  const overlay = { ...job, directory, setup: [OVERLAY_COMMAND], installs, commands: [packLibraries, ...job.commands] };
   if (job.name.endsWith("-emulator")) return [overlay];
   return [job, { ...overlay, name: `${job.name}${PRODUCT_SUFFIX}` }];
 }

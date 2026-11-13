@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 
 export interface PlatformBoundaryManifest {
@@ -8,6 +8,7 @@ export interface PlatformBoundaryManifest {
   productModules: string[];
   ratchet: string[];
   referenceRatchet: string[];
+  dependencyRatchet: string[];
 }
 
 export interface ReferenceReport {
@@ -28,13 +29,17 @@ const SPECIFIER_RES = [
   /\bimport\(\s*["']([^"']+)["']\s*\)/g,
 ];
 const PLATFORM_DIR = "platform/";
+const PRODUCT_ROOT = "product";
 const MANIFEST_PATH = `${PLATFORM_DIR}scripts/lib/platform-boundary.json`;
 const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts"];
+const PACKAGE_MANIFEST = "package.json";
+const PACKAGE_LOCK = "package-lock.json";
+const FILE_PROTOCOL = "file:";
 
 export function loadPlatformBoundaryManifest(repoRoot: string): PlatformBoundaryManifest {
   const path = join(repoRoot, MANIFEST_PATH);
   const manifest = JSON.parse(readFileSync(path, "utf8")) as PlatformBoundaryManifest;
-  for (const key of ["platformEntrypoints", "platformRoots", "productModules", "ratchet", "referenceRatchet"] as const) {
+  for (const key of ["platformEntrypoints", "platformRoots", "productModules", "ratchet", "referenceRatchet", "dependencyRatchet"] as const) {
     if (!Array.isArray(manifest[key])) throw new Error(`platform-boundary.json ${key} must be an array`);
   }
   return manifest;
@@ -65,6 +70,65 @@ function resolveSourceFile(candidate: string): string | null {
   return found ? realpathSync(found) : null;
 }
 
+interface PackageManifest {
+  name?: string;
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+  exports?: Record<string, { default?: string }>;
+}
+
+function readPackageManifest(packageDir: string): PackageManifest {
+  return JSON.parse(readFileSync(join(packageDir, PACKAGE_MANIFEST), "utf8")) as PackageManifest;
+}
+
+function owningPackageDir(fromFile: string, repoRoot: string): string | null {
+  const root = realpathSync(repoRoot);
+  for (let dir = dirname(fromFile); !relative(root, dir).startsWith(".."); dir = dirname(dir)) {
+    if (existsSync(join(dir, PACKAGE_MANIFEST))) return dir;
+    if (dir === root) break;
+  }
+  return null;
+}
+
+const localPackages = new Map<string, Map<string, string>>();
+
+function localPackageDir(name: string, repoRoot: string): string | undefined {
+  const root = realpathSync(repoRoot);
+  let packages = localPackages.get(root);
+  if (!packages) {
+    packages = new Map();
+    for (const parent of [root, join(root, PLATFORM_DIR), join(root, PRODUCT_ROOT)]) {
+      if (!existsSync(parent)) continue;
+      for (const entry of readdirSync(parent, { withFileTypes: true })) {
+        const packageDir = join(parent, entry.name);
+        if (!entry.isDirectory() || !existsSync(join(packageDir, PACKAGE_MANIFEST))) continue;
+        const { name: packageName } = readPackageManifest(packageDir);
+        if (packageName) packages.set(packageName, packageDir);
+      }
+    }
+    localPackages.set(root, packages);
+  }
+  return packages.get(name);
+}
+
+function declaredPackageDir(name: string, fromFile: string, repoRoot: string): string | undefined {
+  const consumer = owningPackageDir(fromFile, repoRoot);
+  if (!consumer) return undefined;
+  const consumerManifest = readPackageManifest(consumer);
+  const spec = consumerManifest.dependencies?.[name] ?? consumerManifest.devDependencies?.[name];
+  return spec?.startsWith(FILE_PROTOCOL) ? resolve(consumer, spec.slice(FILE_PROTOCOL.length)) : undefined;
+}
+
+function resolveLocalPackageImport(specifier: string, fromFile: string, repoRoot: string): string | null {
+  const match = /^(@octogee\/[^/]+)\/(.+)$/u.exec(specifier);
+  if (!match) return null;
+  const packageDir = declaredPackageDir(match[1]!, fromFile, repoRoot) ?? localPackageDir(match[1]!, repoRoot);
+  if (!packageDir) return null;
+  const built = readPackageManifest(packageDir).exports?.[`./${match[2]}`]?.default?.replace(/^\.\/dist\//u, "");
+  if (built === undefined) return null;
+  return resolveSourceFile(join(packageDir, "src", built)) ?? resolveSourceFile(join(packageDir, built));
+}
+
 export function resolveImport(specifier: string, fromFile: string, repoRoot: string): string | null {
   if (specifier.startsWith(".")) return resolveSourceFile(resolve(dirname(fromFile), specifier));
   if (specifier.startsWith("@octogee/core/")) {
@@ -81,7 +145,7 @@ export function resolveImport(specifier: string, fromFile: string, repoRoot: str
     const pkg = segments[0] === "platform" ? segments.slice(0, 2).join("/") : segments[0]!;
     return resolveSourceFile(join(repoRoot, pkg, "src", specifier.slice(2)));
   }
-  return null;
+  return resolveLocalPackageImport(specifier, fromFile, repoRoot);
 }
 
 export function importsOf(file: string, repoRoot: string): string[] {
@@ -230,5 +294,73 @@ export function platformReferenceReport(manifest: PlatformBoundaryManifest, repo
     references,
     newViolations: references.filter((reference) => !ratchet.has(reference)),
     staleRatchet: manifest.referenceRatchet.filter((reference) => !referenced.has(reference)),
+  };
+}
+
+const DEPENDENCY_SECTIONS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"] as const;
+const PACKAGE_FILES = new Set([PACKAGE_MANIFEST, PACKAGE_LOCK]);
+const NODE_MODULES = "node_modules/";
+
+interface LockEntry {
+  name?: string;
+  resolved?: string;
+}
+
+interface LocalDependency {
+  name?: string;
+  target: string | null;
+}
+
+function localTarget(spec: string): string | null {
+  const target = spec.startsWith(FILE_PROTOCOL) ? spec.slice(FILE_PROTOCOL.length) : spec;
+  return /^[a-z][a-z0-9+.-]*:/iu.test(target) ? null : target;
+}
+
+function leavesPlatform(file: string, target: string, repoRoot: string): boolean {
+  const root = resolve(repoRoot);
+  return !relative(root, resolve(root, dirname(file), target)).startsWith(PLATFORM_DIR);
+}
+
+function lockedDependency(key: string, entry: LockEntry): LocalDependency {
+  if (!key.includes(NODE_MODULES)) return { name: entry.name, target: key };
+  const name = key.slice(key.lastIndexOf(NODE_MODULES) + NODE_MODULES.length);
+  return { name, target: entry.resolved ? localTarget(entry.resolved) : null };
+}
+
+function lockDependencies(lock: Record<string, unknown>): LocalDependency[] {
+  return Object.entries((lock.packages ?? {}) as Record<string, LockEntry>)
+    .filter(([key]) => key !== "")
+    .map(([key, entry]) => lockedDependency(key, entry));
+}
+
+function manifestDependencies(manifest: Record<string, unknown>): LocalDependency[] {
+  return DEPENDENCY_SECTIONS.flatMap((section) =>
+    Object.entries((manifest[section] ?? {}) as Record<string, string>).map(([name, spec]) => ({
+      name,
+      target: spec.startsWith(FILE_PROTOCOL) ? localTarget(spec) : null,
+    })));
+}
+
+export function outsideDependenciesOf(file: string, source: string, repoRoot: string): string[] {
+  const parsed = JSON.parse(source) as Record<string, unknown>;
+  const dependencies = file.endsWith(PACKAGE_LOCK) ? lockDependencies(parsed) : manifestDependencies(parsed);
+  const outside = dependencies
+    .filter(({ name, target }) => name && target && leavesPlatform(file, target, repoRoot))
+    .map(({ name }) => `${file} -> ${name}`);
+  return [...new Set(outside)].sort();
+}
+
+export function platformDependencyReport(manifest: PlatformBoundaryManifest, repoRoot: string): ReferenceReport {
+  const listed = execFileSync(GIT_BINARY, ["ls-files", "-z", "--", PLATFORM_DIR], { cwd: repoRoot, encoding: "utf8" });
+  const references = listed
+    .split("\0")
+    .filter((file) => PACKAGE_FILES.has(file.slice(file.lastIndexOf("/") + 1)) && existsSync(join(repoRoot, file)))
+    .flatMap((file) => outsideDependenciesOf(file, readFileSync(join(repoRoot, file), "utf8"), repoRoot));
+  const ratchet = new Set(manifest.dependencyRatchet);
+  const referenced = new Set(references);
+  return {
+    references,
+    newViolations: references.filter((reference) => !ratchet.has(reference)),
+    staleRatchet: manifest.dependencyRatchet.filter((reference) => !referenced.has(reference)),
   };
 }

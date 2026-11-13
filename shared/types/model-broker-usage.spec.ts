@@ -16,9 +16,6 @@ import {
   weekWindowStartMs,
   windowOwnerKey,
 } from "./model-broker-usage.js";
-import {
-  MODEL_BROKER_CREDITS_COLLECTION,
-} from "./billing.js";
 
 describe("model broker usage storage contract", () => {
   it("keeps collection names and window durations stable", () => {
@@ -51,8 +48,7 @@ describe("model broker usage storage contract", () => {
     expect(weekWindowStartMs(Date.UTC(2026, 6, 6, 10, 46))).toBe(Date.UTC(2026, 6, 2));
   });
 
-  it("pins the credits collection and window doc keying", () => {
-    expect(MODEL_BROKER_CREDITS_COLLECTION).toBe("modelBrokerCredits");
+  it("pins the window doc keying", () => {
     expect(modelBrokerWindowDocId("owner-1", Date.UTC(2026, 6, 2))).toBe(
       `owner-1_${Date.UTC(2026, 6, 2)}`,
     );

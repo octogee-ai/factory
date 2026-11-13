@@ -9,6 +9,7 @@ USER root
 
 COPY --chown=node:node core/package.json /octogee/core/package.json
 COPY --chown=node:node shared/package.json shared/package-lock.json /octogee/shared/
+COPY --from=product --chown=node:node shared/package.json /product/shared/package.json
 COPY --chown=node:node scripts/.npmrc scripts/package.json scripts/package-lock.json /octogee/scripts/
 
 WORKDIR /octogee/scripts
@@ -28,9 +29,12 @@ COPY core/package.json /octogee/core/package.json
 COPY core/dist /octogee/core/dist
 COPY shared/package.json /octogee/shared/package.json
 COPY shared/dist /octogee/shared/dist
+COPY --from=product shared/package.json /product/shared/package.json
+COPY --from=product shared/dist /product/shared/dist
 COPY infra/gateway/pack-local-deps.sh /tmp/pack-local-deps.sh
 RUN bash /tmp/pack-local-deps.sh /octogee/core /packages/@octogee/core \
-    && bash /tmp/pack-local-deps.sh /octogee/shared /packages/@octogee/shared
+    && bash /tmp/pack-local-deps.sh /octogee/shared /packages/@octogee/shared \
+    && bash /tmp/pack-local-deps.sh /product/shared /packages/@octogee/product-shared
 
 FROM ${OPENCLAW_BASE_IMAGE} AS gateway-build
 

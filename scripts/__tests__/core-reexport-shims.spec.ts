@@ -10,7 +10,6 @@ import * as byotSyncRuntimeCore from "@octogee/core/byot-sync-runtime";
 import * as codexAuthHealthCore from "@octogee/core/codex-auth-health";
 import * as firebaseCore from "@octogee/core/firebase";
 import * as firebaseAuthHelpersCore from "@octogee/core/firebase-auth-helpers";
-import * as firebaseHostingCore from "@octogee/core/firebase-hosting";
 import * as fleetMigrationCore from "@octogee/core/fleet-migration";
 import * as fleetMigrationClientCore from "@octogee/core/fleet-migration-client";
 import * as fleetMigrationRunnerCore from "@octogee/core/fleet-migration-runner";
@@ -42,7 +41,6 @@ import * as byotSyncRuntimeShim from "../lib/byot-sync-runtime.js";
 import * as codexAuthHealthShim from "../lib/codex-auth-health.js";
 import * as firebaseShim from "../lib/firebase.js";
 import * as firebaseAuthHelpersShim from "../lib/firebase-auth-helpers.js";
-import * as firebaseHostingShim from "../lib/firebase-hosting.js";
 import * as fleetMigrationShim from "../lib/fleet-migration.js";
 import * as fleetMigrationClientShim from "../lib/fleet-migration-client.js";
 import * as fleetMigrationRunnerShim from "../lib/fleet-migration-runner.js";
@@ -76,7 +74,6 @@ const shims = [
   ["codex-auth-health", codexAuthHealthShim, codexAuthHealthCore],
   ["firebase", firebaseShim, firebaseCore],
   ["firebase-auth-helpers", firebaseAuthHelpersShim, firebaseAuthHelpersCore],
-  ["firebase-hosting", firebaseHostingShim, firebaseHostingCore],
   ["fleet-migration", fleetMigrationShim, fleetMigrationCore],
   ["fleet-migration-client", fleetMigrationClientShim, fleetMigrationClientCore],
   ["fleet-migration-runner", fleetMigrationRunnerShim, fleetMigrationRunnerCore],

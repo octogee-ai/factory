@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveGatewayPrincipalAccess, workspacePermissionsEnabled } from "./gateway-principal-access.js";
+import { resolveGatewayPrincipalAccess } from "./gateway-principal-access.js";
 
 const gateway = { gatewayId: "alice-gateway", ownerUid: "alice", workspaceSlug: "alice", perUserIdentity: true };
 const member = { id: "bob", role: "member", canonicalSource: "mattermost-general", canonicalState: "active", mattermostChannelId: "general", mattermostUserId: "mm-bob" };
@@ -30,19 +30,3 @@ describe("workspace gateway membership", () => {
   });
 });
 
-
-describe("User workspace permission availability", () => {
-  const config = { gatewayClass: "builder", builderAccess: { controlIdentity: "per-user" } };
-  const paid = { builderSubscription: { tier: "hobby", status: "active" } };
-  const now = new Date("2026-09-15");
-  it("admits paid and active-trial users, and excludes free, expired, shared, and shared-identity gateways", () => {
-    const trialGrant = { schemaVersion: 3, offerId: "builder-signup", offerVersion: 1, personalTier: "personal", builderTier: "hobby",
-      configHash: "trial", claimedAt: new Date("2026-09-14"), endsAt: new Date("2026-09-20") };
-    expect(workspacePermissionsEnabled(config, paid, now)).toBe(true);
-    expect(workspacePermissionsEnabled(config, { trialGrant }, now)).toBe(true);
-    expect(workspacePermissionsEnabled(config, { trialGrant: { ...trialGrant, endsAt: new Date("2026-09-14") } }, now)).toBe(false);
-    expect(workspacePermissionsEnabled(config, {}, now)).toBe(false);
-    expect(workspacePermissionsEnabled({ ...config, gatewayClass: "shared" }, paid, now)).toBe(false);
-    expect(workspacePermissionsEnabled({ ...config, builderAccess: { controlIdentity: "shared-operator" } }, paid, now)).toBe(false);
-  });
-});

@@ -1,7 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as path from "path";
 import { buildProvisioningContext } from "@octogee/core/provisionSteps";
 import { CUSTOMERS_DIR } from "../lib/config.js";
+import { octogeeUserEntitlements } from "@octogee/product-shared/types/octogee-entitlements";
+import { installUserEntitlements } from "../../shared/types/user-entitlements.js";
+
+beforeAll(() => installUserEntitlements(octogeeUserEntitlements));
 
 describe("buildProvisioningContext", () => {
   beforeEach(() => {

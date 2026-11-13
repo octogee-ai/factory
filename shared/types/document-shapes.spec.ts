@@ -9,7 +9,6 @@ import {
 } from "./connectors.js";
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 import type { Member } from "./member.js";
-import type { InboxDocument } from "./notifications.js";
 import { OPENCLAW_PROTOCOL_VERSION } from "./openclaw-wire.js";
 import type { Workspace } from "./workspace.js";
 
@@ -71,24 +70,6 @@ describe("shared document shapes", () => {
       createdAt: "server-time",
       updatedAt: "server-time",
     } satisfies Agent;
-    const notification = {
-      id: "notif-1",
-      eventId: "event-1",
-      category: "project.invite",
-      title: "Invitation",
-      body: "You were invited",
-      imageUrl: null,
-      action: { type: "navigate", path: "/workspace/alive-fired" },
-      sourceUserId: "uid-owner",
-      channelId: null,
-      projectId: null,
-      read: false,
-      readAt: null,
-      deliveredVia: ["inbox", "toast"],
-      deliveryChannels: ["inbox", "toast"],
-      createdAt: 1,
-      expiresAt: 2,
-    } satisfies InboxDocument;
     const integration = {
       provider: "github",
       status: "connected",
@@ -100,7 +81,6 @@ describe("shared document shapes", () => {
     expect(channel.mattermost.channelId).toBe("channel-1");
     expect(member.role).toBe("member");
     expect(agent.mattermost.userId).toBe("mm-agent-1");
-    expect(notification.deliveredVia).toEqual(["inbox", "toast"]);
     expect(integration.status).toBe("connected");
   });
 });

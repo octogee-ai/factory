@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
 import { isGatewayDesiredDoc, isGatewayRuntimeDoc, isReleasePayload, parsePlatformReleaseRecord, PLATFORM_RELEASE_RECORD_DOC_PATH, upgradeReleasePayloadSchema, } from "@octogee/shared/types/gateway-releases";
 import { gatewayVmRuntimeDocPath, isGatewayVmRuntimeBundle, isOperationAuditRecord, isOperationAuditRow, } from "@octogee/shared/types/glm";
 import { USER_DELETION_JOBS_COLLECTION } from "@octogee/shared/types/account-lifecycle";
@@ -9,7 +8,7 @@ import { SCHEDULE_TRANSFERS_SUBCOLLECTION } from "@octogee/shared/types/fleet-co
 import { requireSizingProfile, } from "../platform-state/config.js";
 import { AlreadyExistsError, DuplicateRecordError, FenceMismatchError, MalformedRecordError, MissingRecordError, UnsupportedOperationError, } from "../platform-state/errors.js";
 import { ACTIVATED_AGENTS_PATH, ADMITTED_STEP, agentStoreFromData, agentStoreKeyOf, USER_ACTIVATION_LEASE_PATH, USER_FENCE_PATHS, SLUG_PATH, USER_MIRROR_PATHS, userPatchPaths, userRecordFromData, userRoleFromData, } from "../platform-state/documents/users.js";
-import { parseOrchestratorConfig, parsePlatformConfigValue, platformConfigEntryFromData, seedSizingProfiles } from "../platform-state/documents/config.js";
+import { parseOrchestratorConfig, parsePlatformConfigValue, platformConfigEntryFromData } from "../platform-state/documents/config.js";
 import { SCALER_KEY, parseSharedPoolScalerState } from "../platform-state/documents/controller-state.js";
 import { assertAbsentFence, assertFenceEquals, assertFenceOneOf } from "../platform-state/documents/fences.js";
 import { migrationTransferTaskFromData } from "../platform-state/documents/migration-tasks.js";
@@ -1442,7 +1441,48 @@ function controllerStateRepositories(documents, write) {
         },
     });
 }
-export const FIXTURE_SIZING_PROFILES = seedSizingProfiles(BUILDER_TIERS);
+export const FIXTURE_SIZING_PROFILES = {
+    hobby: {
+        isolation: "isolated",
+        sizingTier: "s",
+        computer: {
+            runtime: "gce-vm",
+            desktop: "x11",
+            machineType: "e2-medium",
+            provisioningModel: "STANDARD",
+            bootDisk: { sizeGb: 80, type: "pd-balanced" },
+            homeSizeGiB: 10,
+        },
+        fallbackStorageGb: 100,
+    },
+    pro: {
+        isolation: "isolated",
+        sizingTier: "m",
+        computer: {
+            runtime: "gce-vm",
+            desktop: "omarchy",
+            machineType: "e2-standard-2",
+            provisioningModel: "STANDARD",
+            bootDisk: { sizeGb: 80, type: "pd-ssd" },
+            homeSizeGiB: 50,
+        },
+        fallbackStorageGb: 500,
+    },
+    team: {
+        isolation: "isolated",
+        sizingTier: "l",
+        computer: {
+            runtime: "gce-vm",
+            desktop: "omarchy",
+            machineType: "e2-standard-4",
+            provisioningModel: "STANDARD",
+            bootDisk: { sizeGb: 80, type: "pd-ssd" },
+            homeSizeGiB: 100,
+        },
+        fallbackStorageGb: 1024,
+    },
+    enterprise: { isolation: "shared" },
+};
 export async function seedFixtureSizingProfiles(db) {
     await db.doc("config/orchestrator").set({ sizingProfiles: FIXTURE_SIZING_PROFILES }, { merge: true });
 }

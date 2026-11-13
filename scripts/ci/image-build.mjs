@@ -14,6 +14,8 @@ export const IMAGE_BUILDS = {
   "octogee-ops-agent-runtime": { dockerfile: "ops-agent/Dockerfile", context: "." },
 };
 
+export const productContext = (cwd = process.cwd()) => (existsSync(join(cwd, PRODUCT_ROOT)) ? { product: PRODUCT_ROOT } : {});
+
 export const overlayContexts = (overlays = {}, cwd = process.cwd()) => Object.fromEntries(
   Object.entries(overlays)
     .filter(([, pkg]) => existsSync(join(cwd, PRODUCT_ROOT, pkg)))
@@ -26,7 +28,8 @@ export function imagePlan(name, { repository, sha }, cwd = process.cwd()) {
   if (!/^[a-z0-9.-]+\/[a-z0-9-]+\/[a-z0-9-]+$/.test(repository)) throw new Error("Invalid registry repository");
   const { overlays, contexts, ...build } = IMAGE_BUILDS[name];
   return {
-    ...build, contexts: { ...contexts, ...overlayContexts(overlays, cwd) }, name, repository, buildArgs: { BUILD_SHA: sha.slice(0, 7) },
+    ...build, contexts: { ...contexts, ...(build.context === PLATFORM_CONTEXT ? productContext(cwd) : {}), ...overlayContexts(overlays, cwd) },
+    name, repository, buildArgs: { BUILD_SHA: sha.slice(0, 7) },
     tag: `${repository}/${name}:${sha.slice(0, 7)}`,
     labels: { "org.opencontainers.image.revision": sha },
     cache: `${repository}/cache/${name}:buildcache`,

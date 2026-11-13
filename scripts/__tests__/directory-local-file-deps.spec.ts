@@ -9,6 +9,7 @@ import {
   fileDepInstallArgs,
   fileDepLockOnlyArgs,
   inspectLocalFileDep,
+  stageOverlayDependencies,
   syncLocalFileDeps,
 } from "../ops/sync-local-file-deps.mjs";
 
@@ -84,6 +85,7 @@ function readJson(filePath: string): Record<string, unknown> {
 }
 
 function writeJson(filePath: string, value: unknown): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
@@ -411,5 +413,133 @@ describe("file-dependency refresh disables the registry release-age cooldown", (
     );
     expect(fileDepLockOnlyArgs()).toContain("--min-release-age=0");
     expect(fileDepLockOnlyArgs()).toContain("--package-lock-only");
+  });
+});
+
+function writeLibrary(root: string): string {
+  const libraryDir = writePackage(root, "library", "@octogee/library");
+  const manifest = readJson(path.join(libraryDir, "package.json"));
+  writeJson(path.join(libraryDir, "package.json"), {
+    ...manifest,
+    dependencies: { express: "^5.0.0" },
+    peerDependencies: { "@octogee/source": "^1.0.0" },
+  });
+  fs.mkdirSync(path.join(libraryDir, "src"));
+  fs.writeFileSync(path.join(libraryDir, "src", "index.ts"), "export const value = 1;\n");
+  return libraryDir;
+}
+
+function writeOverlayConsumer(root: string, installed: string[]): string {
+  const consumerDir = path.join(root, "overlay", "controller");
+  fs.mkdirSync(consumerDir, { recursive: true });
+  writeJson(path.join(consumerDir, "package.json"), { name: "controller", version: "1.0.0", private: true });
+  writeJson(path.join(consumerDir, "overlay-dependencies.json"), { dependencies: { "@octogee/library": "file:../../library" } });
+  for (const name of installed) writeJson(path.join(consumerDir, "node_modules", ...name.split("/"), "package.json"), { name, version: "1.0.0" });
+  return consumerDir;
+}
+
+describe("overlay library dependencies", () => {
+  it("installs an overlay package's library as a packed copy that resolves the consumer's packages", () => {
+    const root = fixture();
+    const libraryDir = writeLibrary(root);
+    const consumerDir = writeOverlayConsumer(root, ["express", "@octogee/source"]);
+
+    const result = syncLocalFileDeps({
+      rootDir: root,
+      consumerDirs: [consumerDir],
+      installConsumerDepsFn: () => { throw new Error("an overlay library is not an npm dependency"); },
+      stdio: "ignore",
+    });
+
+    const installedDir = path.join(consumerDir, "node_modules", "@octogee", "library");
+    expect(result).toEqual({ staleCount: 1, syncedConsumers: [consumerDir] });
+    expect(fs.readFileSync(path.join(installedDir, "package.json"), "utf8")).toBe(fs.readFileSync(path.join(libraryDir, "package.json"), "utf8"));
+    expect(fs.readFileSync(path.join(installedDir, "dist", "index.js"), "utf8")).toBe("export const value = 1;\n");
+    expect(fs.existsSync(path.join(installedDir, "src"))).toBe(false);
+    const [dep] = discoverLocalFileDeps({ rootDir: root, consumerDirs: [consumerDir] });
+    expect(inspectLocalFileDep(dep).staleReasons).toEqual([]);
+  });
+
+  it("refuses an overlay library whose dependency the consumer does not install", () => {
+    const root = fixture();
+    writeLibrary(root);
+    const consumerDir = writeOverlayConsumer(root, ["@octogee/source"]);
+
+    expect(() => syncLocalFileDeps({ rootDir: root, consumerDirs: [consumerDir], stdio: "ignore" }))
+      .toThrow(/@octogee\/library needs express, which .*controller does not install/);
+  });
+
+  it("reinstalls an overlay library after a directory refresh replaces the consumer's packages", () => {
+    const root = fixture();
+    const sourceDir = writePackage(root, "source", "@octogee/source");
+    writeLibrary(root);
+    const consumerDir = writeOverlayConsumer(root, ["express"]);
+    const consumer = readJson(path.join(consumerDir, "package.json"));
+    writeJson(path.join(consumerDir, "package.json"), { ...consumer, dependencies: { "@octogee/source": "file:../../source" } });
+    writeJson(path.join(consumerDir, "package-lock.json"), {
+      name: "controller",
+      lockfileVersion: 3,
+      packages: {
+        "": { name: "controller", dependencies: { "@octogee/source": "file:../../source" } },
+        "node_modules/@octogee/source": { version: "1.0.0", resolved: "file:../../source" },
+      },
+    });
+
+    const result = syncLocalFileDeps({
+      rootDir: root,
+      consumerDirs: [consumerDir],
+      installConsumerDepsFn: (dir) => {
+        fs.rmSync(path.join(dir, "node_modules", "@octogee"), { recursive: true, force: true });
+        fs.cpSync(sourceDir, path.join(dir, "node_modules", "@octogee", "source"), { recursive: true });
+      },
+      stdio: "ignore",
+    });
+
+    expect(result.staleCount).toBe(2);
+    expect(discoverLocalFileDeps({ rootDir: root, consumerDirs: [consumerDir] }).map((dep) => inspectLocalFileDep(dep).staleReasons))
+      .toEqual([[], []]);
+  });
+
+  it("keeps a library the overlay copy brought in packed when the build has no library source", () => {
+    const root = fixture();
+    const consumerDir = writeOverlayConsumer(root, ["express", "@octogee/source"]);
+    const installedDir = path.join(consumerDir, "node_modules", "@octogee", "library");
+    writeJson(path.join(installedDir, "package.json"), { name: "@octogee/library", version: "1.0.0", files: ["dist"] });
+    fs.mkdirSync(path.join(installedDir, "dist"));
+    fs.writeFileSync(path.join(installedDir, "dist", "index.js"), "export const value = 1;\n");
+
+    const result = syncLocalFileDeps({
+      rootDir: root,
+      consumerDirs: [consumerDir],
+      installConsumerDepsFn: () => { throw new Error("an overlay library is not an npm dependency"); },
+      stdio: "ignore",
+    });
+
+    expect(result).toEqual({ staleCount: 0, syncedConsumers: [] });
+    expect(fs.readFileSync(path.join(installedDir, "dist", "index.js"), "utf8")).toBe("export const value = 1;\n");
+  });
+
+  it("refuses an overlay library with neither a source nor a packed copy", () => {
+    const root = fixture();
+    const consumerDir = writeOverlayConsumer(root, ["express", "@octogee/source"]);
+
+    expect(() => syncLocalFileDeps({ rootDir: root, consumerDirs: [consumerDir], stdio: "ignore" }))
+      .toThrow(/@octogee\/library has no source at .*library and no packed copy in .*controller/);
+  });
+
+  it("stages each overlay package's libraries under the package for an image build context", () => {
+    const root = fixture();
+    writeLibrary(root);
+    const productRoot = path.join(root, "product");
+    writeJson(path.join(productRoot, "controller", "overlay-dependencies.json"), { dependencies: { "@octogee/library": "file:../../library" } });
+    fs.mkdirSync(path.join(productRoot, "edge", "src"), { recursive: true });
+    writeJson(path.join(productRoot, "core", "package.json"), { name: "@octogee/product-core", version: "1.0.0" });
+
+    stageOverlayDependencies(productRoot);
+
+    expect(fs.readFileSync(path.join(productRoot, "controller", "node_modules", "@octogee", "library", "dist", "index.js"), "utf8"))
+      .toBe("export const value = 1;\n");
+    expect(fs.existsSync(path.join(productRoot, "edge", "node_modules"))).toBe(false);
+    expect(fs.existsSync(path.join(productRoot, "core", "node_modules"))).toBe(false);
   });
 });

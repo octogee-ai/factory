@@ -65,6 +65,20 @@ describe("overlayTree", () => {
     expect(() => overlay(root)).toThrow(/shadows platform files: src\/index\.ts/);
   });
 
+  it("leaves a standalone product package with its own manifest out of the overlay", () => {
+    const root = tree({
+      "platform/core/package.json": "{\"name\":\"@octogee/core\"}",
+      "platform/core/src/index.ts": "export const core = 1;\n",
+      "product/core/package.json": "{\"name\":\"@octogee/product-core\"}",
+      "product/core/src/index.ts": "export const productCore = 1;\n",
+      "product/library/package.json": "{}",
+    });
+
+    expect(overlay(root)).toEqual({});
+    expect(fs.readlinkSync(path.join(root, ".overlay/core"))).toBe(path.join("..", "platform", "core"));
+    expect(read(root, ".overlay/core/src/index.ts")).toBe("export const core = 1;\n");
+  });
+
   it("refuses a product package with no platform package", () => {
     const root = tree({
       "platform/controller/src/index.ts": "",

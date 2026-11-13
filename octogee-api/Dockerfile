@@ -48,6 +48,10 @@ COPY core/package.json /core/package.json
 COPY core/dist /core/dist
 COPY shared/package.json /shared/package.json
 COPY shared/dist /shared/dist
+COPY --from=product core/package.json /product/core/package.json
+COPY --from=product core/dist /product/core/dist
+COPY --from=product shared/package.json /product/shared/package.json
+COPY --from=product shared/dist /product/shared/dist
 COPY test-helpers/package.json /test-helpers/package.json
 COPY test-helpers/dist /test-helpers/dist
 COPY octogee-api/.npmrc octogee-api/package.json octogee-api/package-lock.json* ./
@@ -98,6 +102,10 @@ COPY core/package.json /core/package.json
 COPY core/dist /core/dist
 COPY shared/package.json /shared/package.json
 COPY shared/dist /shared/dist
+COPY --from=product core/package.json /product/core/package.json
+COPY --from=product core/dist /product/core/dist
+COPY --from=product shared/package.json /product/shared/package.json
+COPY --from=product shared/dist /product/shared/dist
 COPY octogee-api/.npmrc octogee-api/package.json octogee-api/package-lock.json* ./
 RUN npm ci --omit=dev --ignore-scripts
 RUN npm rebuild better-sqlite3 --foreground-scripts \

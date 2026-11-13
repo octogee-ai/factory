@@ -1,13 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { octogeeUserEntitlements } from "./octogee-entitlements.js";
 import {
   resolveContinuousUserPlacement,
   resolveDefaultPlacementEligibility,
 } from "./orchestrator-placement.js";
-import { installUserEntitlements } from "./user-entitlements.js";
+import { installUserEntitlements, staticUserEntitlements } from "./user-entitlements.js";
 
-beforeEach(() => installUserEntitlements(octogeeUserEntitlements));
+beforeEach(() => installUserEntitlements(staticUserEntitlements));
 
 describe("default placement eligibility", () => {
   it("accepts only a user the platform admitted, with a server-started provisioning state", () => {
@@ -154,6 +153,31 @@ describe("resolveContinuousUserPlacement", () => {
       },
       now: new Date(1_000),
     })).toEqual({ targetGatewayId: "builder-alice", ownedGatewayId: "builder-alice" });
+  });
+
+  it("ignores an active lease for a user the installed entitlements give no sizing key", () => {
+    installUserEntitlements({ ...staticUserEntitlements, sizingKey: () => null });
+    expect(resolveContinuousUserPlacement({
+      uid: "uid-alice",
+      userData: {
+        provisioning: {
+          openclaw: {
+            activationLease: { status: "active", targetGatewayId: "builder-alice" },
+          },
+        },
+      },
+      currentGatewayId: "builder-alice",
+      defaultGatewayId: "shared-blue",
+      ownedGateway: {
+        gatewayId: "builder-alice",
+        gatewayClass: "builder",
+        ownerUid: "uid-alice",
+        disposable: true,
+        desiredStatus: "running",
+        ready: true,
+      },
+      now: new Date(1_000),
+    })).toEqual({ targetGatewayId: "shared-blue", ownedGatewayId: null });
   });
 
   it("does not route an active lease to a non-disposable owner gateway", () => {

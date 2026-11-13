@@ -13,7 +13,7 @@ import {
   seedServingGateway,
   sharedPayload,
   userAuthRecord,
-} from "./__tests__/fixtures/admin-fleet-releases-app.js";
+} from "./testing/admin-fleet-releases-app.js";
 import type {
   CentralReleaseAuthority,
   ReleaseDigestManifest,

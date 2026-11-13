@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   desiredUsers,
   snapshotConfigFingerprint,
@@ -9,6 +9,9 @@ import {
   staticUserEntitlements,
   userEntitlements,
 } from "../../shared/types/user-entitlements.js";
+import { octogeeUserEntitlements } from "@octogee/product-shared/types/octogee-entitlements";
+
+beforeAll(() => installUserEntitlements(octogeeUserEntitlements));
 
 const PAID = { subscription: { tier: "personal_pro", status: "active" } };
 const OFFER_CLAIMED_AT_SECONDS = 1_783_500_000;

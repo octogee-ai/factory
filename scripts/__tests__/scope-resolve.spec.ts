@@ -27,7 +27,12 @@ describe("resolveScope — ownership", () => {
   it("scopes a product package path like the platform package it overlays", () => {
     expect(resolveScope(["product/gateway-edge/src/routes/billing.ts"]).jobs)
       .toEqual(resolveScope(["platform/gateway-edge/src/routes/billing.ts"]).jobs);
-    expect(resolveScope(["product/core/src/index.ts"]).jobs).toEqual(resolveScope(["platform/core/src/index.ts"]).jobs);
+  });
+  it("scopes a standalone product library package as its own package, not as an overlay", () => {
+    expect(resolveScope(["product/core/src/index.ts"]).jobs).toContain("product-core");
+    expect(resolveScope(["product/core/src/index.ts"]).jobs).not.toContain("core");
+    expect(resolveScope(["product/shared/types/billing.ts"]).jobs).toContain("product-shared");
+    expect(resolveScope(["product/shared/types/billing.ts"]).jobs).not.toContain("shared");
   });
   it("owns product files outside any platform package", () => {
     expectJobs(["product/README.md"], ["scripts", "tests"]);
@@ -198,6 +203,7 @@ describe("resolveScope — cross-package hazard edges", () => {
         "gateway-edge",
         "gateway-edge-emulator",
         "glm-controller",
+        "product-core",
         "tests",
       ],
     );

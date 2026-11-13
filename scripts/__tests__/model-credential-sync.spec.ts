@@ -1,11 +1,15 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   deriveDesiredModelCredentialState,
   legacyByotSyncUserDataFromModelCredentialState,
 } from "../lib/model-credential-sync.js";
 import { syncModelCredentialsForUser } from "../lib/model-credential-sync-runtime.js";
+import { octogeeUserEntitlements } from "@octogee/product-shared/types/octogee-entitlements";
+import { installUserEntitlements } from "../../shared/types/user-entitlements.js";
+
+beforeAll(() => installUserEntitlements(octogeeUserEntitlements));
 
 const COMPLETE_USER = {
   username: "tester-70",

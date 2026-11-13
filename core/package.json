@@ -13,6 +13,14 @@
       "types": "./dist/platform-state/index.d.ts",
       "default": "./dist/platform-state/index.js"
     },
+    "./platform-state/documents/config": {
+      "types": "./dist/platform-state/documents/config.d.ts",
+      "default": "./dist/platform-state/documents/config.js"
+    },
+    "./platform-state/documents/users": {
+      "types": "./dist/platform-state/documents/users.d.ts",
+      "default": "./dist/platform-state/documents/users.js"
+    },
     "./testing/journal-store": {
       "types": "./dist/testing/journal-store.d.ts",
       "default": "./dist/testing/journal-store.js"
@@ -25,6 +33,18 @@
       "types": "./dist/testing/firestore-store/store.d.ts",
       "default": "./dist/testing/firestore-store/store.js"
     },
+    "./testing/admin-dry-run-app": {
+      "types": "./dist/testing/admin-dry-run-app.d.ts",
+      "default": "./dist/testing/admin-dry-run-app.js"
+    },
+    "./testing/admin-fleet-releases-app": {
+      "types": "./dist/testing/admin-fleet-releases-app.d.ts",
+      "default": "./dist/testing/admin-fleet-releases-app.js"
+    },
+    "./testing/admin-fleet-route-app": {
+      "types": "./dist/testing/admin-fleet-route-app.d.ts",
+      "default": "./dist/testing/admin-fleet-route-app.js"
+    },
     "./project-agent-workspaces": {
       "types": "./dist/project-agent-workspaces.d.ts",
       "default": "./dist/project-agent-workspaces.js"
@@ -32,14 +52,6 @@
     "./admin-dry-run": {
       "types": "./dist/admin-dry-run.d.ts",
       "default": "./dist/admin-dry-run.js"
-    },
-    "./admin-activation-lease-routes": {
-      "types": "./dist/admin-activation-lease-routes.d.ts",
-      "default": "./dist/admin-activation-lease-routes.js"
-    },
-    "./admin-shared-gateway-automation-routes": {
-      "types": "./dist/admin-shared-gateway-automation-routes.d.ts",
-      "default": "./dist/admin-shared-gateway-automation-routes.js"
     },
     "./isolated-prelaunch": {
       "types": "./dist/isolated-prelaunch.d.ts",
@@ -56,14 +68,6 @@
     "./git-metadata": {
       "types": "./dist/git-metadata.d.ts",
       "default": "./dist/git-metadata.js"
-    },
-    "./admin-customer-reset": {
-      "types": "./dist/admin-customer-reset.d.ts",
-      "default": "./dist/admin-customer-reset.js"
-    },
-    "./admin-user-plan-routes": {
-      "types": "./dist/admin-user-plan-routes.d.ts",
-      "default": "./dist/admin-user-plan-routes.js"
     },
     "./admin-user-directory-router": {
       "types": "./dist/admin-user-directory-router.d.ts",
@@ -117,18 +121,6 @@
       "types": "./dist/user-account.d.ts",
       "default": "./dist/user-account.js"
     },
-    "./product-deletion-context": {
-      "types": "./dist/product-deletion-context.d.ts",
-      "default": "./dist/product-deletion-context.js"
-    },
-    "./product-admin-user-detail": {
-      "types": "./dist/product-admin-user-detail.d.ts",
-      "default": "./dist/product-admin-user-detail.js"
-    },
-    "./product-admin-user-directory-source": {
-      "types": "./dist/product-admin-user-directory-source.d.ts",
-      "default": "./dist/product-admin-user-directory-source.js"
-    },
     "./user-activation-lease": {
       "types": "./dist/user-activation-lease.d.ts",
       "default": "./dist/user-activation-lease.js"
@@ -181,10 +173,6 @@
       "types": "./dist/user-lifecycle.d.ts",
       "default": "./dist/user-lifecycle.js"
     },
-    "./customer-hosting": {
-      "types": "./dist/customer-hosting.d.ts",
-      "default": "./dist/customer-hosting.js"
-    },
     "./user-deletion-plan": {
       "types": "./dist/user-deletion-plan.d.ts",
       "default": "./dist/user-deletion-plan.js"
@@ -216,10 +204,6 @@
     "./firebase-auth-helpers": {
       "types": "./dist/firebase-auth-helpers.d.ts",
       "default": "./dist/firebase-auth-helpers.js"
-    },
-    "./firebase-hosting": {
-      "types": "./dist/firebase-hosting.d.ts",
-      "default": "./dist/firebase-hosting.js"
     },
     "./fleet-migration": {
       "types": "./dist/fleet-migration.d.ts",
@@ -421,10 +405,6 @@
       "types": "./dist/mattermost/default-agent-pat.d.ts",
       "default": "./dist/mattermost/default-agent-pat.js"
     },
-    "./mattermost/community": {
-      "types": "./dist/mattermost/community.d.ts",
-      "default": "./dist/mattermost/community.js"
-    },
     "./mattermost/nuke": {
       "types": "./dist/mattermost/nuke.d.ts",
       "default": "./dist/mattermost/nuke.js"
@@ -537,12 +517,6 @@
   },
   "typesVersions": {
     "*": {
-      "admin-customer-reset": [
-        "dist/admin-customer-reset.d.ts"
-      ],
-      "admin-user-plan-routes": [
-        "dist/admin-user-plan-routes.d.ts"
-      ],
       "admin-user-directory-router": [
         "dist/admin-user-directory-router.d.ts"
       ],
@@ -612,9 +586,6 @@
       "user-lifecycle": [
         "dist/user-lifecycle.d.ts"
       ],
-      "customer-hosting": [
-        "dist/customer-hosting.d.ts"
-      ],
       "user-snapshot-mapping": [
         "dist/user-snapshot-mapping.d.ts"
       ],
@@ -632,9 +603,6 @@
       ],
       "firebase-auth-helpers": [
         "dist/firebase-auth-helpers.d.ts"
-      ],
-      "firebase-hosting": [
-        "dist/firebase-hosting.d.ts"
       ],
       "fleet-migration": [
         "dist/fleet-migration.d.ts"
@@ -785,9 +753,6 @@
       ],
       "mattermost/default-agent-pat": [
         "dist/mattermost/default-agent-pat.d.ts"
-      ],
-      "mattermost/community": [
-        "dist/mattermost/community.d.ts"
       ],
       "mattermost/project-agent": [
         "dist/mattermost/project-agent.d.ts"

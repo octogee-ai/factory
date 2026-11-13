@@ -8,6 +8,8 @@ export const JOBS = {
   scripts: "scripts",
   core: "core",
   shared: "shared",
+  productCore: "product-core",
+  productShared: "product-shared",
   testHelpers: "test-helpers",
   octogeeActivityTools: "octogee-activity-tools",
   octogeeBrokerTools: "octogee-broker-tools",
@@ -40,6 +42,8 @@ export type JobKey = (typeof JOBS)[keyof typeof JOBS];
 const TYPECHECK = "npm run typecheck";
 const COMMITTED_DIST_TYPECHECK =
   "npm run typecheck && npm run build && node ../scripts/ops/verify-committed-dist.mjs";
+const PRODUCT_COMMITTED_DIST_TYPECHECK =
+  "npm run typecheck && npm run build && node ../../platform/scripts/ops/verify-committed-dist.mjs";
 
 export interface UnitPackage {
   name: JobKey;
@@ -59,6 +63,16 @@ export const UNIT_PACKAGES: readonly UnitPackage[] = [
     name: JOBS.shared,
     dir: "platform/shared",
     typecheck: COMMITTED_DIST_TYPECHECK,
+  },
+  {
+    name: JOBS.productCore,
+    dir: "product/core",
+    typecheck: PRODUCT_COMMITTED_DIST_TYPECHECK,
+  },
+  {
+    name: JOBS.productShared,
+    dir: "product/shared",
+    typecheck: PRODUCT_COMMITTED_DIST_TYPECHECK,
   },
   {
     name: JOBS.testHelpers,
@@ -229,6 +243,8 @@ export const OWNERSHIP: readonly Ownership[] = [
   { dir: "obsidian-connect/", jobs: [JOBS.obsidianConnect, JOBS.tests] },
   { dir: "firestore-rules-tests/", jobs: [JOBS.firestoreRules] },
   { dir: "platform/shared/", jobs: [JOBS.shared] },
+  { dir: "product/core/", jobs: [JOBS.productCore] },
+  { dir: "product/shared/", jobs: [JOBS.productShared] },
   { dir: "artifact-worker/", jobs: [JOBS.artifactWorker] },
   { dir: "platform/infra/gateway/", jobs: [JOBS.scripts, JOBS.tests, JOBS.octogeeApi, JOBS.gatewayEdge, JOBS.core, JOBS.acceptance] },
   { dir: "platform/infra/desktop/", jobs: [JOBS.scripts, JOBS.tests, JOBS.glmController] },
@@ -282,6 +298,7 @@ export const EDGES: readonly ScopeEdge[] = [
   {
     when: "platform/core/",
     jobs: [
+      JOBS.productCore,
       JOBS.scripts,
       JOBS.userLifecycleEmulator,
       JOBS.octogeeApi,
@@ -398,6 +415,8 @@ export const EDGES: readonly ScopeEdge[] = [
   {
     when: "platform/shared/",
     jobs: [
+      JOBS.productCore,
+      JOBS.productShared,
       JOBS.acceptance,
       JOBS.app,
       JOBS.artifactWorker,
@@ -418,7 +437,41 @@ export const EDGES: readonly ScopeEdge[] = [
       JOBS.tests,
     ],
     reason:
-      "@octogee/shared is imported by acceptance, app, artifact-worker, core, gateway-edge, glm-controller, octogee-api, ops-agent, scripts, site and tests, and installed for functions; desktop, obsidian-connect and the gateway extension packages do not consume it",
+      "@octogee/shared is imported by acceptance, app, artifact-worker, core, product-core, product-shared, gateway-edge, glm-controller, octogee-api, ops-agent, scripts, site and tests, and installed for functions; desktop, obsidian-connect and the gateway extension packages do not consume it",
+  },
+  {
+    when: "product/core/",
+    jobs: [
+      JOBS.octogeeApi,
+      JOBS.octogeeApiEmulator,
+      JOBS.gatewayEdge,
+      JOBS.gatewayEdgeEmulator,
+      JOBS.glmController,
+      JOBS.glmControllerEmulator,
+      JOBS.tests,
+    ],
+    reason: "@octogee/product-core is installed by gateway-edge, glm-controller and octogee-api; tests compiles their sources",
+  },
+  {
+    when: "product/shared/",
+    jobs: [
+      JOBS.productCore,
+      JOBS.acceptance,
+      JOBS.app,
+      JOBS.functions,
+      JOBS.functionsEmulator,
+      JOBS.gatewayEdge,
+      JOBS.gatewayEdgeEmulator,
+      JOBS.glmController,
+      JOBS.glmControllerEmulator,
+      JOBS.octogeeApi,
+      JOBS.octogeeApiEmulator,
+      JOBS.scripts,
+      JOBS.userLifecycleEmulator,
+      JOBS.tests,
+    ],
+    reason:
+      "@octogee/product-shared is installed by product-core, functions, gateway-edge, glm-controller, octogee-api and scripts, aliased to source by app and tests, and imported by acceptance",
   },
   {
     when: "artifact-worker/",

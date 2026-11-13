@@ -1,5 +1,5 @@
 import { DEFAULT_OPS_AGENT_MODEL_REF } from "@octogee/shared/types/platform-config";
-import { DEFAULT_PLATFORM_TRIAL_CONFIG } from "@octogee/shared/types/signup-offer-config";
+import { DEFAULT_PLATFORM_TRIAL_CONFIG } from "@octogee/product-shared/types/signup-offer-config";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

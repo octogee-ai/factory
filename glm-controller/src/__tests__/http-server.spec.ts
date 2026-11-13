@@ -1,9 +1,7 @@
-import { addAdminActivationLeaseRoutes } from "@octogee/core/admin-activation-lease-routes";
-import { addAdminUserPlanRoutes } from "@octogee/core/admin-user-plan-routes";
-import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import request from "supertest";
 import type { Express } from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { admitAdminDryRunMarker, isAdminDryRun } from "@octogee/core/admin-dry-run";
 import { noAdminUserDirectorySource } from "@octogee/core/admin-user-directory-router";
 import { userAccountFromData, type UserAccountReader } from "@octogee/core/user-account";
 import { createLogger } from "../lib/logger.js";
@@ -34,7 +32,6 @@ interface FakeStore {
   gateways: Record<string, Record<string, unknown>>;
   glmGateways: Record<string, Record<string, unknown>>;
   glmOperations: Array<{ id: string; data: Record<string, unknown> }>;
-  adminActions: Record<string, Array<Record<string, unknown>>>;
 }
 
 function emptyStore(): FakeStore {
@@ -44,7 +41,6 @@ function emptyStore(): FakeStore {
     gateways: {},
     glmGateways: {},
     glmOperations: [],
-    adminActions: {},
   };
 }
 
@@ -153,24 +149,6 @@ function servingRuntime(
   };
 }
 
-function applyPatch(
-  target: Record<string, unknown>,
-  patch: Record<string, unknown>,
-): void {
-  for (const [key, value] of Object.entries(patch)) {
-    const parts = key.split(".");
-    let cursor = target;
-    for (const part of parts.slice(0, -1)) {
-      const next = cursor[part];
-      if (!next || typeof next !== "object" || Array.isArray(next)) {
-        cursor[part] = {};
-      }
-      cursor = cursor[part] as Record<string, unknown>;
-    }
-    cursor[parts[parts.length - 1]] = value;
-  }
-}
-
 interface WatchRegistry {
   watch: PlatformStateStore["watch"];
   attachCount(aggregate: WatchAggregate): number;
@@ -255,289 +233,6 @@ function accountsOver(store: FakeStore): UserAccountReader {
   };
 }
 
-function makeQuery(
-  collectionName: string,
-  store: FakeStore,
-  filters: Array<{ field: string; value: unknown }> = [],
-) {
-  const matches = (data: Record<string, unknown>): boolean =>
-    filters.every((f) => {
-      const v = data[f.field];
-      if (Array.isArray(f.value))
-        return (f.value as unknown[]).includes(v);
-      return v === f.value;
-    });
-  return {
-    where: (field: string, _op: string, value: unknown) =>
-      makeQuery(collectionName, store, [...filters, { field, value }]),
-    orderBy: () => makeQuery(collectionName, store, filters),
-    limit: () => makeQuery(collectionName, store, filters),
-    get: async () => {
-      if (collectionName === "gateways") {
-        const docs = Object.entries(store.gateways)
-          .filter(([, d]) => matches(d))
-          .map(([id, data]) => ({ id, data: () => data }));
-        return { docs, size: docs.length };
-      }
-      if (collectionName === "users") {
-        const docs = Object.entries(store.users)
-          .filter(([, d]) => matches(d))
-          .map(([id, data]) => ({ id, data: () => data }));
-        return { docs, size: docs.length };
-      }
-      if (collectionName === "glmOperations") {
-        const docs = store.glmOperations
-          .filter((o) => matches(o.data))
-          .map((o) => ({ id: o.id, data: () => o.data }));
-        return { docs, size: docs.length };
-      }
-      if (collectionName === "glmGateways") {
-        const docs = Object.entries(store.glmGateways)
-          .filter(([, d]) => matches(d))
-          .map(([id, data]) => ({ id, data: () => data }));
-        return { docs, size: docs.length };
-      }
-      return { docs: [], size: 0 };
-    },
-  };
-}
-
-const emptySubcollectionQuery = {
-  where: () => emptySubcollectionQuery,
-  orderBy: () => emptySubcollectionQuery,
-  get: async () => ({ docs: [], size: 0 }),
-};
-
-function buildDb(store: FakeStore) {
-  let docSeq = 0;
-  return {
-    batch: () => {
-      const writes: Array<() => Promise<void>> = [];
-      return {
-        update: (
-          ref: { update: (patch: Record<string, unknown>) => Promise<void> },
-          patch: Record<string, unknown>,
-        ) => {
-          writes.push(() => ref.update(patch));
-        },
-        set: (
-          ref: { set: (data: Record<string, unknown>) => Promise<void> },
-          data: Record<string, unknown>,
-        ) => {
-          writes.push(() => ref.set(data));
-        },
-        commit: async () => {
-          for (const write of writes) await write();
-        },
-      };
-    },
-    runTransaction: async <T,>(
-      fn: (txn: {
-        get: (ref: { get: () => Promise<unknown> }) => Promise<unknown>;
-        update: (
-          ref: { update: (patch: Record<string, unknown>) => Promise<void> },
-          patch: Record<string, unknown>,
-        ) => void;
-        set: (
-          ref: { set: (data: Record<string, unknown>) => Promise<void> },
-          data: Record<string, unknown>,
-        ) => void;
-        create: (
-          ref: {
-            get: () => Promise<{ exists: boolean }>;
-            set: (data: Record<string, unknown>) => Promise<void>;
-          },
-          data: Record<string, unknown>,
-        ) => void;
-      }) => Promise<T>,
-    ): Promise<T> => {
-      const queued: Array<() => Promise<void>> = [];
-      const txn = {
-        get: (ref: { get: () => Promise<unknown> }) => ref.get(),
-        update: (
-          ref: { update: (patch: Record<string, unknown>) => Promise<void> },
-          patch: Record<string, unknown>,
-        ) => {
-          queued.push(() => ref.update(patch));
-        },
-        set: (
-          ref: { set: (data: Record<string, unknown>) => Promise<void> },
-          data: Record<string, unknown>,
-        ) => {
-          queued.push(() => ref.set(data));
-        },
-        create: (
-          ref: {
-            get: () => Promise<{ exists: boolean }>;
-            set: (data: Record<string, unknown>) => Promise<void>;
-          },
-          data: Record<string, unknown>,
-        ) => {
-          queued.push(async () => {
-            if ((await ref.get()).exists) {
-              throw new Error("fake transaction create requires a missing document");
-            }
-            await ref.set(data);
-          });
-        },
-      };
-      const result = await fn(txn);
-      for (const w of queued) await w();
-      return result;
-    },
-    doc: (path: string) => ({
-      get: async () => {
-        const [collection, id] = path.split("/");
-        const data =
-          collection === "users" && id
-            ? store.users[id]
-            : collection === "gateways" && id && path.split("/").length === 2
-            ? store.gateways[id]
-            : collection === "glmGateways" && id
-              ? store.glmGateways[id]
-              : store.configs[path];
-        return { exists: data !== undefined, data: () => data };
-      },
-      set: async (data: Record<string, unknown>, opts?: { merge?: boolean }) => {
-        store.configs[path] = opts?.merge
-          ? { ...(store.configs[path] ?? {}), ...data }
-          : data;
-      },
-      update: async (patch: Record<string, unknown>) => {
-        const [collection, id] = path.split("/");
-        if (collection === "users" && id && store.users[id]) {
-          applyPatch(store.users[id], patch);
-          return;
-        }
-        const current = store.configs[path];
-        if (!current) throw new Error(`missing fake document ${path}`);
-        applyPatch(current, patch);
-      },
-    }),
-    collection: (name: string): unknown => ({
-      doc: (id?: string) => {
-        const docId = id ?? `auto-${++docSeq}`;
-        return {
-          id: docId,
-          get: async () => {
-            if (name === "users") {
-              const data = store.users[docId];
-              return { exists: data !== undefined, data: () => data };
-            }
-            if (name === "gateways") {
-              const data = store.gateways[docId];
-              return { exists: data !== undefined, data: () => data };
-            }
-            if (name === "glmGateways") {
-              const data = store.glmGateways[docId];
-              return { exists: data !== undefined, data: () => data };
-            }
-            if (name === "glmOperations") {
-              const op = store.glmOperations.find((o) => o.id === docId);
-              return {
-                exists: op !== undefined,
-                data: () => op?.data,
-              };
-            }
-            return { exists: false, data: () => undefined };
-          },
-          update: async (patch: Record<string, unknown>) => {
-            if (name === "users" && store.users[docId]) {
-              applyPatch(store.users[docId], patch);
-              return;
-            }
-            if (name === "gateways" && store.gateways[docId]) {
-              applyPatch(store.gateways[docId], patch);
-              return;
-            }
-            if (name === "glmGateways" && store.glmGateways[docId]) {
-              applyPatch(store.glmGateways[docId], patch);
-              return;
-            }
-            if (name === "glmOperations") {
-              const operation = store.glmOperations.find((candidate) => candidate.id === docId);
-              if (!operation) throw new Error(`missing fake operation ${docId}`);
-              applyPatch(operation.data, patch);
-            }
-          },
-          set: async (data: Record<string, unknown>) => {
-            if (name === "users") {
-              store.users[docId] = data;
-              return;
-            }
-            if (name === "gateways") {
-              store.gateways[docId] = data;
-              return;
-            }
-            if (name === "glmGateways") {
-              store.glmGateways[docId] = data;
-              return;
-            }
-            if (name === "glmOperations") {
-              const index = store.glmOperations.findIndex((o) => o.id === docId);
-              if (index === -1) store.glmOperations.push({ id: docId, data });
-              else store.glmOperations[index] = { id: docId, data };
-            }
-          },
-          delete: async () => {
-            if (name === "users") delete store.users[docId];
-          },
-          collection: (sub: string) => ({
-            ...emptySubcollectionQuery,
-            doc: (subId?: string) => ({
-              set: async (data: Record<string, unknown>) => {
-                if (name !== "users" || sub !== "admin_actions") throw new Error(`unexpected write to ${name}/${docId}/${sub}`);
-                (store.adminActions[docId] ??= []).push(data);
-              },
-              get: async () => {
-                if (
-                  name === "users" &&
-                  sub === "system" &&
-                  subId === "config"
-                ) {
-                  const data = store.configs[docId];
-                  return { exists: data !== undefined, data: () => data };
-                }
-                return { exists: false, data: () => undefined };
-              },
-            }),
-          }),
-        };
-      },
-      where: (field: string, _op: string, value: unknown) =>
-        makeQuery(name, store, [{ field, value }]),
-      orderBy: () => makeQuery(name, store, []),
-      limit: () => makeQuery(name, store, []),
-      get: async () => {
-        if (name === "gateways") {
-          const docs = Object.entries(store.gateways).map(([id, data]) => ({
-            id,
-            data: () => data,
-          }));
-          return { docs, size: docs.length };
-        }
-        if (name === "users") {
-          const docs = Object.entries(store.users).map(([id, data]) => ({
-            id,
-            data: () => data,
-          }));
-          return { docs, size: docs.length };
-        }
-        if (name === "glmGateways") {
-          const docs = Object.entries(store.glmGateways).map(([id, data]) => ({
-            id,
-            data: () => data,
-          }));
-          return { docs, size: docs.length };
-        }
-        return { docs: [], size: 0 };
-      },
-    }),
-    collectionGroup: (name: string) => makeQuery(name, store),
-    getAll: async (...refs: Array<{ get: () => Promise<unknown> }>) => Promise.all(refs.map((ref) => ref.get())),
-  };
-}
-
 function setOperation(store: FakeStore, id: string, data: Record<string, unknown>): void {
   const index = store.glmOperations.findIndex((operation) => operation.id === id);
   if (index === -1) store.glmOperations.push({ id, data });
@@ -600,13 +295,6 @@ function fakeStoreDocuments(store: FakeStore): FixtureDocuments {
     },
     group: (collectionId) => other.group(collectionId),
   };
-}
-
-function productAdminDeps(
-  store: FakeStore,
-  deps: Parameters<NonNullable<HttpServerDeps["addProductAdminRoutes"]>>[1],
-) {
-  return { ...deps, db: buildDb(store) as unknown as Firestore, FieldValue };
 }
 
 function buildDeps(
@@ -1243,29 +931,23 @@ describe("createHttpServer — admin gateway routes", () => {
     expect(res.status).toBe(404);
   });
 
-  it("changes a plan through the product's plan route only for an admin, with an audit row", async () => {
-    store.users.u1 = { email: "u1@octogee.com", selectedTier: "free" };
-    const app = createHttpServer(buildDeps(store, {
-      addProductAdminRoutes: (router, deps) => addAdminUserPlanRoutes(router, productAdminDeps(store, deps)),
-    }));
+  it("hands a product admin route the verified admin and the platform store, and only for an admin", async () => {
+    const reached = vi.fn();
+    const deps = buildDeps(store, {
+      addProductAdminRoutes: (router, routeDeps) => {
+        router.post("/users/:uid/ops", (req, res) => {
+          reached({ adminUid: req.uid, adminEmail: req.user?.email ?? null, store: routeDeps.store });
+          res.json({ ok: true });
+        });
+      },
+    });
+    const app = createHttpServer(deps);
 
-    const refused = await request(app).post("/api/admin/users/u1/ops").set("Authorization", "Bearer user-token").send({ action: "setTier", value: "pro" });
-    expect(refused.status).toBe(403);
-    expect(store.users.u1).toEqual({ email: "u1@octogee.com", selectedTier: "free" });
+    await request(app).post("/api/admin/users/u1/ops").set("Authorization", "Bearer user-token").expect(403);
+    expect(reached).not.toHaveBeenCalled();
 
-    const set = await request(app).post("/api/admin/users/u1/ops").set("Authorization", "Bearer admin-token").send({ action: "setTier", value: "pro" });
-    expect(set.status).toBe(200);
-    expect(set.body).toEqual({ success: true, action: "setTier", field: "selectedTier", before: "free", after: "pro" });
-    expect(store.users.u1).toMatchObject({ selectedTier: "pro", tier: "pro" });
-    expect(store.adminActions.u1).toEqual([{
-      at: FieldValue.serverTimestamp(),
-      adminUid: "admin-uid",
-      adminEmail: "admin@octogee.com",
-      action: "setTier",
-      field: "selectedTier",
-      before: "free",
-      after: "pro",
-    }]);
+    await request(app).post("/api/admin/users/u1/ops").set("Authorization", "Bearer admin-token").expect(200);
+    expect(reached).toHaveBeenCalledExactlyOnceWith({ adminUid: "admin-uid", adminEmail: "admin@octogee.com", store: deps.store });
   });
 
   it("serves product admin routes only when the product supplies them", async () => {
@@ -1284,24 +966,22 @@ describe("createHttpServer — admin gateway routes", () => {
     expect(supplied.body).toEqual({ ok: true });
   });
 
-  it("serves the lease routes and the idle setting only when the product mounts them, dry runs included", async () => {
-    const admin = (app: ReturnType<typeof createHttpServer>) => ({
-      read: () => request(app).get("/api/admin/platform-runtime-config").set("Authorization", "Bearer admin-token"),
-      plan: () => request(app).patch("/api/admin/platform-runtime-config?dryRun=true")
-        .set("Authorization", "Bearer admin-token").send({ disposableGatewayIdleMs: 60_000 }),
-      request: () => request(app).post("/api/admin/users/u1/activation-lease").set("Authorization", "Bearer admin-token"),
-    });
-    const platformOnly = admin(createHttpServer(buildDeps(store)));
-    const withProduct = admin(createHttpServer(buildDeps(store, {
-      addProductAdminRoutes: (router, deps) => addAdminActivationLeaseRoutes(router, productAdminDeps(store, deps)),
-    })));
+  it("lets a product admin route answer its own dry run ahead of the fleet routes' refusal", async () => {
+    const path = "/api/admin/platform-runtime-config?dryRun=true";
+    const unanswered = await request(createHttpServer(buildDeps(store)))
+      .patch(path).set("Authorization", "Bearer admin-token").send({});
+    expect(unanswered.status).toBe(400);
 
-    expect((await platformOnly.read()).status).toBe(404);
-    expect((await platformOnly.request()).status).toBe(404);
-    expect((await withProduct.read()).body).toEqual({ disposableGatewayIdleMs: expect.any(Number) });
-    const planned = await withProduct.plan();
-    expect(planned.status).toBe(200);
-    expect(planned.body).toMatchObject({ dryRun: true, plans: [{ what: "set platform gateway idle return duration" }] });
+    const app = createHttpServer(buildDeps(store, {
+      addProductAdminRoutes: (router) => {
+        router.patch("/platform-runtime-config", admitAdminDryRunMarker, (req, res) => {
+          res.json({ dryRun: isAdminDryRun(req) });
+        });
+      },
+    }));
+    const answered = await request(app).patch(path).set("Authorization", "Bearer admin-token").send({});
+    expect(answered.status).toBe(200);
+    expect(answered.body).toEqual({ dryRun: true });
   });
 
   it("answers a failed admin route with a JSON error and logs the stack instead of returning it", async () => {

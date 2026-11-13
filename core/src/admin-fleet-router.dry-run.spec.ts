@@ -16,7 +16,7 @@ import {
   sourceRecoveryFleet,
   type ChangingRequest,
   type Seed,
-} from "./__tests__/fixtures/admin-dry-run-app.js";
+} from "./testing/admin-dry-run-app.js";
 import { FIXTURE_SIZING_PROFILES } from "./testing/journal-store.js";
 
 function unisolatedUserFleet(): Seed {

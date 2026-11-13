@@ -18,7 +18,7 @@ import {
   isolatedGatewayRoot,
   mkAdminFleetRouteApp,
   runtimeDoc,
-} from "./__tests__/fixtures/admin-fleet-route-app.js";
+} from "./testing/admin-fleet-route-app.js";
 import {
   createJournalFixtureStore,
   journalRowsAtPaths,

@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
 import {
   buildBrokeredLifecycleAdapter,
@@ -46,6 +46,10 @@ import { gatewayScopedJobId, signFleetRequest } from "../lib/fleet-signature.js"
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 import type { Request, Response } from "express";
 import { disableSystemConfigWatch, isSystemConfigWatchDisabled } from "../lib/system-config-watch-state.js";
+import { octogeeUserEntitlements } from "@octogee/product-shared/types/octogee-entitlements";
+import { installUserEntitlements } from "../../shared/types/user-entitlements.js";
+
+beforeAll(() => installUserEntitlements(octogeeUserEntitlements));
 
 describe("migration manifest export runtime wait", () => {
   afterEach(() => vi.useRealTimers());

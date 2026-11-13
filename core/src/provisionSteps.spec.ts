@@ -33,21 +33,6 @@ describe("provisioned user state", () => {
     expect(buildProvisionedUserPatch(ctx, { "mattermost.userId": "" })).not.toHaveProperty("mattermostUserId");
   });
 
-  it("keeps the product's provisioned fields and the derived Mattermost fields on the product document, without the platform user id", () => {
-    expect(buildUserProductFields(ctx, { "mattermost.userId": "mm-1", "mattermost.teamId": "team-1", other: 1 })).toEqual({
-      tier: "trial",
-      "mattermost.teamId": "team-1",
-    });
-  });
-
-  it("stamps what the product resolver says a provisioned account carries, for an account that names nothing", () => {
-    const unstamped = buildProvisioningContext("uid-2", { username: "newsignup" });
-    const product = userEntitlements();
-
-    expect(unstamped.contextTemplateKey).toBe(product.seedContextTemplateKey({}));
-    expect(buildUserProductFields(unstamped, {})).toEqual(product.productProjection?.provisionedUser({}));
-  });
-
   it("names no plan and stamps no product field when no product is installed", () => {
     const product = userEntitlements();
     installUserEntitlements(staticUserEntitlements);
