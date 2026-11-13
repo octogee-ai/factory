@@ -172,7 +172,9 @@ describe("giving a user an isolated gateway", () => {
 
     const res = await give(h, { sizingProfile: "pod" }).expect(202);
 
-    expect(h.records.get(`gateways/${res.body.gatewayId}`)).toMatchObject({ gatewayClass: "builder", sizingTier: "s", ownerUid: UID });
+    expect(h.records.get(`gateways/${res.body.gatewayId}`)).toMatchObject({
+      gatewayClass: "builder", sizingTier: "s", ownerUid: UID, builderAccess: { controlIdentity: "per-user" },
+    });
     expect(h.records.get(`${GLM_OPERATIONS_COLLECTION}/${res.body.operationId}`)).toMatchObject({ kind: "migrate-user", status: "pending" });
   });
 
