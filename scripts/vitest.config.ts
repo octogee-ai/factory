@@ -1,4 +1,5 @@
 import { defineConfig, configDefaults } from "vitest/config";
+import { existsSync } from "node:fs";
 import path from "node:path";
 
 const LINUX_HOST_SPECS = [
@@ -13,6 +14,33 @@ const LINUX_HOST_SPECS = [
   "__tests__/vm-gateway-agent/home-tool-storage-archive.spec.ts",
 ];
 
+const PRODUCT_CHECKOUT_SPECS = [
+  "__tests__/ci-build-lock.spec.ts",
+  "__tests__/ci-desktop-build.spec.ts",
+  "__tests__/ci-image-audit.spec.ts",
+  "__tests__/ci-install-tools.spec.ts",
+  "__tests__/ci-release-source.spec.ts",
+  "__tests__/ci-working-tree-scan.spec.ts",
+  "__tests__/deploy-workflow-log-level.spec.ts",
+  "__tests__/deployment-target-contract.spec.ts",
+  "__tests__/desktop-image-build.spec.ts",
+  "__tests__/directory-dependency-contract.spec.ts",
+  "__tests__/firebase-deploy-hosting.spec.ts",
+  "__tests__/image-fingerprint-reuse.spec.ts",
+  "__tests__/mattermost-capability-artifact.spec.ts",
+  "__tests__/optional-desktop-image-workflow.spec.ts",
+  "__tests__/platform-boundary.spec.ts",
+  "__tests__/release-digest-manifest-contract.spec.ts",
+  "__tests__/release-digest-manifest.spec.ts",
+  "__tests__/release-digest-tag-lookup.spec.ts",
+  "__tests__/scope-resolve.spec.ts",
+  "__tests__/setup-secrets-env-loader.spec.ts",
+  "__tests__/source-checkout-workflows.spec.ts",
+  "__tests__/vite-third-party-licenses.spec.ts",
+];
+
+const insideProductCheckout = existsSync(path.resolve(__dirname, "../../product"));
+
 export default defineConfig({
   resolve: {
     alias: {
@@ -25,6 +53,7 @@ export default defineConfig({
       ...configDefaults.exclude,
       "**/*.emulator.spec.ts",
       ...(process.platform === "linux" ? [] : LINUX_HOST_SPECS),
+      ...(insideProductCheckout ? [] : PRODUCT_CHECKOUT_SPECS),
     ],
     setupFiles: ["./test-setup/deployment-targets.ts", "./test-setup/user-entitlements.ts", "./test-setup/loopback-listen.ts"],
     // Operator-tooling specs spawn real subprocesses (kubectl shims, tsx

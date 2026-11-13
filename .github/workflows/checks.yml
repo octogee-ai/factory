@@ -24,25 +24,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
-        with:
-          node-version: 24.22.1
-          cache: npm
-          cache-dependency-path: package-lock.json
-      - run: npm ci --no-audit --no-fund
-      - run: npm audit --audit-level=moderate
-      - run: npm run lint
-
-  checks:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: scripts
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
       - name: Review dependency changes
         if: github.event_name == 'pull_request'
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294
@@ -52,9 +33,114 @@ jobs:
         with:
           node-version: 24.22.1
           cache: npm
-          cache-dependency-path: scripts/package-lock.json
-      - run: npm ci
+          cache-dependency-path: package-lock.json
+      - run: npm ci --no-audit --no-fund
       - run: npm audit --audit-level=moderate
-      - run: npx tsc --noEmit
-      - run: npx vitest run __tests__/ci-checks.spec.ts __tests__/deploy/ __tests__/ci-cloud-build.spec.ts __tests__/kind-install.spec.ts __tests__/openclaw-browser-resources-provenance.spec.ts
-      - run: npm run gate
+      - run: npm run lint
+
+  packages:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: scripts
+            installs: scripts
+            gateway-npm: true
+            helm: true
+            run: |
+              cd scripts
+              npm audit --audit-level=moderate
+              npx tsc --noEmit
+              npm test
+              npm run gate
+          - name: core
+            installs: core
+            postgres: true
+            run: |
+              cd core
+              npm run typecheck && npm run build && node ../scripts/ops/verify-committed-dist.mjs
+              npm test
+              node ../scripts/ci/core-postgres.mjs
+          - name: gateway-edge
+            installs: shared gateway-edge
+            run: |
+              cd gateway-edge
+              npm run typecheck
+              npm test
+          - name: octogee-api
+            installs: gateway-edge shared octogee-api
+            gateway-npm: true
+            run: |
+              cd octogee-api
+              npm run typecheck
+              npm test
+          - name: tests
+            installs: scripts shared glm-controller tests
+            helm: true
+            run: |
+              cd tests
+              npm run typecheck
+              npm test
+          - name: libraries
+            installs: shared test-helpers scripts glm-controller infra/gateway/extensions/platform/octogee-access-tools infra/gateway/extensions/platform/octogee-broker-tools
+            run: |
+              for package in shared test-helpers; do
+                (cd "$package" && npm run typecheck && npm run build && node ../scripts/ops/verify-committed-dist.mjs && npm test)
+              done
+              (cd glm-controller && npm run typecheck && npm test)
+              (cd infra/gateway/extensions/platform/octogee-access-tools && npm test)
+              (cd infra/gateway/extensions/platform/octogee-broker-tools && npm test)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+          cache: npm
+          cache-dependency-path: "**/package-lock.json"
+      - name: Use the gateway image's npm
+        if: matrix.gateway-npm
+        run: npm install --global "npm@$(sed -n 's/^ARG NPM_VERSION=//p' infra/gateway/Dockerfile.base)" --no-audit --no-fund
+      - name: Install Helm 4.3.1
+        if: matrix.helm
+        run: |
+          curl -fsSL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/helm.tar.gz" https://get.helm.sh/helm-v4.3.1-linux-amd64.tar.gz
+          echo "0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b  $RUNNER_TEMP/helm.tar.gz" | sha256sum -c -
+          sudo tar -xzf "$RUNNER_TEMP/helm.tar.gz" -C /usr/local/bin --strip-components=1 linux-amd64/helm
+          helm version --short
+      - name: Install PostgreSQL 16 with pgvector 0.8.7
+        if: matrix.postgres
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL --retry 5 --retry-all-errors -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          . /etc/os-release
+          printf '%s\n' 'Types: deb' 'URIs: https://apt.postgresql.org/pub/repos/apt' "Suites: ${VERSION_CODENAME}-pgdg" \
+            "Architectures: $(dpkg --print-architecture)" 'Components: main' \
+            'Signed-By: /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc' | sudo tee /etc/apt/sources.list.d/pgdg.sources
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y --no-install-recommends postgresql-16 'postgresql-16-pgvector=0.8.7-*'
+      - name: Install dependencies
+        env:
+          INSTALLS: ${{ matrix.installs }}
+        run: |
+          for directory in $INSTALLS; do
+            npm ci --prefix "$directory" --no-audit --no-fund
+          done
+      - name: Typecheck and test
+        run: ${{ matrix.run }}
+
+  checks:
+    name: checks
+    if: always()
+    needs: [lint, packages]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - env:
+          LINT: ${{ needs.lint.result }}
+          PACKAGES: ${{ needs.packages.result }}
+        run: test "$LINT" = success && test "$PACKAGES" = success
