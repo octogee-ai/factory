@@ -192,7 +192,7 @@ the new build twice. It checks that:
 
 - the setup rows survive
 - `workspace_setup_state.bootstrap_deferred` is a nullable `bigint` with no default
-- the seal changes only when that column was missing, and not on the second write
+- the seal changes when the column was missing or the schema version advanced, and stays stable on the second write
 
 Its `pin_roll_*` schemas are dropped afterwards.
 
@@ -202,16 +202,32 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../../docs/handbook/21-deploy-and-cicd.md).
 
-## Current overlay for the November 11 final Gateway recut
+## Current overlay for the November 13 Gateway refresh
 
-OpenClaw main `eae3667ebf9f66217c44f6318a73188defd003b8` was frozen at fetch time for independent
-qualification. The clean overlay is `92373b3ca5fdcd653840df733dbf3d7759ee504c` on
-`ceckert/openclaw:codex/gateway-refresh-20261111-final`, two commits after `65c8c8aa`.
+OpenClaw main `f52d9254a99cd061f19f24459fa48fd5704e8cc5` was frozen at fetch time
+for independent qualification. The overlay is
+`d7d29b20f700ba1aea25faa34d427d9e5203533c` on
+`ceckert/openclaw:codex/gateway-refresh-20261113`.
 
-The frozen tip’s [push CI](https://github.com/openclaw/openclaw/actions/runs/43049595781) was cancelled before GitHub
-recorded any jobs. The latest successful [scheduled full CI](https://github.com/openclaw/openclaw/actions/runs/42494775876)
-was on `ee2d00b13f786f568baa4c4c33376767e5c6f666`, with 150 passing and 11 skipped jobs.
-The scheduled run qualifies its recorded SHA.
+The frozen tip’s [push CI](https://github.com/openclaw/openclaw/actions/runs/43426134236)
+passed `security-fast` and skipped 42 jobs, including the build, native test,
+Control UI, and PostgreSQL conformance lanes. The latest successful
+[scheduled full CI](https://github.com/openclaw/openclaw/actions/runs/43129347832)
+ran on `cda0b61ac4d23fb0a5fa5530e37f9e74ce3face5` with 151 passing jobs. Its 11
+skips were Control UI i18n, check planning, shared SDK declarations, Node 24
+compatibility, Android and iOS screenshots and release E2E, iOS screenshot
+evidence, PR failure reporting, and release child evidence sealing.
+
+The refresh keeps native agent config publication authority from
+[`73f9a890441`](https://github.com/openclaw/openclaw/commit/73f9a89044119763b0576004d8009b1428b58d28)
+through the overlay’s retained-store creation claim. Native
+[#197856](https://github.com/openclaw/openclaw/pull/197856) supplies steering
+refusal reasons, replacing the overlay’s Boolean probe. Channel membership
+continues to check the session’s recorded channel provenance through the
+native sharing authority. Native
+[#198206](https://github.com/openclaw/openclaw/pull/198206) owns Mattermost
+preview placement. The following sections describe the retained boundaries and
+their prior evidence where indicated.
 
 Native [#197230](https://github.com/openclaw/openclaw/pull/197230) retires the
 Memory shadow database’s admission descriptor before deleting the completed
@@ -339,38 +355,24 @@ PostgreSQL state stores created by the `e9c9cd30` pin lack the column. Pins
 this as [#196966](https://github.com/openclaw/openclaw/issues/196966). The
 refused opens roll back, leaving those stores unchanged.
 
-The overlay keeps shared state at schema 39. A writable admission verifies the
-store against the exact predecessor DDL, adds the generated nullable `bigint`
-column and reseals the store, all in one transaction. Inspection and update
-preflight accept either exact shape without writing. These are still refused:
-
-- a column added outside OpenClaw
-- an `integer` column
-- any other difference
-
-Stores created by `74906570` or later already have the column and are unchanged.
-
-**One-way door.** After its first writable open on this pin, a store can no longer
-be opened by `e9c9cd30` or any other build before #196392. Those builds already
-refuse stores created fresh by `65c8c8aa`, in the same way:
-
-- **Shared-state commands** refuse it as schema drift.
-- **Gateway and `setup`** stop earlier, because the config was last written by
-  2026.11.3.
-
-The refusal is clean: it writes nothing, and this pin opens the store again
-afterwards. After the ship, an image rollback is safe only to a build pinned at
-`65c8c8aa` or later. A store returns to an earlier build only from a PostgreSQL
-backup taken before the upgrade.
-
 Native
-[#197010](https://github.com/openclaw/openclaw/pull/197010) proposes a schema-40
-step that accepts both schema-39 shapes, so completed stores stay on its upgrade
-path. The overlay patch is proposed upstream as
-[#197425](https://github.com/openclaw/openclaw/pull/197425). The OpenClaw regression is
-`src/state/openclaw-state-db-bootstrap-deferral.postgres.test.ts`. Against
-the installed pinned roots, `tests/specs/openclaw-state-pin-roll.spec.ts`
-reproduces the prelaunch refusal from an `e9c9cd30` store.
+[`9ecae401581`](https://github.com/openclaw/openclaw/commit/9ecae401581)
+advances state to schema 40 for worker provisioning. Its source schema still
+expects the deferral column. The overlay verifies the exact pre-deferral
+schema 39 predecessor and adds the generated nullable `bigint` column during
+writable admission. The native migration then publishes schema 40. Inspection
+accepts either exact predecessor without writing. It still refuses a column
+added outside OpenClaw, an `integer` column, and unrelated drift.
+
+The schema 40 write requires a pre-upgrade database backup for rollback to a
+schema 39 image. The source regression covers retained setup rows, read-only
+inspection and drift refusal. The installed pin-roll control verifies the oldest
+retained package against the candidate, including idempotent seal publication.
+
+[#197425](https://github.com/openclaw/openclaw/pull/197425) and
+[#197010](https://github.com/openclaw/openclaw/pull/197010) remain open at this
+refresh. Retire the overlay when the selected source can upgrade both exact
+schema 39 shapes through its native migration and the installed pin-roll passes.
 
 ### Native adoption and retained product boundaries
 
@@ -565,6 +567,35 @@ request while reusing the authenticated token. This removes suite-long stale
 routing; it does not eliminate a move between a lookup and its HTTP request.
 Native Proactive check jobs with empty scratch are preserved as requested.
 
+### Default config writers
+
+Fresh shared and isolated gateway templates record the native migration decisions for
+model policy, utility models, Skill Library and webhook listeners. The isolated
+Doctor comparison uses native update-repair mode, which preserves optional skill
+choices when a test environment lacks their prerequisites.
+The isolated gateway writers remove the channel-level Mattermost endpoint and
+fill missing account endpoints with the platform URL. Explicit account endpoints
+are preserved. A root bot token keeps the platform URL and empty account maps
+stay empty.
+
+### Retained PostgreSQL transcript readers
+
+A running transcript worker can retain a reader while the agent store writer
+publishes a newer admission revision. Opening its repeatable-read transaction
+first left the stale facts unusable and raised `Agent database has no PostgreSQL
+schema admission` before the turn reached the model. The native PostgreSQL
+snapshot helpers refresh admission while the connection is idle, then open the
+same read-only transaction and enforce the existing revision and identity checks.
+A two-thread PostgreSQL regression failed with the exact error before the fix and
+passed afterward, alongside the agent store, history snapshot, and read-facts tests.
+Remove the overlay when native has equivalent pre-transaction admission and the
+retained-worker regression passes. Open PRs
+[#190129](https://github.com/openclaw/openclaw/pull/190129),
+[#193875](https://github.com/openclaw/openclaw/pull/193875),
+[#197425](https://github.com/openclaw/openclaw/pull/197425), and
+[#197010](https://github.com/openclaw/openclaw/pull/197010) address pool sizing,
+idle connections, and separate migration behavior.
+
 ### Detach and activation-abort integration
 
 Read-only deletion authority checks avoid write transactions while preserving live
@@ -637,14 +668,19 @@ Published with generation-zero preconditions and verified by exact-generation SH
 
 | Object | Generation | SHA-256 |
 | --- | --- | --- |
-| `openclaw-fork-86b84f63.tgz` | `1794449351942265` | `86b84f63f46bc112537ef1be82e4838a08f9d644bf08acdd1bc20d1fdc92e08c` |
-| `openclaw-mattermost-d1e21c56.tgz` | `1794412529249670` | `d1e21c5636f6a4d4147a72d782a92f37576924326f6b97ccdc12231adab731e8` |
+| `openclaw-fork-9c0b7a57.tgz` | `1794578800761521` | `9c0b7a570a0665dd8523c36ddd70a196705a6cdbee00baf824b37e165413185a` |
+| `openclaw-mattermost-66597375.tgz` | `1794578813588338` | `665973752c7b1f71d70cd9bf97e72f3f3184b2f8d864a724c499fc2cd1b25486` |
+
+The GitHub release mirrors these exact objects under
+[`gateway-d7d29b20`](https://github.com/ceckert/openclaw/releases/tag/gateway-d7d29b20).
 
 ### Upstream contributions
 
-The November 11 review pass covered ten open OpenClaw contributions. The Talk
-fixes (#189036 and #189418) and agent-removal latency change (#191463) remain
-useful on main. #193596 is ready for review and #193875 includes a CI lint fix.
+The November 13 review found no open overlay contribution fully superseded by
+the merged steering, Mattermost preview, or Memory shadow cleanup changes.
+The Talk fixes (#189036 and #189418) still cover worker-backed consult control
+and owner steering. The agent-removal latency change (#191463) still covers
+its own deletion-authority path. #193596 is ready for review and #193875 includes a CI lint fix.
 #186891 and #186893 were refreshed and have disposable Gateway and Mattermost
 evidence. #193636 remains a draft pending the public CLI option decision.
 #167431 needs maintainer security approval and a reload-contract decision.

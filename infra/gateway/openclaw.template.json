@@ -1,7 +1,13 @@
 {
   "meta": {
     "lastTouchedVersion": "2026.4.14",
-    "migrations": { "skillWorkshopPlugin": true }
+    "migrations": {
+      "modelPolicyAllowlist": true,
+      "skillLibraryToolSplit": true,
+      "skillWorkshopPlugin": true,
+      "utilityModelSeparation": true,
+      "webhookListeners": true
+    }
   },
   "database": {
     "engine": "postgres",
@@ -245,7 +251,6 @@
         "progress": { "toolProgress": true }
       },
       "enabled": true,
-      "baseUrl": "${MM_URL}",
       "chatmode": "onmessage",
       "requireMention": false,
       "actions": {

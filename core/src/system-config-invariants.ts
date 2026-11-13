@@ -1,6 +1,7 @@
 import { parseAgentId, type ParsedAgentId } from "@octogee/shared/types/identity";
 import { isDeepStrictEqual } from "node:util";
 import {
+  PLATFORM_MATTERMOST_BASE_URL,
   platformAgentMattermostAccountsProjected,
   projectPlatformAgentMattermostAccounts,
 } from "@octogee/shared/types/openclaw-mattermost-accounts";
@@ -509,7 +510,7 @@ export function platformInvariantTable(
       },
     },
     { kind: "exact", path: "channels.mattermost.enabled", value: true },
-    { kind: "exact", path: "channels.mattermost.baseUrl", value: isolated ? "${MM_URL}" : ABSENT, project: isolated },
+    ...(!isolated ? [{ kind: "exact" as const, path: "channels.mattermost.baseUrl", value: ABSENT }] : []),
     { kind: "exact", path: "channels.mattermost.network.dangerouslyAllowPrivateNetwork", value: true },
     {
       kind: "exact",
@@ -772,7 +773,28 @@ function mattermostAccounts(config: JsonObject): JsonObject | null | typeof ABSE
   return value === ABSENT ? ABSENT : asObject(value);
 }
 
+function mattermostRootEndpointSatisfied(mattermost: JsonObject | null): boolean {
+  if (!mattermost || !Object.hasOwn(mattermost, "baseUrl")) return true;
+  return Object.hasOwn(mattermost, "botToken") && mattermost.baseUrl === PLATFORM_MATTERMOST_BASE_URL;
+}
+
+export function projectIsolatedMattermostRootEndpoint(mattermost: JsonObject): boolean {
+  if (mattermostRootEndpointSatisfied(mattermost)) return false;
+  if (Object.hasOwn(mattermost, "botToken")) {
+    mattermost.baseUrl = PLATFORM_MATTERMOST_BASE_URL;
+    return true;
+  }
+  for (const value of Object.values(asObject(mattermost.accounts) ?? {})) {
+    const account = asObject(value);
+    if (account && !Object.hasOwn(account, "baseUrl")) account.baseUrl = PLATFORM_MATTERMOST_BASE_URL;
+  }
+  delete mattermost.baseUrl;
+  return true;
+}
+
 function accountProjectionSatisfied(config: JsonObject, platformOwned: boolean): boolean {
+  const mattermost = asObject(readPath(config, "channels.mattermost"));
+  if (!platformOwned && !mattermostRootEndpointSatisfied(mattermost)) return false;
   const accounts = mattermostAccounts(config);
   if (accounts === ABSENT) return true;
   if (!accounts) return false;
@@ -780,6 +802,8 @@ function accountProjectionSatisfied(config: JsonObject, platformOwned: boolean):
 }
 
 function reconcileMattermostAccounts(config: JsonObject, platformOwned: boolean): void {
+  const mattermost = asObject(readPath(config, "channels.mattermost"));
+  if (!platformOwned && mattermost) projectIsolatedMattermostRootEndpoint(mattermost);
   const current = mattermostAccounts(config);
   if (current === ABSENT) return;
   if (!current) {

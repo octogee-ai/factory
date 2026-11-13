@@ -220,6 +220,35 @@ function options(argv) {
   }));
 }
 
+function publishedIndex(reference) {
+  // eslint-disable-next-line sonarjs/no-os-command-from-path -- docker is the operator's own tool.
+  const result = spawnSync("docker", ["buildx", "imagetools", "inspect", reference, "--raw"], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
+  if (result.status !== 0) throw new Error(`No published image at ${reference}`);
+  return JSON.parse(result.stdout);
+}
+
+function platformDigest(index, platform, reference) {
+  const [os, architecture] = platform.split("/");
+  const manifest = (index.manifests ?? []).find(entry => entry.platform?.os === os && entry.platform?.architecture === architecture);
+  if (!/^sha256:[a-f0-9]{64}$/.test(manifest?.digest ?? "")) throw new Error(`${reference} has no ${platform} image`);
+  return manifest.digest;
+}
+
+export function copyPublished({ registry, sha, platform, tagPrefix, images = PLATFORM_IMAGES }) {
+  checkInputs({ registry, sha, platform });
+  if (!tagPrefix) throw new Error("A tag prefix is required to copy published images");
+  const unknown = images.filter(image => !PLATFORM_IMAGES.includes(image));
+  if (unknown.length) throw new Error(`Unknown platform image: ${unknown.join(", ")}`);
+  const copied = {};
+  for (const name of images) {
+    const reference = `${registry}/${name}:${sha}`;
+    const digest = platformDigest(publishedIndex(reference), platform, reference);
+    docker(["buildx", "imagetools", "create", "--prefer-index=false", `--tag=${tagPrefix}${name}:${sha.slice(0, 7)}`, `${registry}/${name}@${digest}`]);
+    copied[name] = digest;
+  }
+  return { platform, images: copied };
+}
+
 const selectedImages = opts => (typeof opts.images === "string" ? { images: opts.images.split(",") } : {});
 
 async function tripwire(opts) {
@@ -256,12 +285,13 @@ const COMMANDS = {
     if (!PLATFORMS.includes(opts.platform)) throw new Error(`Unsupported platform: ${opts.platform}`);
     return { platform: opts.platform, images: digestsFromMetadata(JSON.parse(readFileSync(opts.metadata, "utf8")), selectedImages(opts).images) };
   },
+  copy: opts => copyPublished({ registry: opts.registry, sha: opts.sha, platform: opts.platform, tagPrefix: opts["tag-prefix"], ...selectedImages(opts) }),
   publish,
   tripwire,
 };
 
 async function cli([command, ...rest]) {
-  if (!Object.hasOwn(COMMANDS, command ?? "")) throw new Error("Usage: cloud-build.mjs plan|digests|publish|tripwire [--options]");
+  if (!Object.hasOwn(COMMANDS, command ?? "")) throw new Error("Usage: cloud-build.mjs plan|digests|copy|publish|tripwire [--options]");
   return COMMANDS[command](options(rest));
 }
 

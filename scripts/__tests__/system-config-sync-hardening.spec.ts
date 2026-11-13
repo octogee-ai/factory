@@ -98,7 +98,7 @@ describe("system config sync hardening", () => {
     const h = fixture((config) => {
       const channels = config.channels as Record<string, Record<string, unknown>>;
       const mattermost = channels.mattermost;
-      mattermost.accounts = { default: { baseUrl: mattermost.baseUrl } };
+      mattermost.accounts = { default: { baseUrl: "${MM_URL}" } };
       delete mattermost.baseUrl;
     }, userEnv);
     const configPath = path.join(h.repoDir, "openclaw.json");
@@ -119,10 +119,9 @@ describe("system config sync hardening", () => {
 
     expect(result).toMatchObject({ pushed: true, acceptedCommit: "a".repeat(40) });
     expect(committed).toHaveLength(1);
-    expect(JSON.parse(fs.readFileSync(configPath, "utf8")).channels.mattermost).toMatchObject({
-      baseUrl: "${MM_URL}",
-      accounts: { default: { baseUrl: "${MM_URL}" } },
-    });
+    const mattermost = JSON.parse(fs.readFileSync(configPath, "utf8")).channels.mattermost;
+    expect(mattermost).not.toHaveProperty("baseUrl");
+    expect(mattermost.accounts.default.baseUrl).toBe("${MM_URL}");
   });
 
   it("leaves a config edit that races the projection reconcile for the ordinary candidate path", () => {

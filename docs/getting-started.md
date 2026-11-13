@@ -13,10 +13,10 @@ two installers.
   ingress, a Git host, chat, and one OpenClaw gateway you can talk to. It runs
   on your own machine or on managed cloud services, and the rest of this guide
   covers it.
-- `scripts/ops/kind-install.sh` builds the platform images from your checkout
-  and installs the full platform on a local kind cluster, with the fleet
-  controller, users and shared gateways. See
-  [The full platform on kind](kind.md).
+- `scripts/ops/kind-install.sh` installs the full platform on a local kind
+  cluster, with the fleet controller, users and shared gateways. It copies the
+  platform images this repository publishes, or builds them from your checkout.
+  See [The full platform on kind](kind.md).
 
 ## What you need to sign up for
 
@@ -61,7 +61,15 @@ signs in with your Google account. It needs one more free item in the same
 Google Cloud project: an OAuth client of the type
 **TVs and Limited Input devices**. That odd name is Google's term for sign-in
 from a command line, where `octogee-fleet` prints a code and you approve it in
-a browser.
+a browser. On kind it signs in with a key the installer generates instead, so
+it needs no OAuth client there.
+
+Install it with Go. Go puts it in `$(go env GOPATH)/bin`, usually `~/go/bin`,
+which has to be on your `PATH`:
+
+```bash
+go install github.com/octogee-ai/octogee-fleet@latest
+```
 
 ## Install
 

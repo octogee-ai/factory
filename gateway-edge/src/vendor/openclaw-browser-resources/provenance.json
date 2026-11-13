@@ -1,12 +1,11 @@
 {
-  "source": "92373b3ca5fdcd653840df733dbf3d7759ee504c",
+  "source": "d7d29b20f700ba1aea25faa34d427d9e5203533c",
   "inputs": {
-    "sha256": "3b17435d39448defa256e51d029c5c2d0cb07483465256896223e5a1e03fa128",
+    "sha256": "685fb8675f21756da84a4b29d94870351839a4c60ee4816c7e17e6d237c1c80a",
     "files": [
       "gateway-edge/openclaw-browser-resources/build.mjs",
       "gateway-edge/openclaw-browser-resources/entry.ts",
       "gateway-edge/openclaw-browser-resources/i18n.ts",
-      "gateway-edge/openclaw-browser-resources/media.ts",
       "gateway-edge/openclaw-browser-resources/provenance.mjs"
     ]
   },
