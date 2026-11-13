@@ -47,7 +47,11 @@ Actions weekly. Pull request dependency review rejects newly introduced
 moderate, high, or critical known vulnerabilities. OSV audits the maintained
 npm lockfiles weekly and reports dependency findings on relevant pull requests.
 Trivy reports vulnerabilities by published GHCR digest on both architectures
-and rescans the latest published main build weekly. It also checks Dockerfiles,
-Terraform, and rendered Helm manifests. zizmor checks GitHub Actions
+and rescans the latest published main build weekly. The Gateway scan publishes
+raw Trivy JSON and CycloneDX alongside a separate Trivy JSON report that applies
+[OpenVEX for the verified Debian backports](scripts/ci/vex/gateway-debian-backports.openvex.json).
+Each `fixed` statement applies to one CVE and the listed rebuilt package version
+and architectures. Review the statements when either package is replaced.
+Trivy also checks Dockerfiles, Terraform, and rendered Helm manifests. zizmor checks GitHub Actions
 configuration, and OpenSSF Scorecard runs weekly on the default branch. These checks complement review;
 a passing scan is not a guarantee that the code is secure.

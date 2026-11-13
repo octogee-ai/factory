@@ -15,17 +15,23 @@ let directory: string;
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), "octogee-scan-images-"));
   writeFileSync(join(directory, "trivy"), `#!/usr/bin/env bash
-    echo "$*" >> "$CALLS"
+    args="$*"
+    echo "$args" >> "$CALLS"
     while [[ "$1" != --output ]]; do shift; done
     out="$2"
     reference="\${!#}"
     if [[ -n "$FAIL_IMAGE" && "$reference" == */"$FAIL_IMAGE"@* ]]; then exit 1; fi
-    printf '%s\\n' '{"Results":[{"Vulnerabilities":[{"Severity":"CRITICAL"}]}]}' > "$out"
+    if [[ " $args " == *' --vex '* ]]; then
+      if [[ "$FAIL_VEX" == 1 ]]; then exit 1; fi
+      printf '%s\\n' '{"Results":[{"Vulnerabilities":[]}]}' > "$out"
+    else
+      printf '%s\\n' '{"Results":[{"Vulnerabilities":[{"Severity":"CRITICAL"}]}]}' > "$out"
+    fi
   `, { mode: 0o755 });
 });
 afterEach(() => rmSync(directory, { recursive: true, force: true }));
 
-function run({ manifestSha = sha, include = images, failImage = "" } = {}) {
+function run({ manifestSha = sha, include = images, failImage = "", failVex = false } = {}) {
   const manifest = join(directory, "manifest.json");
   writeFileSync(manifest, JSON.stringify({
     registry, sha: manifestSha,
@@ -34,7 +40,7 @@ function run({ manifestSha = sha, include = images, failImage = "" } = {}) {
   return spawnSync("bash", ["scripts/ci/scan-cloud-images.sh", manifest, sha, "linux/arm64", join(directory, "reports")], {
     cwd: root, encoding: "utf8",
     env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, CALLS: join(directory, "calls"),
-      FAIL_IMAGE: failImage, GITHUB_STEP_SUMMARY: join(directory, "summary") },
+      FAIL_IMAGE: failImage, FAIL_VEX: failVex ? "1" : "0", GITHUB_STEP_SUMMARY: join(directory, "summary") },
   });
 }
 
@@ -47,7 +53,14 @@ it("reports findings and produces an SBOM for every exact architecture digest", 
     expect(calls).not.toContain(`${registry}/${name}@${amd}`);
     expect(readFileSync(join(directory, "summary"), "utf8")).toContain(`${name}@${arm}\` | 1 | 0 | 0 | 0 | 0 |`);
   }
-  expect(readdirSync(join(directory, "reports"))).toHaveLength(9);
+  const vexCalls = calls.split("\n").filter(line => line.includes("--vex "));
+  expect(vexCalls).toEqual([
+    expect.stringContaining(`--vex scripts/ci/vex/gateway-debian-backports.openvex.json --show-suppressed --output ${join(directory, "reports", "octogee-gateway.vex.trivy.json")} ${registry}/octogee-gateway@${arm}`),
+  ]);
+  expect(calls).toContain(`convert --format cyclonedx --output ${join(directory, "reports", "octogee-gateway.cdx.json")} ${join(directory, "reports", "octogee-gateway.trivy.json")}`);
+  const summary = readFileSync(join(directory, "summary"), "utf8");
+  expect(summary).toContain(`octogee-gateway@${arm}\` with VEX | 0 | 0 | 0 | 0 | 0 |`);
+  expect(readdirSync(join(directory, "reports"))).toHaveLength(10);
 });
 
 it.each([
@@ -67,4 +80,14 @@ it("continues scanning other images and fails the job after a Trivy error", () =
   const reports = readdirSync(join(directory, "reports"));
   expect(reports).toContain("octogee-gateway.cdx.json");
   expect(reports).not.toContain("octogee-api.cdx.json");
+});
+
+it("preserves the raw Gateway reports when the VEX scan fails", () => {
+  const result = run({ failVex: true });
+  expect(result.status).toBe(1);
+  expect(result.stdout).toContain("could not finish the VEX report");
+  const reports = readdirSync(join(directory, "reports"));
+  expect(reports).toContain("octogee-gateway.trivy.json");
+  expect(reports).toContain("octogee-gateway.cdx.json");
+  expect(reports).not.toContain("octogee-gateway.vex.trivy.json");
 });
