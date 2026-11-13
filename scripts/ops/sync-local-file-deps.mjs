@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -26,6 +27,9 @@ const LOCK_METADATA_FIELDS = [
   "libc",
 ];
 export const OVERLAY_DEPENDENCIES = "overlay-dependencies.json";
+export const REGISTRY_DEPENDENCIES = "registry-dependencies";
+const REGISTRY_LOCK_MARKER = ".registry-dependencies-lock";
+const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const SKIP_DIRS = new Set([
   ".git",
   ".claude",
@@ -81,10 +85,81 @@ export function overlayDependencies(packageDir) {
   });
 }
 
-export function stageOverlayDependencies(productRoot) {
+export function stageOverlayDependencies(productRoot, { stdio = "inherit" } = {}) {
   for (const entry of fs.readdirSync(productRoot, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
-    for (const dep of overlayDependencies(path.join(productRoot, entry.name))) packDirectoryPackage(dep);
+    const packageDir = path.join(productRoot, entry.name);
+    for (const dep of overlayDependencies(packageDir)) packDirectoryPackage(dep);
+    const registry = registryDependencies(packageDir);
+    if (registry) installRegistryDependencies(registry, stdio);
+  }
+}
+
+export function registryDependencies(packageDir) {
+  const projectDir = path.join(packageDir, REGISTRY_DEPENDENCIES);
+  const manifestPath = path.join(projectDir, "package.json");
+  if (!fs.existsSync(manifestPath)) return null;
+  const declared = Object.entries(readJson(manifestPath).dependencies ?? {});
+  for (const [packageName, spec] of declared) {
+    if (typeof spec !== "string" || !EXACT_VERSION.test(spec)) {
+      throw new Error(`${manifestPath}: ${packageName} must pin an exact version, not ${spec}`);
+    }
+  }
+  const lockPath = path.join(projectDir, "package-lock.json");
+  if (!fs.existsSync(lockPath)) throw new Error(`${projectDir} must lock its dependencies in package-lock.json`);
+  const lockSource = fs.readFileSync(lockPath, "utf8");
+  const locked = JSON.parse(lockSource).packages ?? {};
+  for (const [packageName] of declared) {
+    if (!locked[`node_modules/${packageName}`]) throw new Error(`${lockPath} does not lock ${packageName}`);
+  }
+  return {
+    consumerDir: packageDir,
+    projectDir,
+    packageNames: declared.map(([packageName]) => packageName),
+    lockDigest: createHash("sha256").update(lockSource).digest("hex"),
+  };
+}
+
+function registryMarkerPath(consumerDir) {
+  return path.join(consumerDir, "node_modules", REGISTRY_LOCK_MARKER);
+}
+
+function registryDependenciesStale({ consumerDir, packageNames, lockDigest }) {
+  return readFileIfPresent(registryMarkerPath(consumerDir)) !== lockDigest
+    || packageNames.some((packageName) => !fs.existsSync(path.join(installedDirOf({ consumerDir, packageName }), "package.json")));
+}
+
+function installedPackageNames(nodeModulesDir) {
+  return fs.readdirSync(nodeModulesDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+    .flatMap((entry) => (entry.name.startsWith("@")
+      ? fs.readdirSync(path.join(nodeModulesDir, entry.name)).map((name) => `${entry.name}/${name}`)
+      : [entry.name]));
+}
+
+function installRegistryDependencies({ consumerDir, projectDir, packageNames, lockDigest }, stdio) {
+  const installDir = fs.mkdtempSync(path.join(os.tmpdir(), "registry-dependencies-"));
+  try {
+    for (const file of ["package.json", "package-lock.json", ".npmrc"]) {
+      if (fs.existsSync(path.join(projectDir, file))) fs.copyFileSync(path.join(projectDir, file), path.join(installDir, file));
+    }
+    // eslint-disable-next-line sonarjs/no-os-command-from-path -- npm is the toolchain the caller's checks and image builds pin on PATH.
+    execFileSync("npm", ["ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: installDir, stdio });
+    const installed = path.join(installDir, "node_modules");
+    const transitive = installedPackageNames(installed).filter((packageName) => !packageNames.includes(packageName));
+    for (const packageName of packageNames) {
+      const target = installedDirOf({ consumerDir, packageName });
+      fs.rmSync(target, { recursive: true, force: true });
+      fs.cpSync(path.join(installed, ...packageName.split("/")), target, { recursive: true });
+      for (const dependency of transitive) {
+        const nested = path.join(target, "node_modules", ...dependency.split("/"));
+        if (!fs.existsSync(nested)) fs.cpSync(path.join(installed, ...dependency.split("/")), nested, { recursive: true });
+      }
+    }
+    fs.mkdirSync(path.dirname(registryMarkerPath(consumerDir)), { recursive: true });
+    fs.writeFileSync(registryMarkerPath(consumerDir), lockDigest);
+  } finally {
+    fs.rmSync(installDir, { recursive: true, force: true });
   }
 }
 
@@ -177,14 +252,22 @@ export function syncLocalFileDeps({
   const stale = discovered
     .map((dep) => ({ dep, state: inspectLocalFileDep(dep) }))
     .filter(({ state }) => state.staleReasons.length > 0);
+  const registries = (consumerDirs.length > 0 ? consumerDirs : topLevelPackageDirs(rootDir))
+    .map(registryDependencies)
+    .filter(Boolean);
+  const staleRegistries = registries.filter(registryDependenciesStale);
 
   for (const { dep, state } of stale) {
     const label = `${path.relative(rootDir, dep.consumerDir) || "."}:${dep.packageName}`;
     console.error(`[file-deps] ${label} stale (${state.staleReasons.join(", ")})`);
   }
+  for (const registry of staleRegistries) {
+    console.error(`[file-deps] ${path.relative(rootDir, registry.consumerDir) || "."}:${REGISTRY_DEPENDENCIES} stale`);
+  }
 
-  if (stale.length === 0 || check) {
-    return { staleCount: stale.length, syncedConsumers: [] };
+  const staleCount = stale.length + staleRegistries.length;
+  if (staleCount === 0 || check) {
+    return { staleCount, syncedConsumers: [] };
   }
 
   const byConsumer = new Map();
@@ -241,6 +324,12 @@ export function syncLocalFileDeps({
     syncedConsumers.push(consumerDir);
   }
 
+  for (const registry of registries.filter(registryDependenciesStale)) {
+    console.error(`[file-deps] installing ${path.relative(rootDir, registry.consumerDir) || "."}:${REGISTRY_DEPENDENCIES}`);
+    installRegistryDependencies(registry, stdio);
+    if (!syncedConsumers.includes(registry.consumerDir)) syncedConsumers.push(registry.consumerDir);
+  }
+
   const overlays = discovered.filter((dep) => dep.overlay && inspectLocalFileDep(dep).staleReasons.length > 0);
   for (const dep of overlays) {
     console.error(`[file-deps] packing ${path.relative(rootDir, dep.consumerDir) || "."}:${dep.packageName}`);
@@ -251,7 +340,7 @@ export function syncLocalFileDeps({
     if (!syncedConsumers.includes(dep.consumerDir)) syncedConsumers.push(dep.consumerDir);
   }
 
-  return { staleCount: stale.length, syncedConsumers };
+  return { staleCount, syncedConsumers };
 }
 
 function compareLockMetadata({ consumerDir, packageName, sourcePackageJson, spec }) {

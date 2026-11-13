@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -541,5 +542,128 @@ describe("overlay library dependencies", () => {
       .toBe("export const value = 1;\n");
     expect(fs.existsSync(path.join(productRoot, "edge", "node_modules"))).toBe(false);
     expect(fs.existsSync(path.join(productRoot, "core", "node_modules"))).toBe(false);
+  });
+});
+
+interface RegistryTarball {
+  name: string;
+  version: string;
+  resolved: string;
+  integrity: string;
+  dependencies?: Record<string, string>;
+}
+
+function packRegistryTarball(root: string, name: string, version: string, dependencies?: Record<string, string>): RegistryTarball {
+  const sourceDir = path.join(root, "registry-sources", `${name}-${version}`);
+  writeJson(path.join(sourceDir, "package.json"), { name, version, main: "index.js", ...(dependencies ? { dependencies } : {}) });
+  const requires = Object.keys(dependencies ?? {}).map((dependency) => `require(${JSON.stringify(dependency)})`);
+  fs.writeFileSync(path.join(sourceDir, "index.js"), `module.exports = [${JSON.stringify(`${name}@${version}`)}, ${requires.join(", ")}].flat();\n`);
+  const tarballs = path.join(root, "registry");
+  fs.mkdirSync(tarballs, { recursive: true });
+  const file = execFileSync(NPM_BIN, ["pack", "--silent", "--pack-destination", tarballs], { cwd: sourceDir, encoding: "utf8" }).trim();
+  const tarball = path.join(tarballs, file);
+  const integrity = `sha512-${createHash("sha512").update(fs.readFileSync(tarball)).digest("base64")}`;
+  return { name, version, resolved: `file:${tarball}`, integrity, dependencies };
+}
+
+function writeRegistryDependencies(packageDir: string, declared: Record<string, string>, locked: RegistryTarball[]): void {
+  const projectDir = path.join(packageDir, "registry-dependencies");
+  writeJson(path.join(projectDir, "package.json"), { name: "registry-dependencies", version: "1.0.0", private: true, dependencies: declared });
+  writeJson(path.join(projectDir, "package-lock.json"), {
+    name: "registry-dependencies",
+    version: "1.0.0",
+    lockfileVersion: 3,
+    requires: true,
+    packages: {
+      "": { name: "registry-dependencies", version: "1.0.0", dependencies: declared },
+      ...Object.fromEntries(locked.map(({ name, version, resolved, integrity, dependencies }) => [
+        `node_modules/${name}`,
+        { version, resolved, integrity, ...(dependencies ? { dependencies } : {}) },
+      ])),
+    },
+  });
+}
+
+function requireFrom(directory: string, name: string): unknown {
+  return JSON.parse(execFileSync(process.execPath, ["--eval", `console.log(JSON.stringify(require(${JSON.stringify(name)})))`], { cwd: directory, encoding: "utf8" }));
+}
+
+describe("overlay registry dependencies", () => {
+  it("stages each overlay package's locked registry dependencies with their own dependencies nested inside them", () => {
+    const root = fixture();
+    const productRoot = path.join(root, "product");
+    const inner = packRegistryTarball(root, "inner", "2.0.0");
+    const left = packRegistryTarball(root, "left", "1.0.0", { inner: "2.0.0" });
+    writeRegistryDependencies(path.join(productRoot, "edge"), { left: "1.0.0" }, [left, inner]);
+    fs.mkdirSync(path.join(productRoot, "controller", "src"), { recursive: true });
+
+    stageOverlayDependencies(productRoot, { stdio: "ignore" });
+
+    const installed = path.join(productRoot, "edge", "node_modules");
+    expect(readJson(path.join(installed, "left", "package.json")).version).toBe("1.0.0");
+    expect(readJson(path.join(installed, "left", "node_modules", "inner", "package.json")).version).toBe("2.0.0");
+    expect(fs.readdirSync(installed).filter((entry) => !entry.startsWith("."))).toEqual(["left"]);
+    expect(requireFrom(path.join(productRoot, "edge"), "left")).toEqual(["left@1.0.0", "inner@2.0.0"]);
+    expect(fs.existsSync(path.join(productRoot, "controller", "node_modules"))).toBe(false);
+  }, 30_000);
+
+  it("installs an overlaid package's registry dependencies for its test runs and reinstalls them when the lock changes", () => {
+    const root = fixture();
+    const consumerDir = path.join(root, "overlay", "edge");
+    writeJson(path.join(consumerDir, "package.json"), { name: "edge", version: "1.0.0", private: true });
+    writeRegistryDependencies(consumerDir, { left: "1.0.0" }, [packRegistryTarball(root, "left", "1.0.0")]);
+
+    expect(syncLocalFileDeps({ rootDir: root, consumerDirs: [consumerDir], stdio: "ignore" }))
+      .toEqual({ staleCount: 1, syncedConsumers: [consumerDir] });
+    expect(requireFrom(consumerDir, "left")).toEqual(["left@1.0.0"]);
+    expect(syncLocalFileDeps({ rootDir: root, consumerDirs: [consumerDir], stdio: "ignore" }))
+      .toEqual({ staleCount: 0, syncedConsumers: [] });
+
+    writeRegistryDependencies(consumerDir, { left: "1.0.1" }, [packRegistryTarball(root, "left", "1.0.1")]);
+    expect(syncLocalFileDeps({ rootDir: root, consumerDirs: [consumerDir], check: true, stdio: "ignore" }))
+      .toEqual({ staleCount: 1, syncedConsumers: [] });
+    syncLocalFileDeps({ rootDir: root, consumerDirs: [consumerDir], stdio: "ignore" });
+    expect(requireFrom(consumerDir, "left")).toEqual(["left@1.0.1"]);
+  }, 30_000);
+
+  it("reinstalls a registry dependency that a later npm install removed from the package", () => {
+    const root = fixture();
+    const consumerDir = path.join(root, "overlay", "edge");
+    writeJson(path.join(consumerDir, "package.json"), { name: "edge", version: "1.0.0", private: true });
+    writeRegistryDependencies(consumerDir, { left: "1.0.0" }, [packRegistryTarball(root, "left", "1.0.0")]);
+    syncLocalFileDeps({ rootDir: root, consumerDirs: [consumerDir], stdio: "ignore" });
+
+    fs.rmSync(path.join(consumerDir, "node_modules", "left"), { recursive: true });
+
+    expect(syncLocalFileDeps({ rootDir: root, consumerDirs: [consumerDir], stdio: "ignore" }).staleCount).toBe(1);
+    expect(requireFrom(consumerDir, "left")).toEqual(["left@1.0.0"]);
+  }, 30_000);
+
+  it("refuses a registry dependency on a version range", () => {
+    const root = fixture();
+    const productRoot = path.join(root, "product");
+    writeRegistryDependencies(path.join(productRoot, "edge"), { left: "^1.0.0" }, [packRegistryTarball(root, "left", "1.0.0")]);
+
+    expect(() => stageOverlayDependencies(productRoot, { stdio: "ignore" }))
+      .toThrow(/registry-dependencies\/package\.json: left must pin an exact version, not \^1\.0\.0/);
+  });
+
+  it("refuses registry dependencies without a lockfile", () => {
+    const root = fixture();
+    const productRoot = path.join(root, "product");
+    writeRegistryDependencies(path.join(productRoot, "edge"), { left: "1.0.0" }, []);
+    fs.rmSync(path.join(productRoot, "edge", "registry-dependencies", "package-lock.json"));
+
+    expect(() => stageOverlayDependencies(productRoot, { stdio: "ignore" }))
+      .toThrow(/registry-dependencies must lock its dependencies in package-lock\.json/);
+  });
+
+  it("refuses a lockfile that does not lock a declared dependency", () => {
+    const root = fixture();
+    const productRoot = path.join(root, "product");
+    writeRegistryDependencies(path.join(productRoot, "edge"), { left: "1.0.0" }, []);
+
+    expect(() => stageOverlayDependencies(productRoot, { stdio: "ignore" }))
+      .toThrow(/registry-dependencies\/package-lock\.json does not lock left/);
   });
 });

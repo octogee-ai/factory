@@ -75,9 +75,9 @@ function crawlBundleExternals(entry: string): Map<string, string> {
 
 const BOOT_ENTRY = path.join(API_ROOT, "src/main.ts");
 
-describe("cluster bundle dependencies — installable from octogee-api's own package.json or overlay dependencies", () => {
+describe("cluster bundle dependencies — installable from octogee-api's own package.json, overlay dependencies or registry dependencies", () => {
   function declaredDependencies(): Set<string> {
-    const manifests = ["package.json", "overlay-dependencies.json"]
+    const manifests = ["package.json", "overlay-dependencies.json", "registry-dependencies/package.json"]
       .map((file) => path.join(API_ROOT, file))
       .filter((file) => fs.existsSync(file));
     return new Set(manifests.flatMap((file) => {
