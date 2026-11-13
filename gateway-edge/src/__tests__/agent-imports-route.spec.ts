@@ -96,6 +96,18 @@ describe("agent imports route", () => {
     expect(authorize).toHaveBeenCalledWith("preview");
   });
 
+  it("bounds preview work while keeping the import journal available", async () => {
+    const { app, authorize, service } = harness();
+    const client = request(app);
+    const preview = () => client.post("/api/g/gw-alice/agent-imports/preview/github")
+      .send({ owner: "jack", repo: "moof", branch: "main", artifacts });
+    for (let attempt = 0; attempt < 12; attempt++) await preview().expect(201);
+    await preview().expect(429);
+    expect(authorize).toHaveBeenCalledTimes(12);
+    expect(service.previewGithub).toHaveBeenCalledTimes(12);
+    await client.get("/api/g/gw-alice/agent-imports/latest").expect(200);
+  });
+
   it("does not reveal whether an import exists across gateway boundaries", async () => {
     const { app, authorize, deps, service } = harness();
 
