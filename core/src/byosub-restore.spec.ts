@@ -499,6 +499,22 @@ describe("purgeUserOauthRuntimeArtifacts", () => {
       providers: modelProviders,
     });
   });
+
+  it("replaces a linked model projection without changing its target", async () => {
+    const oc = mkTmp();
+    const home = mkTmp();
+    const agentId = "octogee-alice-coach";
+    seedAgent(oc, agentId);
+    const agentDir = codexAgentDir(oc, agentId);
+    const target = path.join(home, "other-models.json");
+    fs.writeFileSync(target, '{"providers":{"existing":{}}}');
+    const projection = path.join(agentDir, "models.json");
+    fs.symlinkSync(target, projection);
+    await purgeUserOauthRuntimeArtifacts({ openclawDir: oc, homeDir: home, agentIds: [agentId], modelProviders: {} });
+    expect(fs.readFileSync(target, "utf8")).toBe('{"providers":{"existing":{}}}');
+    expect(fs.lstatSync(projection).isSymbolicLink()).toBe(false);
+    expect(JSON.parse(fs.readFileSync(projection, "utf8"))).toEqual({ providers: {} });
+  });
 });
 
 describe("purgeUserOauthRuntimeArtifacts — vertex rail", () => {
