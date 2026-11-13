@@ -169,7 +169,7 @@ describe("provisionMattermostUser — new user (happy path)", () => {
 
     await call(HAPPY);
 
-    const agentChannel = h.mmApiCall.mock.calls.find(([m, e, body]: [string, string, { name?: string }]) =>
+    const agentChannel = h.mmApiCall.mock.calls.find(([m, e, body]) =>
       m === "POST" && e === "/channels" && body?.name === workspaceDefaultAgentChannelName("acme"));
     expect(agentChannel?.[2]).toMatchObject({ purpose: "Ada's studio" });
   });
