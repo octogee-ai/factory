@@ -294,7 +294,7 @@ model, its fallback and the house model to models of that provider:
 | Stored key | Agent model | Fallback | House model |
 | --- | --- | --- | --- |
 | OpenRouter | `platform-openrouter/meta/muse-ember` | `platform-openrouter/openai/gpt-6-luna` | `platform-openrouter/openai/gpt-6-luna` |
-| Anthropic | `anthropic/claude-haiku-4-5` | `anthropic/claude-sonnet-4-6` | `anthropic/claude-haiku-4-5` |
+| Anthropic | `anthropic/claude-sonnet-5` | `anthropic/claude-haiku-4-5` | `anthropic/claude-haiku-4-5` |
 | OpenAI | `platform-openai/gpt-6.1-terra` | `platform-openai/gpt-6-luna` | `platform-openai/gpt-6-luna` |
 
 With more than one key stored, it uses the first of OpenRouter, Anthropic and

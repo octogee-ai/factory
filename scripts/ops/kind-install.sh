@@ -310,7 +310,7 @@ apply_agent_models() {
   [[ -n "$provider" ]] || return 0
   case "$provider" in
     openrouter) primary=platform-openrouter/meta/muse-ember fallback=platform-openrouter/openai/gpt-6-luna house=platform-openrouter/openai/gpt-6-luna ;;
-    anthropic) primary=anthropic/claude-haiku-4-5 fallback=anthropic/claude-sonnet-4-6 house=anthropic/claude-haiku-4-5 ;;
+    anthropic) primary=anthropic/claude-sonnet-5 fallback=anthropic/claude-haiku-4-5 house=anthropic/claude-haiku-4-5 ;;
     openai) primary=platform-openai/gpt-6.1-terra fallback=platform-openai/gpt-6-luna house=platform-openai/gpt-6-luna ;;
   esac
   owner="$(platform_sql <<<"SELECT updated_by FROM platform.platform_config WHERE key = 'models';")"
