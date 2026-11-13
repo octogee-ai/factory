@@ -263,6 +263,22 @@ the broker refuses calls to it. To add or replace a key, export it and run `up`
 again; the script restarts the broker so it reads the new key. If you exported
 no key and none is stored, the script warns that agents cannot reply.
 
+`scripts/ops/kind-agent-round-trip.mjs` checks the whole path in one command.
+It adds the shared gateway `shared-a` and the user `lin` if they are missing,
+issues `lin` new passwords, signs in to Mattermost as `lin`, sends one message in
+`lin-coach` and waits up to five minutes for the agent's reply. It then checks
+that the broker recorded a successful model call for `lin` in the platform
+database. It starts its own port-forwards, so it needs none of yours:
+
+```bash
+node scripts/ops/kind-agent-round-trip.mjs --state="$STATE" \
+  --model=platform-openrouter/meta/muse-ember
+```
+
+`--model` first sets the platform's default agent model and house model to that
+catalog model, with no fallback, and the check then requires a call to it. The
+setting stays on the cluster. Without `--model`, any successful call passes.
+
 ## Differences from a cloud cluster
 
 - kind has no gVisor runtime. Gateways run on the node's default runtime, with
@@ -294,7 +310,11 @@ short commit SHA, and keeps an image manifest of every digest as a workflow
 artifact named `image-manifest-<sha>`. `kind-install.sh up --pull` installs
 these images. The post-build kind smoke test takes the amd64 digests directly
 from that run’s manifest and uses `octogee-fleet gateway ls` to query the new
-cluster’s Admin API.
+cluster’s Admin API. It then runs `kind-agent-round-trip.mjs` with Muse Ember on
+OpenRouter, so one user's agent replies through the LLM broker with a real
+provider key. The job runs in the `agent-round-trip` environment, which only
+`main` can use; the installer stores the environment's `OPENROUTER_API_KEY`
+secret in the cluster. Pull requests never run this workflow.
 
 The workflow keeps its build cache in GitHub Actions cache scopes named
 `octogee-cloud-<image>-<platform>`. It never reads or writes a registry cache,

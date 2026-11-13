@@ -146,7 +146,8 @@ jobs:
     name: Kind smoke (amd64)
     needs: publish
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 60
+    environment: agent-round-trip
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -165,7 +166,13 @@ jobs:
       - name: Install octogee-fleet
         run: GOBIN="$RUNNER_TEMP/bin" go install github.com/octogee-ai/octogee-fleet@2b1bdeaf956ad9d9a8763a6510138b4d615ab62b
       - name: Install the published images
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
+          if [[ -z "$OPENROUTER_API_KEY" ]]; then
+            echo "::error::The agent-round-trip environment has no OPENROUTER_API_KEY secret"
+            exit 1
+          fi
           OCTOGEE_KIND_STATE="$RUNNER_TEMP/kind-state" \
             scripts/ops/kind-install.sh up --pull --manifest="$RUNNER_TEMP/build-manifest/image-manifest.json"
       - name: List gateways through the Admin API
@@ -180,11 +187,17 @@ jobs:
             --max-time 3 http://127.0.0.1:18080/healthz > /dev/null
           OCTOGEE_FLEET_CONFIG="$state/fleet-config.json" "$RUNNER_TEMP/bin/octogee-fleet" --env=kind gateway ls --format=json \
             | jq -e 'if .gateways == [] then . else error("expected an empty gateway list") end'
+      - name: Get a reply from a user's agent through the LLM broker
+        run: |
+          node scripts/ops/kind-agent-round-trip.mjs --state="$RUNNER_TEMP/kind-state/octogee" \
+            --fleet="$RUNNER_TEMP/bin/octogee-fleet" --model=platform-openrouter/meta/muse-ember
       - name: Show cluster status on failure
         if: failure()
         run: |
           kubeconfig="$RUNNER_TEMP/kind-state/octogee/kubeconfig"
           if [[ -f "$kubeconfig" ]]; then
             kubectl --kubeconfig="$kubeconfig" -n octogee-local get pods,events
+            kubectl --kubeconfig="$kubeconfig" -n octogee-local logs deployment/octogee-gateway-shared-a \
+              --all-containers --tail=200 || true
           fi
           df -h /
