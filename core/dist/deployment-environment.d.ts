@@ -124,6 +124,7 @@ export interface DeploymentEnvironmentSettings {
 export type DeploymentTargetSettings = Pick<DeploymentEnvironmentSettings, "name" | "targetId" | "lifecycle" | "clusterName" | "namespace" | "siteOrigin" | "appOrigin" | "apiOrigin" | "gitOrigin" | "mattermostOrigin" | "gatewayValuesFile"> & Partial<DeploymentEnvironmentSettings>;
 export declare function validateDeploymentTargetsDocument(document: unknown): asserts document is DeploymentTargetsDocument;
 export declare function loadDeploymentTargetsDocument(path: string): DeploymentTargetsDocument;
+export declare function installDeploymentTargets(document: unknown): void;
 export declare function resetDeploymentTargetsForTests(): void;
 export declare function activeDeploymentTargetSettings(environment: string): DeploymentTargetSettings;
 export declare function requireHostedDeploymentSettings(settings: DeploymentTargetSettings): DeploymentEnvironmentSettings;

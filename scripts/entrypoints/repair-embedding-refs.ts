@@ -7,7 +7,7 @@
 //      export OPENCLAW_GATEWAY_TOKEN=$(kubectl -n <ns> get secret gateway-auth-token-<gateway> -o jsonpath='{.data.token}' | base64 -d)
 //   3. kubectl -n <ns> exec <gateway-pod> -c gateway -- cat /home/octogee/.openclaw/openclaw.json > /tmp/gw-config.json
 //      kubectl -n <ns> exec <gateway-pod> -c gateway -- ls /home/octogee/.openclaw/agents > /tmp/gw-agent-dirs.txt
-//   4. npx tsx entrypoints/repair-embedding-refs.ts \
+//   4. OCTOGEE_DEPLOYMENT_TARGETS=<deployment target registry> npx tsx entrypoints/repair-embedding-refs.ts \
 //        --project <firebase-project> --gateway default --revision default-r2 \
 //        --config-file /tmp/gw-config.json --agent-dirs-file /tmp/gw-agent-dirs.txt [--apply]
 //

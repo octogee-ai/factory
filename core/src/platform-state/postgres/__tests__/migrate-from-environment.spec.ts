@@ -53,6 +53,22 @@ describe("migratePlatformStateFromEnvironment", () => {
     expect(migratePlatformState).toHaveBeenCalledWith(expect.any(pg.Pool), { deploymentTargetId: "test-central" });
   });
 
+  it("holds the migration until the configured source project's import has completed", async () => {
+    vi.spyOn(pg.Pool.prototype, "end").mockResolvedValue(undefined);
+    const ledger = vi.fn((_values: unknown) => ({ rows: [], rowCount: 0 }));
+    vi.spyOn(pg.Pool.prototype, "query").mockImplementation((async (query: string | { text: string }, values?: unknown) => {
+      const text = typeof query === "string" ? query : query.text;
+      if (text.includes("import_ledger")) return ledger(values);
+      return { rows: [{ target_id: "test-central" }], rowCount: 1 };
+    }) as never);
+
+    await expect(run({ ...SETTINGS, PLATFORM_DB_CUTOVER_IMPORT_SOURCE_PROJECT: "source-project" }))
+      .rejects.toThrow("no completed platform state import for test-central");
+
+    expect(ledger).toHaveBeenCalledWith(["test-central", "source-project"]);
+    expect(migratePlatformState).not.toHaveBeenCalled();
+  });
+
   it("refuses to migrate without knowing the deployment target", async () => {
     await expect(run({ ...SETTINGS, DEPLOYMENT_TARGET_ID: "" })).rejects.toThrow(/DEPLOYMENT_TARGET_ID is required/);
     expect(migratePlatformState).not.toHaveBeenCalled();

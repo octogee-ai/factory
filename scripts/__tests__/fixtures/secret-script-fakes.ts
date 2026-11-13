@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 export const repoRoot = path.resolve(import.meta.dirname, "../../..");
-export const testCentral = JSON.parse(readFileSync(path.join(repoRoot, "core/src/deployment-targets.json"), "utf8")).targets["test-central"];
+export const testCentral = JSON.parse(readFileSync(path.join(repoRoot, "core/src/fixtures/deployment-targets.json"), "utf8")).targets["test-central"];
 const testKubeContext = `gke_${testCentral.clusterProjectId}_${testCentral.region}_${testCentral.clusterName}`;
 
 export interface FakeRun {

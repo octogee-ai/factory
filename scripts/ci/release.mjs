@@ -26,7 +26,7 @@ try {
   installReleaseTools(run);
   const { parse } = await import('yaml');
   const values = parse(readFileSync(`platform/helm/octogee/values.${options.environment}.yaml`, 'utf8'));
-  const siteAfterPlatform = values?.global?.platformState?.requireCutoverImport === true;
+  const siteAfterPlatform = Boolean(values?.global?.platformState?.cutoverImportSourceProject);
   await deployRelease(options, {
     siteAfterPlatform,
     manifest: async sha => {

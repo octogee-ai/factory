@@ -22,13 +22,15 @@ describe("gateway-edge vitest config", () => {
     expect(cfg.test?.exclude).toEqual(["dist/**", "node_modules/**"]);
   });
 
-  it("loads the loopback listen shim in both run modes and the Firestore test store for emulator specs", () => {
+  it("loads the deployment target fixture and the loopback listen shim in both run modes and the Firestore test store for emulator specs", () => {
     expect((config as VitestConfig).test?.setupFiles).toEqual([
+      "./src/test-setup/deployment-targets.ts",
       "./src/test-setup/octogee-entitlements.ts",
       "./src/test-setup/loopback-listen.ts",
       "./src/test-setup/public-app-origins.ts",
     ]);
     expect((emulatorConfig as VitestConfig).test?.setupFiles).toEqual([
+      "./src/test-setup/deployment-targets.ts",
       "./src/test-setup/octogee-entitlements.ts",
       "./src/test-setup/loopback-listen.ts",
       "./src/test-setup/public-app-origins.ts",

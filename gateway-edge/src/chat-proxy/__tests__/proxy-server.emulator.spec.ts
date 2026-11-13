@@ -3,7 +3,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 process.env.NODE_ENV = 'test';
-process.env.FIREBASE_PROJECT ??= 'octogee-test';
+process.env.FIREBASE_PROJECT ??= 'demo-platform';
 process.env.MM_INTERNAL_URL = 'http://mattermost.octogee-test.svc.cluster.local:8065';
 
 const { chatProxyHandleRequest } = await import('../proxy');

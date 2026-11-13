@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, relative } from 'node:path';
 import { overlayTree } from '../ops/overlay.mjs';
 
 const GIT = '/usr/bin/git';
@@ -129,4 +129,16 @@ export function deploymentSource(root, sha) {
     copy.remove();
     throw error;
   }
+}
+
+const DEPLOYMENT_TARGETS = 'OCTOGEE_DEPLOYMENT_TARGETS';
+
+export function sourceEnvironment(root, source, environment) {
+  const targets = environment[DEPLOYMENT_TARGETS];
+  if (!targets || !existsSync(targets)) return { ...environment };
+  const inside = relative(realpathSync(root), realpathSync(targets));
+  if (inside.startsWith('..') || isAbsolute(inside)) return { ...environment };
+  const { [DEPLOYMENT_TARGETS]: _checkout, ...rest } = environment;
+  const deployed = join(source, inside);
+  return existsSync(deployed) ? { ...rest, [DEPLOYMENT_TARGETS]: deployed } : rest;
 }

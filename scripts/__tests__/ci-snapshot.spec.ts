@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
-import { deploymentSource, exportSource, snapshot, sourceCiScript, worktreeSource } from '../ci/snapshot.mjs';
+import { deploymentSource, exportSource, snapshot, sourceCiScript, sourceEnvironment, worktreeSource } from '../ci/snapshot.mjs';
 
 function repository() {
   const root = mkdtempSync(join(tmpdir(), 'ci-snapshot-test-'));
@@ -249,6 +249,50 @@ it('deploys the platform tree as committed when there is no product tree', () =>
     try {
       for (const [file, text] of Object.entries(platformTree)) expect(readFileSync(join(copy.source, file), 'utf8')).toBe(text);
       expect(existsSync(join(copy.source, 'product'))).toBe(false);
+    } finally { copy.remove(); }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it('reads a deployment target registry inside the checkout from the deployed commit', () => {
+  const registry = 'product/shared/deployment-targets.json';
+  const { root, sha } = layeredRepository({ ...platformTree, 'platform/shared/types/index.ts': 'platform types', [registry]: 'committed targets' });
+  try {
+    writeFileSync(join(root, registry), 'edited targets');
+    const copy = deploymentSource(root, sha);
+    try {
+      const environment = sourceEnvironment(root, copy.source, { OCTOGEE_DEPLOYMENT_TARGETS: join(root, registry), KEPT: 'kept' });
+      expect(environment.KEPT).toBe('kept');
+      expect(readFileSync(environment.OCTOGEE_DEPLOYMENT_TARGETS!, 'utf8')).toBe('committed targets');
+    } finally { copy.remove(); }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it('keeps a deployment target registry from outside the checkout', () => {
+  const { root, sha } = layeredRepository(platformTree);
+  const outside = mkdtempSync(join(tmpdir(), 'ci-snapshot-targets-'));
+  try {
+    writeFileSync(join(outside, 'targets.json'), 'operator targets');
+    const copy = deploymentSource(root, sha);
+    try {
+      expect(sourceEnvironment(root, copy.source, { OCTOGEE_DEPLOYMENT_TARGETS: join(outside, 'targets.json') }))
+        .toEqual({ OCTOGEE_DEPLOYMENT_TARGETS: join(outside, 'targets.json') });
+    } finally { copy.remove(); }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+it('leaves the deployment target registry to a deployed commit that carries none in the checkout path', () => {
+  const registry = 'product/shared/deployment-targets.json';
+  const { root, sha } = layeredRepository(platformTree);
+  try {
+    mkdirSync(join(root, 'product/shared'), { recursive: true });
+    writeFileSync(join(root, registry), 'newer targets');
+    const copy = deploymentSource(root, sha);
+    try {
+      expect(sourceEnvironment(root, copy.source, { OCTOGEE_DEPLOYMENT_TARGETS: join(root, registry), KEPT: 'kept' }))
+        .toEqual({ KEPT: 'kept' });
     } finally { copy.remove(); }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

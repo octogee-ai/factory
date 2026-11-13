@@ -14,7 +14,7 @@ const originalFetch: typeof fetch = globalThis.fetch.bind(globalThis);
 function ensureApp(): void {
   if (getApps().length === 0) {
     initializeApp({
-      projectId: process.env.GCLOUD_PROJECT ?? process.env.FIREBASE_PROJECT ?? "octogee-test",
+      projectId: process.env.GCLOUD_PROJECT ?? process.env.FIREBASE_PROJECT ?? "demo-platform",
     });
   }
 }

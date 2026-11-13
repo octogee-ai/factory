@@ -25,6 +25,7 @@ type RunOptions = {
     | "missing-channels"
     | "wrong-evaluation"
     | "wrong-severity";
+  targetsFrom?: "argument" | "environment";
 };
 
 function executable(file: string, source: string): void {
@@ -117,10 +118,12 @@ esac
 `,
   );
 
-  const result = spawnSync("bash", [script, `--targets-file=${targets}`], {
+  const fromEnvironment = options.targetsFrom === "environment";
+  const result = spawnSync("bash", fromEnvironment ? [script] : [script, `--targets-file=${targets}`], {
     cwd: repoRoot,
     env: {
       ...process.env,
+      OCTOGEE_DEPLOYMENT_TARGETS: fromEnvironment ? targets : "",
       PATH: `${temp}:${process.env.PATH ?? "/usr/bin:/bin"}`,
       FAKE_CALL_LOG: log,
       FAKE_ATTACHMENT: options.attachment ?? "expected",
@@ -142,6 +145,13 @@ describe("active target durability verification", () => {
     expect(
       result.calls.filter((call) => call.includes("compute disks describe")),
     ).toHaveLength(4);
+  });
+
+  it("reads the registry named by OCTOGEE_DEPLOYMENT_TARGETS when no targets file is given", () => {
+    const result = runVerifier({ targetsFrom: "environment" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Active target durability verified");
   });
 
   it("fails closed when a durable PVC disk lacks its exact snapshot schedule", () => {

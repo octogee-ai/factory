@@ -17,7 +17,7 @@ export default defineConfig({
       'specs/**/*.spec.ts',
       '../shared/types/**/*.spec.ts',
     ],
-    setupFiles: ['./test-setup/user-entitlements.ts'],
+    setupFiles: ['./test-setup/deployment-targets.ts', './test-setup/user-entitlements.ts'],
     environment: 'node',
     testTimeout: 30_000,
     hookTimeout: 30_000,

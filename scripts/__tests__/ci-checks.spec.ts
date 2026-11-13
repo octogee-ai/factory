@@ -80,7 +80,7 @@ describe("portable Linux PR checks", () => {
   });
 
   it("runs the acceptance specs when the deployment-target registry changes, because acceptance imports it directly", () => {
-    expect(checkPlan(["platform/core/src/deployment-targets.json"], "tests").map(job => job.name)).toContain("acceptance");
+    expect(checkPlan(["product/shared/deployment-targets.json"], "tests").map(job => job.name)).toContain("acceptance");
   });
 
   it("runs every quality gate on a full run without deployment commands", () => {

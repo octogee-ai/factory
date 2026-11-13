@@ -38,7 +38,7 @@ function proxy(overrides: {
     artifactRegistryAccessToken: overrides.artifactRegistryAccessToken ??
       vi.fn(async () => GOOGLE_TOKEN),
     upstreamRegistryUrl: overrides.upstreamRegistryUrl ??
-      "https://us-central1-npm.pkg.dev/octogee/octogee-npm-cache/",
+      "https://us-central1-npm.pkg.dev/example-project/npm-cache/",
     fetchImpl: overrides.fetchImpl ?? vi.fn(async () => new Response("ok", {
       headers: { "content-type": "text/plain", etag: "cache-hit" },
     })),
@@ -76,7 +76,7 @@ describe("npm cache proxy", () => {
     expect(authorizeCapability).toHaveBeenCalledWith(CAPABILITY);
     const [target, init] = fetchImpl.mock.calls[0]!;
     expect(String(target)).toBe(
-      "https://us-central1-npm.pkg.dev/octogee/octogee-npm-cache/@scope%2fpkg?write=false",
+      "https://us-central1-npm.pkg.dev/example-project/npm-cache/@scope%2fpkg?write=false",
     );
     expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${GOOGLE_TOKEN}`);
     expect(new Headers(init?.headers).get("if-none-match")).toBe("remote-cache");
@@ -141,7 +141,7 @@ describe("npm cache proxy", () => {
     await request(app).get("//example.com/pkg").set("authorization", `Bearer ${CAPABILITY}`).expect(404);
     expect(safeRegistryTarget(
       "/%2e%2e/secrets",
-      "https://us-central1-npm.pkg.dev/octogee/octogee-npm-cache/",
+      "https://us-central1-npm.pkg.dev/example-project/npm-cache/",
     )).toBeNull();
     expect(fetchImpl).not.toHaveBeenCalled();
   });
@@ -154,25 +154,31 @@ describe("npm cache proxy", () => {
     })).toThrow("invalid npm cache upstream registry");
   });
 
-  it("forwards to TEST's own npm cache repository in its own project", async () => {
+  it("forwards to any Artifact Registry npm repository it is configured with", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => new Response("ok"));
     await request(proxy({
       fetchImpl,
-      upstreamRegistryUrl: "https://us-central1-npm.pkg.dev/octogee-test/octogee-npm-cache/",
+      upstreamRegistryUrl: "https://europe-west4-npm.pkg.dev/other-project-42/team-npm/",
     }))
       .get("/@scope%2fpkg")
       .set("authorization", `Bearer ${CAPABILITY}`)
       .expect(200);
 
     expect(String(fetchImpl.mock.calls[0]![0])).toBe(
-      "https://us-central1-npm.pkg.dev/octogee-test/octogee-npm-cache/@scope%2fpkg",
+      "https://europe-west4-npm.pkg.dev/other-project-42/team-npm/@scope%2fpkg",
     );
   });
 
-  it("refuses any other repository in TEST's project", () => {
-    expect(() => proxy({
-      upstreamRegistryUrl:
-        "https://us-central1-npm.pkg.dev/octogee-test/octogee-npm-cache-phase-c-20260830/",
-    })).toThrow("invalid npm cache upstream registry");
+  it.each([
+    "http://us-central1-npm.pkg.dev/example-project/npm-cache/",
+    "https://us-central1-docker.pkg.dev/example-project/npm-cache/",
+    "https://us-central1-npm.pkg.dev.attacker.example/example-project/npm-cache/",
+    "https://us-central1-npm.pkg.dev/example-project/",
+    "https://us-central1-npm.pkg.dev/example-project/npm-cache/nested/",
+    "https://us-central1-npm.pkg.dev/example-project/npm-cache",
+    "https://us-central1-npm.pkg.dev:8443/example-project/npm-cache/",
+    "https://us-central1-npm.pkg.dev/example-project/npm-cache/?x=1",
+  ])("refuses the non-repository upstream %s", (upstreamRegistryUrl) => {
+    expect(() => proxy({ upstreamRegistryUrl })).toThrow("invalid npm cache upstream registry");
   });
 });

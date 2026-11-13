@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-TARGETS_FILE="${REPO_ROOT}/core/src/deployment-targets.json"
+TARGETS_FILE="${OCTOGEE_DEPLOYMENT_TARGETS:-${REPO_ROOT}/core/src/deployment-targets.json}"
 PVC_NAMES=("gitea-shared-storage" "mattermost-data")
 
 for argument in "$@"; do

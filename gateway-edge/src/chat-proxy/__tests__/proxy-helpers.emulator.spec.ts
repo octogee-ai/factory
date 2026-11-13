@@ -3,7 +3,7 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { getIdTokenForUid, requireEmulator, resetEmulator } from "@octogee/test-helpers/firestore-emulator";
 
 process.env.NODE_ENV = 'test';
-process.env.FIREBASE_PROJECT ??= 'octogee-test';
+process.env.FIREBASE_PROJECT ??= 'demo-platform';
 process.env.MM_PUBLIC_URL = 'https://mm.test.octogee.com';
 process.env.MM_INTERNAL_URL = 'http://mattermost.octogee-test.svc.cluster.local:8065';
 

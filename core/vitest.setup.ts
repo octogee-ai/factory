@@ -1,4 +1,7 @@
+import { fileURLToPath } from "node:url";
 import { installUserEntitlements, staticUserEntitlements } from "@octogee/shared/types/user-entitlements";
+
+process.env.OCTOGEE_DEPLOYMENT_TARGETS = fileURLToPath(new URL("./src/fixtures/deployment-targets.json", import.meta.url));
 
 installUserEntitlements(staticUserEntitlements);
 

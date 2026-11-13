@@ -1,118 +1,20 @@
 {
   "schemaVersion": 1,
   "activeTargets": {
-    "prod": "prod-central",
-    "test": "test-central"
+    "kind": "kind"
   },
   "targets": {
-    "prod-central": {
-      "environment": "prod",
-      "promotionSourceTargetId": "test-central",
+    "kind": {
+      "environment": "kind",
       "lifecycle": "active",
-      "secretNameSuffix": "prod",
-      "clusterProjectId": "octogee",
-      "firebaseProjectId": "octogee",
-      "hostingProjectId": "octogee",
-      "customerHostingProjectId": "octogee-customer-hosting",
-      "region": "us-central1",
-      "clusterName": "octogee-gateway",
-      "namespace": "octogee",
-      "projectRunnerApiServerEgressCidrs": [
-        "10.128.0.2/32",
-        "34.118.224.1/32"
-      ],
-      "artifactRegistry": {
-        "projectId": "octogee",
-        "location": "us-central1",
-        "repository": "octogee"
-      },
-      "cloudSql": {
-        "projectId": "octogee",
-        "region": "us-central1",
-        "instance": "octogee-pg",
-        "mattermostPasswordSecret": "MM_DB_PASSWORD",
-        "giteaPasswordSecret": "gitea-db-password",
-        "connectionNameSecret": "cloud-sql-connection-name",
-        "pointInTimeRecoveryEnabled": false
-      },
-      "kms": {
-        "projectId": "octogee",
-        "location": "us-central1",
-        "keyRing": "octogee-creds",
-        "key": "integrations-at-rest"
-      },
-      "storage": {
-        "projectId": "octogee",
-        "location": "us-central1"
-      },
-      "ingress": {
-        "edgeStaticIpName": "workspace-api-ip",
-        "mattermostStaticIpName": "mattermost-ip",
-        "giteaStaticIpName": "gitea-ip",
-        "previewStaticIpName": "preview-ip"
-      },
-      "siteOrigin": "https://octogee.com",
-      "appOrigin": "https://app.octogee.com",
-      "apiOrigin": "https://api.octogee.com",
-      "gitOrigin": "https://git.octogee.com",
-      "mattermostOrigin": "https://mattermost.octogee.com",
-      "previewOrigin": "https://preview.octogee.com",
-      "gatewayValuesFile": "values.prod.yaml",
-      "pinEnvironment": "prod"
-    },
-    "test-central": {
-      "environment": "test",
-      "lifecycle": "active",
-      "secretNameSuffix": "test",
-      "clusterProjectId": "octogee-test",
-      "firebaseProjectId": "octogee-test",
-      "hostingProjectId": "octogee-test",
-      "customerHostingProjectId": "octogee-customer-hosting-test",
-      "region": "us-central1",
-      "clusterName": "octogee-gateway",
-      "namespace": "octogee-test",
-      "projectRunnerApiServerEgressCidrs": [
-        "10.128.0.87/32",
-        "34.118.224.1/32"
-      ],
-      "artifactRegistry": {
-        "projectId": "octogee",
-        "location": "us-central1",
-        "repository": "octogee"
-      },
-      "cloudSql": {
-        "projectId": "octogee-test",
-        "region": "us-central1",
-        "instance": "octogee-pg",
-        "mattermostPasswordSecret": "MM_DB_PASSWORD",
-        "giteaPasswordSecret": "gitea-db-password",
-        "connectionNameSecret": "cloud-sql-connection-name",
-        "pointInTimeRecoveryEnabled": false
-      },
-      "kms": {
-        "projectId": "octogee-test",
-        "location": "us-central1",
-        "keyRing": "octogee-creds",
-        "key": "integrations-at-rest"
-      },
-      "storage": {
-        "projectId": "octogee-test",
-        "location": "us-central1"
-      },
-      "ingress": {
-        "edgeStaticIpName": "workspace-api-ip",
-        "mattermostStaticIpName": "mattermost-ip-test",
-        "giteaStaticIpName": "gitea-ip-test",
-        "previewStaticIpName": "preview-ip-test"
-      },
-      "siteOrigin": "https://octogee-test.web.app",
-      "appOrigin": "https://app-test.octogee.com",
-      "apiOrigin": "https://api-test.octogee.com",
-      "gitOrigin": "https://git-test.octogee.com",
-      "mattermostOrigin": "https://mattermost-test.octogee.com",
-      "previewOrigin": "https://preview-test.octogee.com",
-      "gatewayValuesFile": "values.test.yaml",
-      "pinEnvironment": "test"
+      "clusterName": "kind",
+      "namespace": "octogee-local",
+      "siteOrigin": "http://localhost:4321",
+      "appOrigin": "http://localhost:4322",
+      "apiOrigin": "http://localhost:3001",
+      "gitOrigin": "http://localhost:3000",
+      "mattermostOrigin": "http://localhost:8065",
+      "gatewayValuesFile": "values.yaml"
     }
   }
 }

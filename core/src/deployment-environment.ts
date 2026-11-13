@@ -449,9 +449,14 @@ export function validateDeploymentTargetsDocument(document: unknown): asserts do
   }
 }
 
-function deploymentTargetsPath(env: NodeJS.ProcessEnv): string {
+const INSTALLED_TARGETS_SLOT = Symbol.for("octogee.deploymentTargets");
+type InstalledTargetsHost = typeof globalThis & { [INSTALLED_TARGETS_SLOT]?: DeploymentTargetsDocument };
+
+function configuredDeploymentTargets(env: NodeJS.ProcessEnv): DeploymentTargetsDocument {
   const configured = env[DEPLOYMENT_TARGETS_ENV]?.trim();
-  return configured ? configured : fileURLToPath(new URL("./deployment-targets.json", import.meta.url));
+  if (configured) return loadDeploymentTargetsDocument(configured);
+  return (globalThis as InstalledTargetsHost)[INSTALLED_TARGETS_SLOT]
+    ?? loadDeploymentTargetsDocument(fileURLToPath(new URL("./deployment-targets.json", import.meta.url)));
 }
 
 export function loadDeploymentTargetsDocument(path: string): DeploymentTargetsDocument {
@@ -555,12 +560,19 @@ function buildRegistry(manifest: DeploymentTargetsDocument): DeploymentTargetReg
 let registry: DeploymentTargetRegistry | undefined;
 
 function loadRegistry(): DeploymentTargetRegistry {
-  registry ??= buildRegistry(loadDeploymentTargetsDocument(deploymentTargetsPath(process.env)));
+  registry ??= buildRegistry(configuredDeploymentTargets(process.env));
   return registry;
+}
+
+export function installDeploymentTargets(document: unknown): void {
+  if (registry) throw new Error("Deployment targets must be installed before the registry is read");
+  validateDeploymentTargetsDocument(document);
+  (globalThis as InstalledTargetsHost)[INSTALLED_TARGETS_SLOT] = document;
 }
 
 export function resetDeploymentTargetsForTests(): void {
   registry = undefined;
+  delete (globalThis as InstalledTargetsHost)[INSTALLED_TARGETS_SLOT];
 }
 
 export function activeDeploymentTargetSettings(environment: string): DeploymentTargetSettings {

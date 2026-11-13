@@ -1,11 +1,9 @@
 import pg from "pg";
-import { hostedDeploymentTargetSettings } from "../../deployment-environment.js";
 import { createPlatformStatePool, platformDatabaseSettingsFromEnvironment } from "./connection.js";
 import { assertPlatformDatabaseTarget } from "./deployment-target.js";
 import { DEFAULT_PLATFORM_STATE_SCHEMA, migratePlatformState } from "./migrate.js";
-export async function assertPlatformCutoverImported(pool, deploymentTargetId, schema = DEFAULT_PLATFORM_STATE_SCHEMA) {
+export async function assertPlatformCutoverImported(pool, deploymentTargetId, sourceProject, schema = DEFAULT_PLATFORM_STATE_SCHEMA) {
     await assertPlatformDatabaseTarget(pool, deploymentTargetId, schema);
-    const sourceProject = hostedDeploymentTargetSettings(deploymentTargetId).firebaseProjectId;
     const ledgerSchema = pg.escapeIdentifier(`${schema}_cutover`);
     try {
         const result = await pool.query(`SELECT 1 FROM ${ledgerSchema}.import_ledger
@@ -29,9 +27,10 @@ export async function migratePlatformStateFromEnvironment(run) {
         logger: run.logger,
     });
     const runtimeRole = environment.PLATFORM_DB_RUNTIME_USER;
+    const cutoverSourceProject = environment.PLATFORM_DB_CUTOVER_IMPORT_SOURCE_PROJECT;
     try {
-        if (environment.PLATFORM_DB_REQUIRE_CUTOVER_IMPORT === "true")
-            await assertPlatformCutoverImported(pool, deploymentTargetId);
+        if (cutoverSourceProject)
+            await assertPlatformCutoverImported(pool, deploymentTargetId, cutoverSourceProject);
         return await migratePlatformState(pool, { deploymentTargetId, ...(runtimeRole ? { runtimeRole } : {}) });
     }
     finally {

@@ -10,8 +10,9 @@ interface VitestConfig {
 }
 
 describe("glm-controller vitest config", () => {
-  it("loads the loopback listen shim", () => {
+  it("loads the deployment target fixture and the loopback listen shim", () => {
     expect((config as VitestConfig).test?.setupFiles).toEqual([
+      "./src/test-setup/deployment-targets.ts",
       "./src/test-setup/octogee-entitlements.ts",
       "./src/test-setup/loopback-listen.ts",
       "./src/test-setup/public-app-origins.ts",

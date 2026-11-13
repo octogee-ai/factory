@@ -1,21 +1,21 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runDeploymentTargetResolver } from "./resolve-deployment-target.js";
 
-import deploymentTargetsDocument from "./deployment-targets.json" with { type: "json" };
+import deploymentTargetsDocument from "./fixtures/deployment-targets.json" with { type: "json" };
 
 import {
+  activeDeploymentTargetSettings,
   deploymentEnvironmentForNamespace,
-  deploymentEnvironmentForProject,
   deploymentEnvironmentSettings,
   deploymentSettingsForRuntime,
   deploymentTargetForFirebaseProject,
   deploymentTargetSettings,
-  deploymentTargetsForEnvironment,
   DEPLOYMENT_TARGETS_ENV,
+  installDeploymentTargets,
   loadDeploymentTargetsDocument,
   publicAppOriginsForTarget,
   resetDeploymentTargetsForTests,
@@ -23,105 +23,6 @@ import {
 } from "./deployment-environment.js";
 
 describe("deployment environment registry", () => {
-  it("keeps Central prod and test mappings stable and rejects retired projects and custom namespaces", () => {
-    expect(deploymentEnvironmentForNamespace("octogee")).toBe("prod");
-    expect(deploymentEnvironmentForNamespace("octogee-test")).toBe("test");
-    expect(deploymentEnvironmentForNamespace("feat-alice")).toBe("unknown");
-    expect(deploymentEnvironmentForProject("octogee")).toBe("prod");
-    expect(deploymentEnvironmentForProject("octogee-test")).toBe("test");
-    expect(deploymentEnvironmentForProject("octogee-data-prod")).toBe("unknown");
-    expect(deploymentEnvironmentForProject("octogee-data-test")).toBe("unknown");
-    expect(deploymentEnvironmentForProject("local-dev")).toBe("unknown");
-  });
-
-  it("keeps CENTRAL as the only prod and test target", () => {
-    expect(deploymentEnvironmentSettings("prod")).toMatchObject({
-      targetId: "prod-central",
-      lifecycle: "active",
-      clusterProjectId: "octogee",
-      firebaseProjectId: "octogee",
-      customerHostingProjectId: "octogee-customer-hosting",
-      region: "us-central1",
-      clusterName: "octogee-gateway",
-      kubeContext: "gke_octogee_us-central1_octogee-gateway",
-      artifactRegistryRepository: "us-central1-docker.pkg.dev/octogee/octogee",
-      cloudSqlConnectionName: "octogee:us-central1:octogee-pg",
-      cloudSqlMattermostPasswordSecretName: "MM_DB_PASSWORD",
-      cloudSqlGiteaPasswordSecretName: "gitea-db-password",
-      cloudSqlConnectionNameSecretName: "cloud-sql-connection-name",
-      secretNameSuffix: "prod",
-      promotionSourceTargetId: "test-central",
-      cloudSqlPointInTimeRecoveryEnabled: false,
-      edgeStaticIpName: "workspace-api-ip",
-      mattermostStaticIpName: "mattermost-ip",
-      giteaStaticIpName: "gitea-ip",
-      previewStaticIpName: "preview-ip",
-      projectRunnerApiServerEgressCidrs: ["10.128.0.2/32", "34.118.224.1/32"],
-    });
-
-    expect(deploymentTargetSettings("prod-central")).toMatchObject({
-      name: "prod",
-      targetId: "prod-central",
-      lifecycle: "active",
-      namespace: "octogee",
-      clusterProjectId: "octogee",
-      firebaseProjectId: "octogee",
-      hostingProjectId: "octogee",
-      customerHostingProjectId: "octogee-customer-hosting",
-      region: "us-central1",
-      clusterName: "octogee-gateway",
-      kubeContext: "gke_octogee_us-central1_octogee-gateway",
-      artifactRegistryRepository: "us-central1-docker.pkg.dev/octogee/octogee",
-      cloudSqlConnectionName: "octogee:us-central1:octogee-pg",
-      cloudSqlMattermostPasswordSecretName: "MM_DB_PASSWORD",
-      cloudSqlGiteaPasswordSecretName: "gitea-db-password",
-      cloudSqlConnectionNameSecretName: "cloud-sql-connection-name",
-      secretNameSuffix: "prod",
-      promotionSourceTargetId: "test-central",
-      cloudSqlPointInTimeRecoveryEnabled: false,
-      kmsLocation: "us-central1",
-      storageLocation: "us-central1",
-      edgeStaticIpName: "workspace-api-ip",
-      mattermostStaticIpName: "mattermost-ip",
-      giteaStaticIpName: "gitea-ip",
-      previewStaticIpName: "preview-ip",
-      projectRunnerApiServerEgressCidrs: ["10.128.0.2/32", "34.118.224.1/32"],
-    });
-
-    expect(deploymentTargetSettings("test-central")).toMatchObject({
-      name: "test",
-      targetId: "test-central",
-      lifecycle: "active",
-      namespace: "octogee-test",
-      firebaseProjectId: "octogee-test",
-      customerHostingProjectId: "octogee-customer-hosting-test",
-      region: "us-central1",
-      artifactRegistryRepository: "us-central1-docker.pkg.dev/octogee/octogee",
-      cloudSqlMattermostPasswordSecretName: "MM_DB_PASSWORD",
-      cloudSqlGiteaPasswordSecretName: "gitea-db-password",
-      cloudSqlConnectionNameSecretName: "cloud-sql-connection-name",
-      secretNameSuffix: "test",
-      edgeStaticIpName: "workspace-api-ip",
-      mattermostStaticIpName: "mattermost-ip-test",
-      giteaStaticIpName: "gitea-ip-test",
-      previewStaticIpName: "preview-ip-test",
-      projectRunnerApiServerEgressCidrs: ["10.128.0.87/32", "34.118.224.1/32"],
-      appOrigin: "https://app-test.octogee.com",
-    });
-
-    expect(deploymentTargetsForEnvironment("prod")).toEqual([
-      expect.objectContaining({ targetId: "prod-central", lifecycle: "active" }),
-    ]);
-    expect(deploymentTargetsForEnvironment("test")).toEqual([
-      expect.objectContaining({ targetId: "test-central", lifecycle: "active" }),
-    ]);
-    for (const targetId of ["prod-west", "test-west"]) {
-      expect(() => deploymentTargetSettings(targetId)).toThrow(
-        `Unknown deployment target: ${targetId}`,
-      );
-    }
-  });
-
   it("rejects a target that reuses another ingress identity in the same project", () => {
     const candidate = structuredClone(deploymentTargetsDocument) as {
       targets: Record<string, { clusterProjectId: string }>;
@@ -328,6 +229,14 @@ describe("deployment environment registry", () => {
   });
 });
 
+function manifestWith(mutate: (document: typeof deploymentTargetsDocument) => void): string {
+  const document = structuredClone(deploymentTargetsDocument);
+  mutate(document);
+  const path = join(mkdtempSync(join(tmpdir(), "deployment-targets-")), "deployment-targets.json");
+  writeFileSync(path, JSON.stringify(document));
+  return path;
+}
+
 describe("deployment targets manifest location", () => {
   const original = process.env[DEPLOYMENT_TARGETS_ENV];
 
@@ -336,14 +245,6 @@ describe("deployment targets manifest location", () => {
     else process.env[DEPLOYMENT_TARGETS_ENV] = original;
     resetDeploymentTargetsForTests();
   });
-
-  function manifestWith(mutate: (document: typeof deploymentTargetsDocument) => void): string {
-    const document = structuredClone(deploymentTargetsDocument);
-    mutate(document);
-    const path = join(mkdtempSync(join(tmpdir(), "deployment-targets-")), "deployment-targets.json");
-    writeFileSync(path, JSON.stringify(document));
-    return path;
-  }
 
   it("reads the manifest named by OCTOGEE_DEPLOYMENT_TARGETS instead of the bundled file", () => {
     process.env[DEPLOYMENT_TARGETS_ENV] = manifestWith((document) => {
@@ -401,5 +302,51 @@ describe("deployment targets manifest location", () => {
       document.activeTargets.test = "missing-target";
     });
     expect(() => loadDeploymentTargetsDocument(invalid)).toThrow(/Active deployment target does not exist/);
+  });
+});
+
+describe("installed deployment targets", () => {
+  const original = process.env[DEPLOYMENT_TARGETS_ENV];
+
+  beforeEach(() => {
+    delete process.env[DEPLOYMENT_TARGETS_ENV];
+    resetDeploymentTargetsForTests();
+  });
+
+  afterEach(() => {
+    if (original === undefined) delete process.env[DEPLOYMENT_TARGETS_ENV];
+    else process.env[DEPLOYMENT_TARGETS_ENV] = original;
+    resetDeploymentTargetsForTests();
+  });
+
+  it("bundles only the local kind target", () => {
+    expect(activeDeploymentTargetSettings("kind")).toMatchObject({ targetId: "kind", namespace: "octogee-local" });
+    expect(() => activeDeploymentTargetSettings("test")).toThrow("Unknown deployment environment: test");
+  });
+
+  it("serves the targets a composition root installs instead of the bundled ones", () => {
+    installDeploymentTargets(deploymentTargetsDocument);
+    expect(deploymentEnvironmentSettings("test").targetId).toBe("test-central");
+    expect(deploymentEnvironmentForNamespace("octogee-local")).toBe("unknown");
+  });
+
+  it("prefers the manifest named by OCTOGEE_DEPLOYMENT_TARGETS over installed targets", () => {
+    process.env[DEPLOYMENT_TARGETS_ENV] = manifestWith((document) => {
+      document.targets["test-central"].namespace = "octogee-elsewhere";
+    });
+    installDeploymentTargets(deploymentTargetsDocument);
+    expect(deploymentEnvironmentSettings("test").namespace).toBe("octogee-elsewhere");
+  });
+
+  it("refuses targets installed after the registry was read", () => {
+    expect(deploymentEnvironmentForNamespace("octogee-local")).toBe("kind");
+    expect(() => installDeploymentTargets(deploymentTargetsDocument))
+      .toThrow("Deployment targets must be installed before the registry is read");
+  });
+
+  it("refuses an invalid installed document", () => {
+    const invalid = structuredClone(deploymentTargetsDocument);
+    invalid.activeTargets.test = "missing-target";
+    expect(() => installDeploymentTargets(invalid)).toThrow(/Active deployment target does not exist/);
   });
 });

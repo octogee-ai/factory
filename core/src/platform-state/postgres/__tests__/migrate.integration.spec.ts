@@ -79,7 +79,7 @@ describe.skipIf(!dsn)("migratePlatformState", () => {
     const { pool, schema } = isolated();
     const ledger = pg.escapeIdentifier(`${schema}_cutover`);
     await migratePlatformState(pool, { schema, deploymentTargetId: "prod-central" });
-    const requireImport = () => assertPlatformCutoverImported(pool, "prod-central", schema);
+    const requireImport = () => assertPlatformCutoverImported(pool, "prod-central", "octogee", schema);
     await expect(requireImport()).rejects.toThrow("no completed platform state import for prod-central");
     try {
       await pool.query(`CREATE SCHEMA ${ledger};

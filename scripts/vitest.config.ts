@@ -26,7 +26,7 @@ export default defineConfig({
       "**/*.emulator.spec.ts",
       ...(process.platform === "linux" ? [] : LINUX_HOST_SPECS),
     ],
-    setupFiles: ["./test-setup/user-entitlements.ts", "./test-setup/loopback-listen.ts"],
+    setupFiles: ["./test-setup/deployment-targets.ts", "./test-setup/user-entitlements.ts", "./test-setup/loopback-listen.ts"],
     // Operator-tooling specs spawn real subprocesses (kubectl shims, tsx
     // children); 5s fits only an idle machine, and the full parallel suite
     // on a loaded Mac starves them into timeouts.

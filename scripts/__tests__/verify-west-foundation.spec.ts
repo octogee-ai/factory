@@ -20,7 +20,7 @@ type Contract = {
 };
 
 const repoContract = JSON.parse(
-  readFileSync(path.join(repoRoot, "core/src/deployment-targets.json"), "utf8"),
+  readFileSync(path.join(repoRoot, "core/src/fixtures/deployment-targets.json"), "utf8"),
 ) as Contract;
 
 const queryFor = (contract: Contract, severity: string): string => {
@@ -121,7 +121,7 @@ function runVerifier(options: RunOptions = {}) {
   writeFileSync(kubectlCallsFile, "");
 
   const contract = options.contract ?? repoContract;
-  let contractFile = path.join(repoRoot, "core/src/deployment-targets.json");
+  let contractFile = path.join(repoRoot, "core/src/fixtures/deployment-targets.json");
   if (options.contract) {
     contractFile = path.join(temp, "deployment-targets.json");
     writeFileSync(contractFile, JSON.stringify(options.contract));

@@ -19,10 +19,8 @@ const MAX_REQUEST_TARGET_LENGTH = 4_096;
 const CACHE_CONTROL_HEADER = "Cache-Control";
 const NO_STORE = "no-store";
 const REQUEST_TARGET_BASE = "https://npm-cache-proxy.invalid";
-const ALLOWED_UPSTREAM_REGISTRY_URLS = new Set([
-  "https://us-central1-npm.pkg.dev/octogee/octogee-npm-cache/",
-  "https://us-central1-npm.pkg.dev/octogee-test/octogee-npm-cache/",
-]);
+const ARTIFACT_REGISTRY_NPM_HOST = /^[a-z][a-z0-9-]*-npm\.pkg\.dev$/u;
+const ARTIFACT_REGISTRY_REPOSITORY_PATH = /^\/[a-z][a-z0-9-]{4,28}[a-z0-9]\/[a-z][a-z0-9-]{0,62}\/$/u;
 
 interface CachedAuthorization {
   authorization: NpmCacheCapabilityAuthorization;
@@ -197,9 +195,10 @@ function validatedUpstreamRegistryUrl(raw: string): string {
     throw new Error("invalid npm cache upstream registry");
   }
   if (
-    !ALLOWED_UPSTREAM_REGISTRY_URLS.has(url.toString()) ||
-    url.port || url.username || url.password || url.search || url.hash ||
-    !url.pathname.endsWith("/")
+    url.protocol !== "https:" ||
+    !ARTIFACT_REGISTRY_NPM_HOST.test(url.hostname) ||
+    !ARTIFACT_REGISTRY_REPOSITORY_PATH.test(url.pathname) ||
+    url.port || url.username || url.password || url.search || url.hash
   ) {
     throw new Error("invalid npm cache upstream registry");
   }

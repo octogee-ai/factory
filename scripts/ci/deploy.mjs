@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { releaseOptions } from './release-plan.mjs';
 import { resolveRelease } from './release-source.mjs';
-import { deploymentSource, sourceCiScript } from './snapshot.mjs';
+import { deploymentSource, sourceCiScript, sourceEnvironment } from './snapshot.mjs';
 import { dispatchWorkflow } from './actions-dispatch.mjs';
 
 const args = process.argv.slice(2);
@@ -19,13 +19,14 @@ if (!local) {
 } else {
   const { manifest, digest } = await resolveRelease(options.sha);
   const directory = mkdtempSync(join(tmpdir(), 'octogee-deploy-'));
-  const copy = deploymentSource(execFileSync('/usr/bin/git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim(), manifest.sourceSha);
+  const root = execFileSync('/usr/bin/git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
+  const copy = deploymentSource(root, manifest.sourceSha);
   try {
     const manifestPath = join(directory, 'ci-release-manifest.json');
     writeFileSync(manifestPath, JSON.stringify(manifest));
     console.log(`Deploy ${options.environment}: ${manifest.sourceSha} (${digest})`);
     execFileSync(process.execPath, [sourceCiScript(copy.source, 'release.mjs'), ...args.filter(arg => arg !== '--local')], {
-      cwd: copy.source, stdio: 'inherit', env: { ...process.env, CI_RELEASE_MANIFEST: manifestPath },
+      cwd: copy.source, stdio: 'inherit', env: { ...sourceEnvironment(root, copy.source, process.env), CI_RELEASE_MANIFEST: manifestPath },
     });
   } finally {
     copy.remove();

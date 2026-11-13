@@ -419,8 +419,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   collectDefaultMetrics({ register: metricsRegistry });
   const httpRequestMetrics = createHttpRequestMetrics(metricsRegistry);
   const namespace = process.env.K8S_NAMESPACE ?? "octogee";
-  const appOrigin = opts.appOrigin ?? process.env.APP_URL
-    ?? (process.env.NODE_ENV === "test" ? "https://app-test.octogee.com" : "");
+  const appOrigin = opts.appOrigin ?? process.env.APP_URL ?? "";
   const product = opts.product?.createRuntime({
     metricsRegistry,
     namespace,

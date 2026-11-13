@@ -15,12 +15,14 @@ interface VitestConfig {
 }
 
 describe("scripts vitest configs", () => {
-  it("loads the loopback listen shim in both run modes", () => {
+  it("loads the deployment target fixture and the loopback listen shim in both run modes", () => {
     expect((unitConfig as VitestConfig).test?.setupFiles).toEqual([
+      "./test-setup/deployment-targets.ts",
       "./test-setup/user-entitlements.ts",
       "./test-setup/loopback-listen.ts",
     ]);
     expect((emulatorConfig as VitestConfig).test?.setupFiles).toEqual([
+      "./test-setup/deployment-targets.ts",
       "./test-setup/user-entitlements.ts",
       "./test-setup/loopback-listen.ts",
     ]);
