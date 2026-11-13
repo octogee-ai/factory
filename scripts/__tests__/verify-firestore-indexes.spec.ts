@@ -1,7 +1,6 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -91,8 +90,7 @@ cat "$FAKE_INDEXES"
         ),
       ).rejects.toThrow(/missing posts\(authorUid ASCENDING, updatedAt DESCENDING\)/);
 
-      const result = spawnSync("cat", [callLog], { encoding: "utf8" });
-      expect(result.stdout).toContain(
+      expect(readFileSync(callLog, "utf8")).toContain(
         "firestore indexes composite list --project=octogee-data-test --database=(default) --format=json",
       );
     } finally {

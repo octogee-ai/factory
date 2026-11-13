@@ -16,7 +16,7 @@ vi.mock("../lib/config.js", () => ({
   AGENTS_DIR: `${paths.root}/agents`,
 }));
 
-const { externalizeUserGitDir, setRepoSshCommand } = await import("../lib/git.js");
+const { externalizeUserGitDir, generateUserSshKey, setRepoSshCommand } = await import("../lib/git.js");
 const repo = path.join(paths.root, "customers", "alice");
 const pointer = path.join(repo, ".git");
 const legacyTemporary = path.join(repo, ".git.octogee.tmp");
@@ -48,6 +48,17 @@ beforeEach(() => {
 
 afterEach(() => {
   fs.rmSync(paths.root, { recursive: true, force: true });
+});
+
+it("rejects a noncanonical key owner before creating a key directory", () => {
+  expect(() => generateUserSshKey("../outside")).toThrow("Invalid SSH key owner");
+  expect(fs.existsSync(path.join(paths.root, "outside"))).toBe(false);
+});
+
+it("creates and reuses a keypair for a canonical owner", () => {
+  const publicKey = generateUserSshKey("alice");
+  expect(publicKey).toMatch(/^ssh-ed25519 .* octogee-alice@gateway$/u);
+  expect(generateUserSshKey("alice")).toBe(publicKey);
 });
 
 describe("user Git pointer replacement", () => {
