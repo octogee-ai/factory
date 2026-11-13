@@ -21,7 +21,7 @@ RUN --mount=type=bind,source=infra/gateway/openclaw-tarball/npm-fork.tgz,target=
 
 ENV HOME=/home/node
 
-FROM gateway-core-system AS gateway-system
+FROM gateway-core-system AS gateway-runtime-system
 
 ARG FD_VERSION=10.5.2
 ARG CLAUDE_CODE_VERSION=2.1.322
@@ -30,7 +30,7 @@ ARG CODEX_VERSION=0.167.1
 RUN chmod 1777 /tmp && apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv sqlite3 xxd \
     bash-completion vim less ripgrep tree cloc \
-    make build-essential wget unzip zip file bc \
+    wget unzip zip file bc \
     ffmpeg imagemagick chromium fonts-liberation fonts-noto-color-emoji \
     pandoc htop strace net-tools fzf \
     btrfs-progs gettext-base libx11-6 libxi6 libxkbcommon0 \
@@ -70,6 +70,11 @@ RUN npm install --global --ignore-scripts --no-audit --no-fund \
     && test "$(node -p "require('$(npm root -g)/@anthropic-ai/claude-code/package.json').version")" = "$CLAUDE_CODE_VERSION" \
     && test "$(node -p "require('$(npm root -g)/@openai/codex/package.json').version")" = "$CODEX_VERSION"
 
+
+FROM gateway-runtime-system AS gateway-system
+
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
 FROM gateway-core-system AS openclaw-installer
 
@@ -164,7 +169,7 @@ RUN set -e; \
     rm -f /tmp/oc-plugin.log /tmp/oc-codex-inspect.json; \
     npm cache clean --force
 
-FROM gateway-system AS gateway-runtime
+FROM gateway-runtime-system AS gateway-runtime
 
 COPY --from=openclaw-installer /usr/local/lib/node_modules/openclaw /usr/local/lib/node_modules/openclaw
 COPY --from=openclaw-core-plugin-installer /usr/local/lib/node_modules/openclaw/dist/extensions/mattermost /usr/local/lib/node_modules/openclaw/dist/extensions/mattermost
