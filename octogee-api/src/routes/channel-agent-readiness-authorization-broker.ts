@@ -1,3 +1,4 @@
+import { brokerRequestLimit } from "../middleware/broker-request-limit.js";
 import { Router, type Request, type Response } from "express";
 import type { PlatformStateRepositories } from "@octogee/core/platform-state";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
@@ -65,7 +66,7 @@ async function authorize(req: Request, res: Response, deps: ChannelReadinessAuth
 
 export function createChannelReadinessAuthorizationBrokerRoutes(deps: ChannelReadinessAuthorizationBrokerDeps): Router {
   const router = Router();
-  router.post("/authorize", async (req, res) => {
+  router.post("/authorize", brokerRequestLimit(240, "user"), async (req, res) => {
     res.set("cache-control", "no-store");
     try { await authorize(req, res, deps); } catch (error) {
       console.error("[channel-agent-readiness] authorization unavailable", error);

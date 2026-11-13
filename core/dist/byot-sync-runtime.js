@@ -509,11 +509,10 @@ function normalizedCatalogSelection(value) {
 }
 function catalogModelMapPlan(value, ensureModelRef) {
     const current = isRecord(value) ? value : {};
-    const expected = Object.fromEntries(Object.keys(current)
-        .filter((modelRef) => catalogEntryForModelRef(modelRef) !== null)
-        .map((modelRef) => [modelRef, canonicalUserModelDefinition(modelRef)]));
+    const modelRefs = new Set(Object.keys(current).filter((modelRef) => catalogEntryForModelRef(modelRef) !== null));
     if (ensureModelRef)
-        expected[ensureModelRef] = canonicalUserModelDefinition(ensureModelRef);
+        modelRefs.add(ensureModelRef);
+    const expected = Object.fromEntries([...modelRefs].map((modelRef) => [modelRef, canonicalUserModelDefinition(modelRef)]));
     const removedRefs = Object.keys(current).filter((modelRef) => catalogEntryForModelRef(modelRef) === null);
     const changed = JSON.stringify(current) !== JSON.stringify(expected);
     return {

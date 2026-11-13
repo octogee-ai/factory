@@ -1000,16 +1000,16 @@ function connectorFieldsFromBody(
   def: FieldsConnectorDef,
   body: unknown,
 ): Record<string, string> | RouteError {
-  const fields: Record<string, string> = {};
+  const fields = new Map<string, string>();
   const input = fieldsBody(body);
   for (const field of def.meta.captureFields ?? []) {
-    const value = input[field.key];
+    const value = Object.hasOwn(input, field.key) ? input[field.key] : undefined;
     if (typeof value !== "string" || value.trim().length === 0) {
       return routeError(400, { error: `${field.label} is required` });
     }
-    fields[field.key] = value.trim();
+    fields.set(field.key, value.trim());
   }
-  return fields;
+  return Object.fromEntries(fields);
 }
 
 async function validateConnectorFields(
@@ -1026,11 +1026,11 @@ async function validateConnectorFields(
 }
 
 async function encryptConnectorFields(fields: Record<string, string>): Promise<Record<string, string>> {
-  const encryptedFields: Record<string, string> = {};
+  const encryptedFields = new Map<string, string>();
   for (const [key, value] of Object.entries(fields)) {
-    encryptedFields[key] = await encryptSecret(value);
+    encryptedFields.set(key, await encryptSecret(value));
   }
-  return encryptedFields;
+  return Object.fromEntries(encryptedFields);
 }
 
 async function storeFieldsConnector(

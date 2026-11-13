@@ -566,7 +566,8 @@ export async function writeActivationManifest(rootDir, manifest) {
     const relPath = activationManifestTarPath(manifest.slug);
     const fullPath = path.join(rootDir, relPath);
     await fs.mkdir(path.dirname(fullPath), { recursive: true, mode: 0o700 });
-    const temporary = `${fullPath}.${randomUUID()}.tmp`;
+    const staging = await fs.mkdtemp(path.join(path.dirname(fullPath), ".activation-"));
+    const temporary = path.join(staging, "manifest");
     try {
         const file = await fs.open(temporary, "wx", 0o600);
         try {
@@ -586,7 +587,7 @@ export async function writeActivationManifest(rootDir, manifest) {
         }
     }
     finally {
-        await fs.rm(temporary, { force: true });
+        await fs.rm(staging, { recursive: true, force: true });
     }
     return { cwd: rootDir, path: relPath };
 }

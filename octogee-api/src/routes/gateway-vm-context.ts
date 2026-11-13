@@ -1,3 +1,4 @@
+import { brokerRequestLimit } from "../middleware/broker-request-limit.js";
 import { Router, type Request, type Response } from "express";
 import { readGatewayAuthorizationInStore } from "@octogee/core/gateway-live-release";
 import type { PlatformUserRecord, PlatformStateRepositories, Stored } from "@octogee/core/platform-state";
@@ -102,7 +103,7 @@ function runningRuntimeInstanceId(live: Record<string, unknown> | undefined, pod
 
 export function createGatewayVmContextRoutes(args: { store: PlatformStateRepositories }): Router {
   const router = Router();
-  router.post("/agent-context", async (req, res) => {
+  router.post("/agent-context", brokerRequestLimit(1200), async (req, res) => {
     const request = agentRequestContext(req, res);
     if (!request) return;
     const context = await assignedAgentOwnerContext(args.store, request.gatewayId, request.agentId);

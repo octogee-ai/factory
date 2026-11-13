@@ -151,8 +151,9 @@ the operator asks for them or a current risk to users requires them.
   its own; automation such as autoscaling or returning idle users belongs to a
   product built on top.
 - **Firebase and Firestore** remain in a few paths that have not moved behind a
-  platform port yet: `gateway-edge/src/lib/db.ts` and its auth middleware, and
-  the controller's steps that move, suspend and erase a user. Do not add new ones.
+  platform port yet: `gateway-edge/src/lib/db.ts` and its auth middleware. The
+  controller moves, suspends and erases users from platform state alone; a
+  product adds its own steps through `ProductUserLifecycle`. Do not add new ones.
 
 ## Where to look
 

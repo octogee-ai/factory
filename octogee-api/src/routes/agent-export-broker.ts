@@ -38,6 +38,22 @@ function journalMatches(current: OpaqueMap, record: AgentExportRecord): boolean 
   return current.kind === record.kind && current.uid === record.uid && current.slug === record.slug && current.approvalHash === record.approvalHash &&
     (!current.expectedCommit || current.expectedCommit === record.expectedCommit) && (current.status !== "complete" || record.status === "complete");
 }
+
+function completeJournalRecord(current: OpaqueMap | undefined, record: AgentExportRecord): AgentExportRecord {
+  if (!current || (current.status !== "publishing" && current.status !== "complete") ||
+      typeof current.expectedCommit !== "string" || !/^[a-f0-9]{40}$/u.test(current.expectedCommit) ||
+      current.expectedCommit !== record.expectedCommit || !journalMatches(current, record)) {
+    return fail("export publication receipt is missing");
+  }
+  const saved = current as unknown as AgentExportRecord;
+  const { owner, repo } = saved.destination;
+  if (typeof owner !== "string" || typeof repo !== "string" || !/^[A-Za-z0-9-]{1,39}$/u.test(owner) ||
+      !/^[A-Za-z0-9._-]{1,100}$/u.test(repo) || repo === "." || repo === "..") {
+    return fail("export publication destination is invalid");
+  }
+  return { ...saved, status: "complete", updatedAt: record.updatedAt,
+    commitUrl: `https://github.com/${owner}/${repo}/commit/${current.expectedCommit}` };
+}
 export async function authorizeAgentExport(state: PlatformStateRepositories, owner: OwnerContext, agentId: string): Promise<AgentExportSource> {
   const parsed = parseAgentId(agentId);
   if (parsed.kind === "unknown" || parsed.username !== owner.slug) fail("agent is outside the owned workspace");
@@ -48,7 +64,7 @@ export async function authorizeAgentExport(state: PlatformStateRepositories, own
   if (parsed.kind === "project" && !projectReady(await state.workspaces.projects.get(owner.slug, parsed.project), owner)) fail("project is not an active owned agent workspace");
   return { uid: owner.uid, slug: owner.slug, gatewayId: owner.gatewayId, epoch: placed!.epoch, agentId, project: parsed.kind === "project" ? parsed.project : null };
 }
-export function registerAgentExportBrokerRoutes(router: Router, deps: AgentImportBrokerDeps, context: (res: Response) => OwnerContext): void {
+export function registerAgentExportBrokerRoutes(router: Router, deps: Pick<AgentImportBrokerDeps, "store" | "featurePolicy" | "readIdentity" | "exportBlobs" | "bucket">, context: (res: Response) => OwnerContext): void {
   router.use("/exports", async (_req, res, next) => {
     try {
       const owner = context(res);
@@ -78,16 +94,20 @@ export function registerAgentExportBrokerRoutes(router: Router, deps: AgentImpor
     try {
       const owner = context(res), key = id(req.params.id), record = req.body as AgentExportRecord;
       if (!owned(record, owner) || record.id !== key || record.approvalHash !== agentExportApproval(record) || !["previewed", "publishing", "complete"].includes(record.status)) fail("invalid export record");
-      const { cleanupAt: _cleanupAt, ...payload } = record as AgentExportRecord & { cleanupAt?: unknown };
-      const durable = agentImportRecordFromPayload(owner.uid, key, payload, Date.parse(record.createdAt) + EXPORT_RECORD_TTL_MS);
       await deps.store.transaction({ label: "agent-export.record" }, async tx => {
         const current = (await tx.jobs.agentImports.get(owner.uid, key))?.record;
+        let authorizedRecord: AgentExportRecord;
         if (record.status !== "complete") {
           const currentSource = await authorizeAgentExport(tx, owner, record.source.agentId);
           if (record.gatewayId !== owner.gatewayId || exportDigest(currentSource) !== exportDigest(record.source)) fail("export source authority changed");
-        } else if (!current?.expectedCommit || current.expectedCommit !== record.expectedCommit) fail("export publication receipt is missing");
-        if (current && !journalMatches(current, record)) fail("export journal changed");
-        if (!current && record.status !== "previewed") fail("export preview is missing");
+          if (current && !journalMatches(current, record)) fail("export journal changed");
+          if (!current && record.status !== "previewed") fail("export preview is missing");
+          authorizedRecord = record;
+        } else {
+          authorizedRecord = completeJournalRecord(current, record);
+        }
+        const { cleanupAt: _cleanupAt, ...payload } = authorizedRecord as AgentExportRecord & { cleanupAt?: unknown };
+        const durable = agentImportRecordFromPayload(owner.uid, key, payload, Date.parse(authorizedRecord.createdAt) + EXPORT_RECORD_TTL_MS);
         await tx.jobs.agentImports.put(durable);
         await tx.jobs.agentImports.putPointer(owner.uid, "export-latest", { importId: key, slug: null, updatedAt: null });
       });

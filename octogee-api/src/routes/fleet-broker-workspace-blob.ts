@@ -1,3 +1,4 @@
+import { brokerRequestLimit } from "../middleware/broker-request-limit.js";
 import { runtimeBlobStore } from "../lib/runtime-blob-store.js";
 import type { Request, Response, Router } from "express";
 import type { PlatformUserRecord, GatewayAssignment, PlatformStateStore, WorkspaceRecord } from "@octogee/core/platform-state";
@@ -48,7 +49,7 @@ function workspaceBlobPathAllowed(parsed: Awaited<ReturnType<typeof parseMultipa
 }
 
 export function installWorkspaceBlobBrokerRoute(router: Router, deps: WorkspaceBlobBrokerDeps): void {
-  router.post("/blob/workspace/upload", async (req, res) => {
+  router.post("/blob/workspace/upload", brokerRequestLimit(1800), async (req, res) => {
     if (req.boundTenant?.kind !== "gateway") { res.status(403).json({ error: "forbidden" }); return; }
     let parsed: Awaited<ReturnType<typeof parseMultipart>>;
     try { parsed = await parseMultipart(req, MAX_UPLOAD_BYTES, { rejectUnexpectedFields: true }); }

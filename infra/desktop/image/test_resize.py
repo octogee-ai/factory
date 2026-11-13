@@ -41,7 +41,11 @@ class ResizeTest(unittest.TestCase):
             self.assertIn(['xrandr', '--rmmode', 'octogee-900x700'], commands)
 
     def test_x11_command_failure_and_unapplied_modes_are_reported(self):
-        for result in [SimpleNamespace(returncode=1, stdout=b'', stderr=b'bad mode'), SimpleNamespace(returncode=0, stdout=b'VNC-0 connected 1440x900+0+0', stderr=b'')]:
+        for result in [
+            SimpleNamespace(returncode=1, stdout=b'', stderr=b'bad mode'),
+            SimpleNamespace(returncode=0, stdout=b'VNC-0 connected 1440x900+0+0', stderr=b''),
+            SimpleNamespace(returncode=0, stdout=b'VNC-0 connected 800x600+0+01', stderr=b''),
+        ]:
             with patch.object(control, 'COMPOSITOR', 'openbox'), patch.object(control, 'run', return_value=result):
                 with self.assertRaises(RuntimeError):
                     control.resize(800, 600)
@@ -71,7 +75,7 @@ class ResizeTest(unittest.TestCase):
                     resize.assert_not_called()
 
     def test_rejects_invalid_dimensions_before_command(self):
-        for width, height in [(True, 600), (0, 600), (800.5, 600), (800, 99999)]:
+        for width, height in [(True, 600), (0, 600), (800.5, 600), ('800', 600), (800, 99999)]:
             with self.subTest(width=width, height=height), patch.object(control, 'run') as run:
                 with self.assertRaises(ValueError):
                     control.resize(width, height)

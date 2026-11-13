@@ -29,6 +29,10 @@ describe("prepareSpeechText", () => {
   it("returns an empty string for markdown that is only decoration", () => {
     expect(prepareSpeechText("![img](x.png)\n\n---\n")).toBe("");
   });
+
+  it("preserves a word boundary where an inline tag was removed", () => {
+    expect(prepareSpeechText("Left<br>right")).toBe("Left right.");
+  });
 });
 
 describe("splitSentences", () => {

@@ -1,3 +1,4 @@
+import { brokerRequestLimit } from "../middleware/broker-request-limit.js";
 import { Router, type Request, type Response } from "express";
 import type { PlatformStateRepositories } from "@octogee/core/platform-state";
 
@@ -113,7 +114,7 @@ async function authorizeRequest(req: Request, res: Response, store: AutomationAu
 export function createAutomationAuthorizationBrokerRoutes(opts: { store: AutomationAuthorizationStore }): Router {
   const router = Router();
 
-  router.post("/authorize", async (req, res, next) => {
+  router.post("/authorize", brokerRequestLimit(360, "user"), async (req, res, next) => {
     try {
       await authorizeRequest(req, res, opts.store);
     } catch (error) {
