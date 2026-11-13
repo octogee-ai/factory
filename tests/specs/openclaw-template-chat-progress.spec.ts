@@ -6,7 +6,7 @@ const repoRoot = path.resolve(__dirname, "../..");
 
 type Template = {
   agents: { defaults: { verboseDefault?: string } };
-  channels?: { mattermost?: { streaming?: unknown } };
+  channels?: { mattermost?: { replyToMode?: string; streaming?: unknown } };
 };
 
 function read(name: string): Template {
@@ -21,11 +21,15 @@ describe("gateway templates — chat progress surface", () => {
     },
   );
 
-  it("keeps the Mattermost draft preview carrying tool progress during a run", () => {
-    expect(read("openclaw.template.json").channels?.mattermost?.streaming).toEqual({
-      mode: "progress",
-      preview: { toolProgress: true },
-      progress: { toolProgress: true },
-    });
-  });
+  it.each(["openclaw.template.json", "openclaw.isolated.template.json"])(
+    "%s keeps the Mattermost draft preview carrying tool progress and leaves the reply and streaming modes to the gateway values",
+    (name) => {
+      const mattermost = read(name).channels?.mattermost;
+      expect(mattermost).not.toHaveProperty("replyToMode");
+      expect(mattermost?.streaming).toEqual({
+        preview: { toolProgress: true },
+        progress: { toolProgress: true },
+      });
+    },
+  );
 });

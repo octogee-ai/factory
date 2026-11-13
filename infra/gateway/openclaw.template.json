@@ -244,9 +244,7 @@
   },
   "channels": {
     "mattermost": {
-      "replyToMode": "all",
       "streaming": {
-        "mode": "progress",
         "preview": { "toolProgress": true },
         "progress": { "toolProgress": true }
       },

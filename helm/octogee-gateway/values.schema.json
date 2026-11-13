@@ -151,6 +151,10 @@
     },
     "env": {
       "type": "object",
+      "properties": {
+        "mmReplyToMode": { "enum": ["off", "first", "all", "batched"] },
+        "mmStreamingMode": { "enum": ["off", "partial", "block", "progress"] }
+      },
       "additionalProperties": true
     },
     "preview": {
