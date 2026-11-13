@@ -155,6 +155,18 @@ describe("directory dependency repository contract", () => {
     expectBefore(glm, "COPY glm-controller/.npmrc", "RUN npm ci");
   });
 
+  it("lands only the product overlay's packed libraries over the API runtime install", () => {
+    const api = dockerfile("octogee-api/Dockerfile");
+    const runtime = api.slice(api.lastIndexOf("\nFROM "));
+    const overlayLibraries = "COPY --from=overlay node_modules* ./node_modules/";
+    expectBefore(runtime, "RUN npm ci --omit=dev --ignore-scripts\nRUN npm rebuild", overlayLibraries);
+    expect(runtime.match(/^COPY --from=overlay .*$/gm)).toEqual([overlayLibraries]);
+  });
+
+  it("builds the API image without the product tree", () => {
+    expect(dockerfile("octogee-api/Dockerfile")).not.toMatch(/--from=product\b/);
+  });
+
   it("installs gateway dependencies from manifests and overlays freshly packed internal packages", () => {
     const gateway = dockerfile("infra/gateway/Dockerfile");
     const dependencies = dockerStage(gateway, "gateway-dependencies");

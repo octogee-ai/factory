@@ -75,12 +75,19 @@ function crawlBundleExternals(entry: string): Map<string, string> {
 
 const BOOT_ENTRY = path.join(API_ROOT, "src/main.ts");
 
-describe("cluster bundle dependencies — installable from octogee-api's own package.json", () => {
+describe("cluster bundle dependencies — installable from octogee-api's own package.json or overlay dependencies", () => {
+  function declaredDependencies(): Set<string> {
+    const manifests = ["package.json", "overlay-dependencies.json"]
+      .map((file) => path.join(API_ROOT, file))
+      .filter((file) => fs.existsSync(file));
+    return new Set(manifests.flatMap((file) => {
+      const manifest = JSON.parse(fs.readFileSync(file, "utf-8")) as { dependencies?: Record<string, string> };
+      return Object.keys(manifest.dependencies ?? {});
+    }));
+  }
+
   function missingFrom(entry: string): string[] {
-    const pkg = JSON.parse(fs.readFileSync(path.join(API_ROOT, "package.json"), "utf-8")) as {
-      dependencies?: Record<string, string>;
-    };
-    const declared = new Set(Object.keys(pkg.dependencies ?? {}));
+    const declared = declaredDependencies();
     return [...crawlBundleExternals(entry).entries()]
       .filter(([dep]) => !declared.has(dep))
       .map(([dep, importer]) => `${dep} (first imported by ${importer})`);

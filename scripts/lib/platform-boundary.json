@@ -66,10 +66,6 @@
     "platform/scripts/vitest.config.ts -> platform/scripts/product/"
   ],
   "dependencyRatchet": [
-    "platform/octogee-api/package-lock.json -> @octogee/product-core",
-    "platform/octogee-api/package-lock.json -> @octogee/product-shared",
-    "platform/octogee-api/package.json -> @octogee/product-core",
-    "platform/octogee-api/package.json -> @octogee/product-shared",
     "platform/scripts/package-lock.json -> @octogee/product-shared",
     "platform/scripts/package.json -> @octogee/product-shared"
   ]
