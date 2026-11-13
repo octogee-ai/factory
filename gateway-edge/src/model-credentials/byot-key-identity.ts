@@ -15,15 +15,10 @@ export function keyFingerprintFor(key: string): string {
   return `${key.slice(0, 6)}…${key.slice(-4)}`;
 }
 
-const KEY_FINGERPRINT_SECRET =
-  process.env.BYOT_FINGERPRINT_SECRET ||
-  process.env.INTERNAL_SERVICE_KEY ||
-  "dev-only-placeholder";
-
-export function keyHashFor(key: string): string {
+export function credentialVersionFingerprint(versionName: string): string {
   return crypto
-    .createHmac("sha256", KEY_FINGERPRINT_SECRET)
-    .update(key)
+    .createHash("sha256")
+    .update(versionName)
     .digest("hex")
     .slice(0, 12);
 }
