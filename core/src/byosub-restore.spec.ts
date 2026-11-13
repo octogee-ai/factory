@@ -512,8 +512,9 @@ describe("purgeUserOauthRuntimeArtifacts", () => {
     fs.symlinkSync(target, projection);
     await purgeUserOauthRuntimeArtifacts({ openclawDir: oc, homeDir: home, agentIds: [agentId], modelProviders: {} });
     expect(fs.readFileSync(target, "utf8")).toBe('{"providers":{"existing":{}}}');
-    expect(fs.lstatSync(projection).isSymbolicLink()).toBe(false);
-    expect(JSON.parse(fs.readFileSync(projection, "utf8"))).toEqual({ providers: {} });
+    const fd = fs.openSync(projection, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try { expect(JSON.parse(fs.readFileSync(fd, "utf8"))).toEqual({ providers: {} }); }
+    finally { fs.closeSync(fd); }
   });
 });
 
