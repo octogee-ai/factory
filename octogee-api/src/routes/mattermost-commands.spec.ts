@@ -233,7 +233,7 @@ describe("Mattermost /ui command", () => {
     expect(ticketPaths(docs)).toEqual([]);
   });
 
-  it("rate-limits a client before checking its signature", async () => {
+  it("rate-limits callers that the router did not sign, by client address", async () => {
     const { store } = fixture(Date.now());
     const { app } = commandApp(store);
     const unsigned = () => invoke(app, slashCommand(OWNER_MM), false);
@@ -252,6 +252,22 @@ describe("Mattermost /ui command", () => {
     for (let attempt = 0; attempt < 301; attempt += 1) {
       const flood = await invoke(app, slashCommand(STRANGER_MM));
       expect(flood.status).toBe(200);
+    }
+    const owner = await invoke(app, slashCommand(OWNER_MM));
+
+    expect(owner.status).toBe(200);
+    expect(owner.body.text).toContain("/openclaw/launch/");
+    expect(ticketPaths(docs)).toHaveLength(1);
+  });
+
+  it("keeps a team admin's other slash commands, signed by the router and rejected here, from locking out /ui", async () => {
+    const { docs, store } = fixture(Date.now());
+    const { app } = commandApp(store);
+    const otherCommand = slashCommand(STRANGER_MM).replace("command=%2Fui", "command=%2Fx");
+
+    for (let attempt = 0; attempt < 301; attempt += 1) {
+      const rejected = await invoke(app, otherCommand);
+      expect(rejected.status).toBe(400);
     }
     const owner = await invoke(app, slashCommand(OWNER_MM));
 

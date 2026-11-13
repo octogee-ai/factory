@@ -15,7 +15,7 @@ import {
 const MAX_COMMAND_BYTES = 16 * 1024;
 const MATTERMOST_ID = /^[a-z0-9]{26}$/;
 const MAX_TOKEN_LENGTH = 128;
-const MAX_REJECTED_REQUESTS_PER_CLIENT_PER_MINUTE = 300;
+const MAX_UNSIGNED_REQUESTS_PER_CLIENT_PER_MINUTE = 300;
 const MAX_COMMANDS_PER_USER_PER_MINUTE = 6;
 
 export interface MattermostCommandRoutesDeps {
@@ -35,6 +35,10 @@ interface SlashCommand {
 function header(req: Request, name: string): string {
   const value = req.headers[name];
   return typeof value === "string" ? value : "";
+}
+
+function commandBody(req: Request): Buffer {
+  return Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
 }
 
 function parseSlashCommand(body: Buffer): SlashCommand | null {
@@ -79,19 +83,23 @@ export function createMattermostCommandRoutes(deps: MattermostCommandRoutesDeps)
   if (!validAgentControlRouterPublicKey(deps.routerPublicKey)) {
     deps.log("[mattermost-commands] AGENT_CONTROL_ROUTER_PUBLIC_KEY is not an Ed25519 public key; every /ui command is refused");
   }
+  const routerSigned = (req: Request, res: Response): boolean => {
+    if (typeof res.locals.routerSigned !== "boolean") {
+      res.locals.routerSigned = verifyMattermostCommandRequest(commandBody(req), {
+        command: header(req, "x-octogee-mattermost-command"),
+        timestamp: header(req, "x-octogee-mattermost-command-timestamp"),
+        signature: header(req, "x-octogee-mattermost-command-signature"),
+      }, deps.routerPublicKey, now());
+    }
+    return res.locals.routerSigned as boolean;
+  };
   const verified = (req: Request, res: Response, next: NextFunction): void => {
-    const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-    const proof = {
-      command: header(req, "x-octogee-mattermost-command"),
-      timestamp: header(req, "x-octogee-mattermost-command-timestamp"),
-      signature: header(req, "x-octogee-mattermost-command-signature"),
-    };
-    if (!verifyMattermostCommandRequest(body, proof, deps.routerPublicKey, now())) {
+    if (!routerSigned(req, res)) {
       deps.log("[mattermost-commands] rejected a /ui command without a valid router proof");
       res.status(401).json({ error: "unauthorized" });
       return;
     }
-    const command = parseSlashCommand(body);
+    const command = parseSlashCommand(commandBody(req));
     if (!command) {
       res.status(400).json({ error: "invalid-command" });
       return;
@@ -99,10 +107,10 @@ export function createMattermostCommandRoutes(deps: MattermostCommandRoutesDeps)
     res.locals.slashCommand = command;
     next();
   };
-  const rejectedPerClient = rateLimit({
+  const unsignedPerClient = rateLimit({
     windowMs: 60_000,
-    limit: MAX_REJECTED_REQUESTS_PER_CLIENT_PER_MINUTE,
-    skipSuccessfulRequests: true,
+    limit: MAX_UNSIGNED_REQUESTS_PER_CLIENT_PER_MINUTE,
+    skip: routerSigned,
     standardHeaders: false,
     legacyHeaders: false,
     keyGenerator: (req) => ipKeyGenerator(req.ip ?? "unknown"),
@@ -121,8 +129,8 @@ export function createMattermostCommandRoutes(deps: MattermostCommandRoutesDeps)
   const router = Router();
   router.post(
     "/control-ui",
-    rejectedPerClient,
     express.raw({ type: () => true, limit: MAX_COMMAND_BYTES }),
+    unsignedPerClient,
     verified,
     perUser,
     async (_req: Request, res: Response, next: NextFunction) => {
