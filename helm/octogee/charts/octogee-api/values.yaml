@@ -28,6 +28,12 @@ serviceAccount:
 # secrets for cattle gateway pods.
 gatewayServiceAccount: ""
 
+# Feature flags enabled for every user when no product feature policy is
+# installed. Keys come from shared/types/feature-flags.ts; an unknown key stops
+# octogee-api at startup.
+featureFlags:
+  enabled: []
+
 env:
   GITEA_URL: ""  # auto-computed from K8S_NAMESPACE
   GITEA_ORG: "octogee"

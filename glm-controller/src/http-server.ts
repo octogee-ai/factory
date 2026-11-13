@@ -30,6 +30,7 @@ import {
   type AdminUserProductDetail,
 } from "@octogee/core/admin-user-directory-router";
 import { addAdminLogsRoutes } from "@octogee/core/admin-logs-router";
+import { addAdminSizingProfileRoutes } from "@octogee/core/admin-sizing-profile-router";
 import type { LogEntriesSource } from "@octogee/core/fleet-logs";
 import {
   createRequireAdmin,
@@ -346,6 +347,7 @@ export function createHttpServer(deps: HttpServerDeps): Express {
     store: deps.store,
     requestNativeReturnSourceRecovery: deps.requestNativeReturnSourceRecovery,
   });
+  addAdminSizingProfileRoutes(adminRouter, { store: deps.store });
   addAdminFleetRoutes(adminRouter, {
     computerReplacementEnabled: true,
     accounts: deps.accounts,

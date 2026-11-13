@@ -52,8 +52,9 @@ by use.
 | --- | --- | --- |
 | [OpenRouter](https://openrouter.ai/keys), for an API key | Pay as you go | What the agents' model calls cost |
 
-Agents on a shared gateway use an OpenRouter model by default. An Anthropic or
-OpenAI key also works for the models of that provider.
+The kind install script points agents at models of a provider whose key it
+stores. An Anthropic or OpenAI key works too; [Agent models](kind.md#agent-models)
+lists the models it picks for each.
 
 ### To run it on Google Cloud
 

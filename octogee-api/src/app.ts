@@ -45,7 +45,7 @@ import { operatorRailRegistry, type ModelBrokerRailRegistry } from "./lib/model-
 import { platformStateBrokerRecords, type BrokerRecords } from "./lib/broker-records.js";
 import { createFeatureRoutes } from "./routes/features.js";
 import type { ProductNotifications } from "./lib/user-notifications.js";
-import { DisabledFeatureFlagProvider, FeaturePolicy } from "./lib/feature-policy.js";
+import { FeaturePolicy, configuredFeatureFlagProvider } from "./lib/feature-policy.js";
 import { createIsolatedGatewayRoutes } from "../../gateway-edge/src/routes/user/gateways.js";
 import { createProjectCreateRoutes } from "../../gateway-edge/src/routes/projects/create.js";
 import { createProjectRepoSourceRoutes } from "../../gateway-edge/src/routes/projects/repo-source.js";
@@ -406,17 +406,6 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
 
   const app = express();
   if (process.env.BLOB_STORE_BACKEND !== "gcs") app.locals.workspaceBlobStore = runtimeBlobStore;
-  let agentImportBucket: ReturnType<typeof storage.bucket> | undefined;
-  const importBucket = {
-    file(path: string) {
-      agentImportBucket ??= storage.bucket();
-      return agentImportBucket.file(path);
-    },
-    deleteFiles(options: { prefix: string }) {
-      agentImportBucket ??= storage.bucket();
-      return agentImportBucket.deleteFiles(options);
-    },
-  };
   // client → GCLB (appends client-ip, lb-ip) → this app
   app.set("trust proxy", 2);
   const metricsRegistry = new Registry();
@@ -431,7 +420,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
     readGithubToken: readFreshGithubToken,
   });
   mountRouteTable(app, product?.routesBeforeMiddleware ?? []);
-  const featurePolicy = opts.featurePolicy ?? product?.featurePolicy ?? new FeaturePolicy(new DisabledFeatureFlagProvider(), { logger });
+  const featurePolicy = opts.featurePolicy ?? product?.featurePolicy ?? new FeaturePolicy(configuredFeatureFlagProvider(process.env), { logger });
   const productRouteDeps: ProductRouteDeps = { featurePolicy };
   const modelBrokerRails = opts.product?.modelBrokerRails ?? operatorRailRegistry();
   const brokerRecords = product?.brokerRecords ?? platformStateBrokerRecords(platformStateStore);
@@ -616,8 +605,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
     createAgentImportBrokerRoutes({
       store: platformStateStore,
       accounts: brokerRecords.accounts,
-      bucket: importBucket,
-      exportBlobs: app.locals.workspaceBlobStore,
+      blobs: runtimeBlobStore,
       readGithubToken: readFreshGithubToken,
       listGithubRepos: githubListRepos,
       readGithubRepoSize: async (owner, repo, token) => {

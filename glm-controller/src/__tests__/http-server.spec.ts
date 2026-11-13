@@ -925,6 +925,23 @@ describe("createHttpServer — admin gateway routes", () => {
     expect(res.body.error).toContain("not configured");
   });
 
+  it("serves sizing profiles to admins and answers a dry run of a write ahead of the fleet routes' refusal", async () => {
+    const app = createHttpServer(buildDeps(store));
+    const profile = { isolation: "shared" };
+
+    await request(app).get("/api/admin/sizing-profiles").set("Authorization", "Bearer user-token").expect(403);
+    const planned = await request(app).put("/api/admin/sizing-profiles/default?dryRun=true")
+      .set("Authorization", "Bearer admin-token").send(profile);
+    expect(planned.status).toBe(200);
+    expect(planned.body).toMatchObject({ dryRun: true, plans: [{ what: "set sizing profile" }] });
+    const applied = await request(app).put("/api/admin/sizing-profiles/default")
+      .set("Authorization", "Bearer admin-token").send(profile);
+    expect(applied.status).toBe(200);
+    expect(applied.body).toMatchObject({ name: "default", profile, operationId: expect.any(String) });
+    const listed = await request(app).get("/api/admin/sizing-profiles").set("Authorization", "Bearer admin-token");
+    expect(listed.body).toEqual({ sizingProfiles: [{ name: "default", profile }] });
+  });
+
   it("does not serve the plan change without the product", async () => {
     const res = await request(createHttpServer(buildDeps(store)))
       .post("/api/admin/users/u1/ops").set("Authorization", "Bearer admin-token").send({ action: "setTier", value: "pro" });

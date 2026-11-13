@@ -60,14 +60,6 @@ gitea:
         ROOT_URL: http://octogee-gitea-http.octogee-local.svc.cluster.local:3000
 
 gateway-edge:
-  env:
-    GITEA_ORG: octogee
-    FIREBASE_PROJECT_ID: kind
-    GCLOUD_PROJECT: kind
-    APP_URL: http://localhost:4322
-    API_PUBLIC_URL: http://localhost:3001
-    SITE_URL: http://localhost:4321
-    K8S_NAMESPACE: octogee-local
   ingress:
     enabled: false
 

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -48,10 +48,11 @@ describe("createBrokeredBlobStore", () => {
       relativePath: "images/logo.png",
       gcsPath: "unused-by-broker",
       destination,
+      size: 2,
     });
 
     expect(c.blobDownloadUrl).toHaveBeenCalledWith({ slug: "acme", path: "images/logo.png" });
-    expect(fetchMock).toHaveBeenCalledWith("https://signed.test/download", { method: "GET" });
+    expect(fetchMock).toHaveBeenCalledWith("https://signed.test/download", expect.objectContaining({ method: "GET", redirect: "error" }));
     await expect(readFile(destination, "utf8")).resolves.toBe("AB");
   });
 
@@ -85,6 +86,26 @@ describe("createBrokeredBlobStore", () => {
     );
   });
 
+  it("rejects a linked upload before transferring bytes", async () => {
+    const target = await tempFile("private.txt", "hello");
+    const localPath = `${target}.link`;
+    await symlink(target, localPath);
+    await expect(createBrokeredBlobStore(client()).upload({
+      slug: "acme", relativePath: "asset.txt", gcsPath: "unused", localPath,
+      mimeType: "text/plain", size: 5,
+    })).rejects.toMatchObject({ code: "ELOOP" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves the existing file when a blob response exceeds the manifest size", async () => {
+    fetchMock.mockResolvedValue(new Response("oversized"));
+    const destination = await tempFile("asset.txt", "existing");
+    await expect(createBrokeredBlobStore(client()).download({
+      slug: "acme", relativePath: "asset.txt", gcsPath: "unused", destination, size: 5,
+    })).rejects.toThrow("blob download exceeds manifest size");
+    await expect(readFile(destination, "utf8")).resolves.toBe("existing");
+  });
+
   it("includes response status and text when signed download or upload fails", async () => {
     const c = client();
     fetchMock.mockResolvedValueOnce(new Response("expired", { status: 403 }));
@@ -94,6 +115,7 @@ describe("createBrokeredBlobStore", () => {
       relativePath: "images/logo.png",
       gcsPath: "unused",
       destination: await tempFile("logo.png"),
+      size: 5,
     })).rejects.toThrow("blob download acme/images/logo.png failed: 403 expired");
 
     fetchMock.mockResolvedValueOnce(new Response("too large", { status: 413 }));
@@ -145,9 +167,9 @@ describe("brokered manifest store", () => {
     await expect(store.read(key)).resolves.toEqual({ contents: "{}", generation: etag });
     await store.write(key, "{}", etag);
     expect(c.workspaceManifestWriteUrl).toHaveBeenCalledWith({ slug: "acme", ifGenerationMatch: etag });
-    expect(fetchMock).toHaveBeenLastCalledWith("https://signed.test/manifest-write", {
+    expect(fetchMock).toHaveBeenLastCalledWith("https://signed.test/manifest-write", expect.objectContaining({
       method: "PUT", headers: { "content-type": "application/json", "if-match": etag }, body: "{}",
-    });
+    }));
   });
 
   it("refuses a read with no generation — an unconditional write would follow", async () => {
