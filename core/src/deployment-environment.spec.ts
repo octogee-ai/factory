@@ -89,7 +89,7 @@ describe("deployment environment registry", () => {
     );
 
     const shared = structuredClone(deploymentTargetsDocument) as { targets: Record<string, Record<string, unknown>> };
-    shared.targets["test-central"].customerHostingProjectId = "octogee-customer-hosting";
+    shared.targets["test-central"].customerHostingProjectId = "example-prod-hosting";
     expect(() => validateDeploymentTargetsDocument(shared)).toThrow(
       "deployment target test-central.customerHostingProjectId is already used by prod-central",
     );
