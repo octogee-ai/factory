@@ -3813,14 +3813,14 @@ function buildEraseUserHandler({ documents, store, logFn, kubeOps, privateKey, d
         preserveRetirementProof: proof => preserveUserGatewayRetirement(store, cleanup.uid, deletionId, proof),
       }),
     findUndrainedArtifactIds: async (artifactIds) =>
-      userLifecycle === null ? [] : userLifecycle.erasure.undrainedArtifactIds(artifactIds),
+      userLifecycle === null ? [] : userLifecycle.data.undrainedArtifactIds(artifactIds),
     eraseAgentStores,
     cloudErase: async (cleanup, currentOperationId) => {
       await assertNoUserAgentStores(requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "account-deletion verification requires the PostgreSQL agent-store administration URL"), cleanup);
       return nukeUserCloudSide({ ...cleanup, currentOperationId }, cloudCleanup);
     },
     verifyErasure: async (cleanup, currentOperationId) => {
-      const remaining = await remainingUserRecords(store, userLifecycle?.erasure.data, userDataScope(cleanup, currentOperationId));
+      const remaining = await remainingUserRecords(store, userLifecycle?.data, userDataScope(cleanup, currentOperationId));
       remaining.push(...await cloudCleanup.remainingUserStorage(cleanup.uid, cleanup.slug));
       for (const userId of [
         cleanup.mmUserId,
@@ -4015,7 +4015,7 @@ export function buildUserCloudCleanupDeps(
     log: logFn,
   });
   const s3 = createS3UserBlobErasure();
-  const productData = userLifecycle?.erasure.data;
+  const productData = userLifecycle?.data;
   return {
     git,
     channels,

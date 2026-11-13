@@ -48,12 +48,11 @@ export interface ProductUserData {
   eraseRecords(scope: UserDataScope): Promise<void>;
   deleteSignIn(uid: string): Promise<void>;
   remaining(scope: UserDataScope): Promise<string[]>;
+  undrainedArtifactIds(artifactIds: readonly string[]): Promise<string[]>;
 }
 
 export interface ProductUserErasure {
   steps: readonly ErasureStep[];
-  data: ProductUserData;
-  undrainedArtifactIds(artifactIds: readonly string[]): Promise<string[]>;
   verification: ErasureVerification;
 }
 
@@ -72,6 +71,7 @@ export interface ProductUserLifecycle {
   cleanup(uid: string, slug: string): Promise<ProductUserCleanup>;
   suspension: ProductUserSuspension;
   erasure: ProductUserErasure;
+  data: ProductUserData;
   verificationContext(productContext: ProductContext): ProductContext | null;
   archive(uid: string, account: Record<string, unknown> | undefined): Promise<ProductUserArchive>;
 }

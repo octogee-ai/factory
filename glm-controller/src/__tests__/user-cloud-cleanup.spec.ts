@@ -21,18 +21,19 @@ function adaRecords(): Map<string, Record<string, unknown>> {
   }));
 }
 
-function productData(): ProductUserLifecycle["erasure"]["data"] {
+function productData(): ProductUserLifecycle["data"] {
   return {
     eraseStorage: vi.fn(async () => undefined),
     eraseVmHome: vi.fn(async () => ({ deleted: 0 })),
     eraseRecords: vi.fn(async () => undefined),
     deleteSignIn: vi.fn(async () => undefined),
     remaining: vi.fn(async () => []),
+    undrainedArtifactIds: vi.fn(async () => []),
   };
 }
 
-function withProductData(data: ProductUserLifecycle["erasure"]["data"]): ProductUserLifecycle {
-  return { erasure: { data } } as unknown as ProductUserLifecycle;
+function withProductData(data: ProductUserLifecycle["data"]): ProductUserLifecycle {
+  return { data } as unknown as ProductUserLifecycle;
 }
 
 function stubCleanupEnvironment(blobStoreBackend: string) {
