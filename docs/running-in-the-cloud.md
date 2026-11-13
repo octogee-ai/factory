@@ -1,12 +1,22 @@
-# Running in production
+# Running the foundation in the cloud
 
-Production runs on your cloud provider's managed services. The installer does
+`install.sh --target=gcp` and `--target=aws` install the foundation on your
+cloud provider's managed services: Kubernetes, PostgreSQL, object storage,
+Traefik, Gitea, Mattermost and one stock OpenClaw gateway. The installer does
 not run a database or object store in your cluster on this path.
 
-**Not yet run on a real cloud account.** The Google Cloud and AWS recipes pass
-their tests against stubbed provider command-line tools, and their flags were
-checked against each provider's own tool. Expect to find rough edges on a first
-real run, and please report them.
+**This is not the full platform.** These targets do not install the fleet
+controller, the platform API, the gateway edge or the LLM broker, so there are
+no users, shared gateways or isolated gateways to manage. The gateway is the
+stock `ghcr.io/openclaw/openclaw` image, and it holds the model keys you export
+in its own environment. The full platform runs only on a local kind cluster
+today; see [The full platform on kind](kind.md). It has not yet run on a cloud
+account.
+
+**The foundation has not run on a real cloud account either.** The Google
+Cloud and AWS recipes pass their tests against stubbed provider command-line
+tools, and their flags were checked against each provider's own tool. Expect to
+find rough edges on a first real run, and please report them.
 
 ## What gets created
 
@@ -42,8 +52,8 @@ provider's pricing first.
 
 ## Start small on the welcome credit
 
-The defaults are sized for production: nodes in three zones and a highly
-available database. They use up Google Cloud's welcome credit quickly. For a first
+The defaults are sized for an install you depend on: nodes in three zones and
+a highly available database. They use up Google Cloud's welcome credit quickly. For a first
 install, use one zone and a smaller database:
 
 ```bash

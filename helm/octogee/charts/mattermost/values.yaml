@@ -1,5 +1,5 @@
 image:
-  repository: ""
+  repository: ghcr.io/octogee-ai/octogee-cloud/mattermost
   tag: ""
   digest: ""
 
@@ -11,15 +11,14 @@ db:
   host: postgres
   port: 5432
   user: mattermost
-  name: mattermost_prod
+  name: mattermost
   passwordSecret: mattermost-cloud-sql
   passwordKey: password
 
-siteUrl: "https://mattermost.octogee.com"
+siteUrl: "https://mattermost.example.com"
 
 # Space-separated list of origins that may call MM cross-origin (REST + WS).
-# Browser-direct path: app.octogee.com → mm.octogee.com requires the app
-# origin here. Set per-env in helm/octogee/values.{test,prod}.yaml.
+# A browser calling Mattermost directly needs its app origin here.
 allowedCorsOrigins: ""
 
 # Link-preview / OpenGraph fetches. When true, MM's `POST /api/v4/opengraph`

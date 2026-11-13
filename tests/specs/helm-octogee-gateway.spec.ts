@@ -1864,15 +1864,19 @@ describe("helm/octogee-gateway/ — OPENCLAW_GATEWAY_TOKEN platform-owned", () =
 // remove it.
 describe("helm/octogee-gateway/ — GCP_PROJECT_ID on gateway-edge", () => {
   it("renders GCP_PROJECT_ID on the gateway-edge container for cattle profile (no kubectl-set workaround needed)", () => {
-    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const dep = findDoc(
+      helmTemplate("octogee-gw-default", { "gatewayEdge.env.GCP_PROJECT_ID": "example-project" }),
+      "Deployment",
+      "octogee-gateway-default",
+    ) ?? "";
     const ge = containerBlock(dep, "gateway-edge");
-    expect(ge).toMatch(/- name:\s*GCP_PROJECT_ID[\s\S]*?value:\s*"octogee"/);
+    expect(ge).toMatch(/- name:\s*GCP_PROJECT_ID[\s\S]*?value:\s*"example-project"/);
   });
 
   it("renders GCP_PROJECT_ID on the gateway-edge container for user profile", () => {
     const dep =
       findDoc(
-        helmTemplate("octogee-gw-default", { profile: "builder" }),
+        helmTemplate("octogee-gw-default", { profile: "builder", "gatewayEdge.env.GCP_PROJECT_ID": "example-project" }),
         "Deployment",
         "octogee-gateway-default",
       ) ?? "";

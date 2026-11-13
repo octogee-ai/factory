@@ -1,7 +1,8 @@
 # Getting started
 
-Try Octogee Cloud on your own machine in Docker, or install it for production
-on managed cloud services. One installer, `install.sh`, handles both.
+Try the Octogee Cloud foundation on your own machine in Docker, or install it
+on managed cloud services. One installer, `install.sh`, handles both. The full
+platform runs on a local kind cluster.
 
 ## Two installers
 
@@ -17,7 +18,8 @@ two installers.
   cluster, with the fleet controller, users, shared gateways and the LLM broker
   that gives agents their model provider. It copies the platform images this
   repository publishes, or builds them from your checkout.
-  See [The full platform on kind](kind.md).
+  See [The full platform on kind](kind.md). The full platform has not yet run
+  on a cloud account.
 
 On the full platform, users on a shared gateway reach their agent through
 Mattermost and Gitea. The OpenClaw Control UI is for users on an isolated
@@ -189,10 +191,11 @@ Check the install at any time:
 ./deploy/local/check.sh
 ```
 
-## Run in production
+## Run the foundation in the cloud
 
-[Running in production](running-in-the-cloud.md) covers GKE and EKS with
-managed PostgreSQL and object storage.
+[Running the foundation in the cloud](running-in-the-cloud.md) covers GKE and
+EKS with managed PostgreSQL and object storage. It installs the same foundation
+as the local install, not the full platform.
 
 ## Work on the code
 

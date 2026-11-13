@@ -1,7 +1,7 @@
 image:
-  repository: ""
-  tag: latest
-  digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  repository: ghcr.io/octogee-ai/octogee-cloud/glm-controller
+  tag: ""
+  digest: ""
 
 # Workload Identity binding — KSA `glm-controller` impersonates THIS GSA:
 # The fleet controller's own dedicated identity (octogee-glm-controller), which carries the
@@ -119,7 +119,7 @@ resources:
 # The fleet controller HTTP — admin / fleet API surface served from the control
 # plane. Mounts the same admin-fleet-router factory gateway-edge uses,
 # so the admin Gateways tab keeps responding when no gateway pods are
-# booted. The api[-test].octogee.com Ingress (in gateway-edge chart)
+# booted. The public API host's Ingress (in gateway-edge chart)
 # routes specific fleet paths to this Service.
 http:
   port: 8080

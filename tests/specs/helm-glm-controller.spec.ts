@@ -11,6 +11,8 @@ const REQUIRED_VALUES: Record<string, string> = {
   "global.deploymentTargetId": "test-central",
   "global.deploymentProjectId": "octogee-test",
   "image.repository": "registry.example/glm-controller",
+  "image.tag": "abc1234",
+  "image.digest": "sha256:" + "d".repeat(64),
   "platformRelease.sourceSha": "a".repeat(40),
   "platformRelease.gatewayImageRepository": "registry.example/octogee-gateway",
   "platformRelease.gatewayImageTag": "abc1234@sha256:" + "a".repeat(64),
@@ -238,14 +240,14 @@ describe("glm-controller chart", () => {
 
   it("renders a single-replica Deployment using the configured image", () => {
     const out = helmTemplate({
-      "image.repository": "us-central1-docker.pkg.dev/octogee/octogee/glm-controller",
+      "image.repository": "ghcr.io/octogee-ai/octogee-cloud/glm-controller",
       "image.tag": "abc1234",
     });
     const dep = findDoc(out, "Deployment", "glm-controller");
     expect(dep).not.toBeNull();
     expect(dep).toMatch(/replicas:\s*1/);
     expect(dep).toMatch(
-      /image:\s*"us-central1-docker\.pkg\.dev\/octogee\/octogee\/glm-controller:abc1234@sha256:0{64}"/,
+      /image:\s*"ghcr\.io\/octogee-ai\/octogee-cloud\/glm-controller:abc1234@sha256:d{64}"/,
     );
     
     expect(dep).toMatch(/strategy:[\s\S]*?type:\s*Recreate/);

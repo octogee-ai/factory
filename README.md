@@ -20,11 +20,22 @@ curl -fsSLo install.sh https://raw.githubusercontent.com/octogee-ai/octogee-clou
 bash install.sh
 ```
 
-[Try it locally](docs/getting-started.md), or [run it in production](docs/running-in-the-cloud.md) on GKE or EKS.
-To run the full platform, with the fleet controller, users and shared gateways,
-on a local kind cluster, see [The full platform on kind](docs/kind.md). Users on
-a shared gateway work through Mattermost and Gitea; the OpenClaw Control UI is
-for isolated gateways only.
+`install.sh` sets up the foundation: Gitea, Mattermost and one stock OpenClaw
+gateway, [on your machine](docs/getting-started.md) or [on GKE or EKS](docs/running-in-the-cloud.md).
+It does not install the fleet controller, the platform API or the LLM broker.
+
+The full platform, with the fleet controller, users and shared gateways, runs
+on a local kind cluster from the images this repository publishes. See
+[The full platform on kind](docs/kind.md). It has not yet run on a cloud
+account, so there is no production install of it yet. Users on a shared
+gateway work through Mattermost and Gitea; the OpenClaw Control UI is for
+isolated gateways only.
+
+Some features start switched off, among them agent import and export, the
+OpenClaw dashboard, project repository sources and voice. List the ones you
+want in the chart value `octogee-api.featureFlags.enabled`, using the keys in
+[`shared/types/feature-flags.ts`](shared/types/feature-flags.ts). An unknown
+key stops the platform API at startup.
 
 ## What you need to sign up for
 
