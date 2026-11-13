@@ -6652,7 +6652,7 @@ function xr(e, n) {
   return br.set(e, { toolMessages: n, latest: r }), r;
 }
 
-// octogee/app/openclaw-browser/resources.ts
+// gateway-edge/openclaw-browser-resources/entry.ts
 function Kf(e, n) {
   return [...xr(e, []).values()].filter((o) => o.tab.target === "host" && o.tab.profile === n).at(-1) ?? null;
 }
