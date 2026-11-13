@@ -113,6 +113,7 @@ port 18080.
 | `--name=<name>` | Name of the cluster and of its state directory. The default is `octogee`. |
 | `--pull` | Copy the images that Build main published for the checkout's commit instead of building them. |
 | `--sha=<sha>` | With `--pull`, copy the images published for this full commit SHA. |
+| `--manifest=<file>` | With `--pull`, copy the exact image digests from an extracted Build main manifest. Its SHA must match the selected commit. |
 | `--skip-build` | Reinstall the images from the last build or copy, under that commit. |
 | `--images=<a,b>` | Build or copy only these platform images. |
 | `--context-dir=<dir>` | Build from another platform tree. |
@@ -291,7 +292,9 @@ images for `linux/amd64` and `linux/arm64` on every push to `main`. It pushes
 them to `ghcr.io/octogee-ai/octogee-cloud/<image>`, tagged with the full and
 short commit SHA, and keeps an image manifest of every digest as a workflow
 artifact named `image-manifest-<sha>`. `kind-install.sh up --pull` installs
-these images.
+these images. The post-build kind smoke test takes the amd64 digests directly
+from that run’s manifest and uses `octogee-fleet gateway ls` to query the new
+cluster’s Admin API.
 
 The workflow keeps its build cache in GitHub Actions cache scopes named
 `octogee-cloud-<image>-<platform>`. It never reads or writes a registry cache,
