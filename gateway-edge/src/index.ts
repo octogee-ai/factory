@@ -25,7 +25,7 @@ import internalOwnerAutomationRoutes from "./routes/internal/owner-automations.j
 import { createProjectPersistenceRouter } from "./routes/internal/project-persistence.js";
 import internalGiteaAdminRoutes from "./routes/internal/gitea-admin.js";
 import internalByotSyncRoutes from "./routes/internal/byot-sync.js";
-import internalConnectorRoutes from "./routes/internal/connectors.js";
+import { createInternalConnectorRoutes } from "./routes/internal/connectors.js";
 import { createInternalVmRouter, resolveVmControlUrl } from "./routes/internal/vm.js";
 import { createAgentImportsRouter } from "./routes/agent-imports.js";
 import { createAgentExportsRouter } from "./routes/agent-exports.js";
@@ -247,7 +247,7 @@ if (surface === "sidecar") {
   app.use("/internal/workspace", internalWorkspaceCommitRoutes);
   app.use("/internal/owner-automations", internalOwnerAutomationRoutes);
   app.use("/internal/projects", createProjectPersistenceRouter());
-  app.use("/internal/connectors", internalConnectorRoutes);
+  app.use("/internal/connectors", createInternalConnectorRoutes());
   app.use("/internal/computer", createInternalVmRouter({ controlUrl: vmControlUrl }));
 }
 
