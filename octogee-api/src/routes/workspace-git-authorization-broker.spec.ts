@@ -153,7 +153,7 @@ describe("POST /internal/workspace-git/authorize", () => {
       slug: "alice",
       projectSlug: null,
       githubToken: null,
-      commitAuthor: { name: "alice", email: "alice@octogee.local" },
+      commitAuthor: { name: "alice", email: "alice@users.invalid" },
     });
   });
 

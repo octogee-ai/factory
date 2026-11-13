@@ -521,6 +521,10 @@
     "./operator-token": {
       "types": "./dist/operator-token.d.ts",
       "default": "./dist/operator-token.js"
+    },
+    "./placeholder-email": {
+      "types": "./dist/placeholder-email.d.ts",
+      "default": "./dist/placeholder-email.js"
     }
   },
   "typesVersions": {
@@ -842,6 +846,9 @@
       ],
       "operator-token": [
         "dist/operator-token.d.ts"
+      ],
+      "placeholder-email": [
+        "dist/placeholder-email.d.ts"
       ]
     }
   },

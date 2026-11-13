@@ -732,9 +732,9 @@ router.get(
 
         const slugs = workspaceSlugs(logger, userRecord);
         // Workspace usage_models carry token telemetry for ALL traffic (byosub
-        // included) but openclaw-$0 costs; the broker rollup carries the real USD
+        // included) but openclaw's zero costs; the broker rollup carries the real USD
         // per platform model. Broker figures win per model; workspace-only models
-        // (byosub) keep their token counts at $0 platform cost.
+        // (byosub) keep their token counts at zero platform cost.
         const modelCosts: Record<
           string,
           { tokens: number; costUsd: number; lastUsedAt: string | null }
@@ -833,13 +833,13 @@ router.get(
 
         const slugs = workspaceSlugs(logger, userRecord);
 
-        // Cost is the billing truth from the broker's per-owner event stream —
-        // the self-report ledger (usage_models) records openclaw's $0-for-GLM
-        // cost. The broker meters per OWNER, so the platform usage/cost belongs
+        // Cost comes from the broker's per-owner event stream — the
+        // self-report ledger (usage_models) records openclaw's zero cost for
+        // GLM. The broker meters per OWNER, so the platform usage/cost belongs
         // to the account: attribute it to the primary workspace and leave any
         // additional cards empty so a multi-workspace owner is never
         // double-counted. Owner-credential (BYOSUB) traffic never reaches the
-        // broker and carries $0 platform cost — correct for a cost panel.
+        // broker and carries zero platform cost — correct for a cost panel.
         const series = brokerUsageSeries(
           await source.brokerEventCosts(uid, cutoff.getTime(), BROKER_USAGE_SERIES_READ_LIMIT),
         );

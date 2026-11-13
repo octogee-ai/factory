@@ -228,7 +228,7 @@ write_secrets() {
   apply_secret byot-sync-internal --from-file=secret="$STATE/secrets/byot-sync-internal.pem" \
     --from-file=public-key="$STATE/secrets/byot-sync-internal.pub.pem"
   if [[ ! -s "$STATE/secrets/gitea-ssh" ]]; then
-    ssh-keygen -q -t ed25519 -N "" -C "octogee-gateway@octogee.local" -f "$STATE/secrets/gitea-ssh"
+    ssh-keygen -q -t ed25519 -N "" -C "octogee-gateway@users.invalid" -f "$STATE/secrets/gitea-ssh"
   fi
   apply_secret gitea-ssh-key --from-file=id_ed25519="$STATE/secrets/gitea-ssh" --from-file=id_ed25519.pub="$STATE/secrets/gitea-ssh.pub"
   apply_secret gateway-model-key-issuer --from-literal=bearer_token="$(secret_value model-key-issuer random_hex 32)"
@@ -265,7 +265,7 @@ mattermost_bootstrap() {
   mmctl config set ServiceSettings.EnableBotAccountCreation true >/dev/null
   mmctl config set ServiceSettings.EnableUserAccessTokens true >/dev/null
   if ! mmctl user search "$user" >/dev/null 2>&1; then
-    mmctl user create --username "$user" --password "$password" --email admin@octogee.local --system-admin --email-verified >/dev/null
+    mmctl user create --username "$user" --password "$password" --email admin@users.invalid --system-admin --email-verified >/dev/null
   fi
   mmctl team search octogee 2>/dev/null | grep -q '"name": "octogee"' \
     || mmctl team create --name octogee --display-name Octogee --private >/dev/null
@@ -383,5 +383,5 @@ case "$COMMAND" in
   up) up ;;
   down) down ;;
   status) status ;;
-  *) echo "Usage: $0 up|down|status [--name=NAME] [--skip-build] [--images=A,B] [--context-dir=DIR] [--openclaw-dir=DIR]" >&2; exit 2 ;;
+  *) echo "Usage: $0 {up|down|status} [--name=NAME] [--skip-build] [--images=A,B] [--context-dir=DIR] [--openclaw-dir=DIR]" >&2; exit 2 ;;
 esac

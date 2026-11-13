@@ -125,9 +125,15 @@ describe("operator key sign-in", () => {
     ["with altered claims", () => tamper(sign(), { sub: "eve" }), "signature"],
     ["that has expired", () => sign({ now: () => now - 3_600_000 }), "expired"],
     ["that lives longer than an hour", () => sign({ lifetimeSeconds: 7200 }), "longer than an hour"],
+    ["issued more than a minute from now", () => sign({ now: () => now + 61_000 }), "issued in the future"],
+    ["issued a year from now", () => sign({ now: () => now + 365 * 86_400_000 }), "issued in the future"],
     ["that is not a JWT", () => "opaque", "not a JWT"],
   ])("refuses a token %s", async (_name, token, message) => {
     await expect(identity.verifyBearer(token())).rejects.toThrow(message);
+  });
+
+  it("accepts a token issued within a minute of clock skew ahead", async () => {
+    await expect(identity.verifyBearer(sign({ now: () => now + 60_000 }))).resolves.toMatchObject({ operator: true });
   });
 
   it("refuses to sign a token that names no operator", () => {

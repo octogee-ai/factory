@@ -22,6 +22,14 @@ export const VENDORED_FILES: readonly string[] = [
   "helm/octogee/charts/gitea-12.7.0.tgz",
 ];
 
+export const THIRD_PARTY_AUTHOR_FILES: readonly string[] = [
+  "gateway-edge/src/vendor/openclaw-browser-resources/index.ts",
+  "gateway-edge/src/vendor/openclaw-browser-resources/LICENSES.txt",
+  "infra/gateway/openclaw-tarball/npm-12.2.1.patch",
+];
+
+const PERSONAL_EMAIL_RULE = "personal email";
+
 const NON_PERSONAL_DOMAINS: readonly RegExp[] = [
   /^octogee\.com$/i,
   /^squarepointconsulting\.com$/i,
@@ -57,6 +65,10 @@ function serviceAccountVerdict(localPart: string, domain: string): "identity" | 
 function isServiceAccount(match: RegExpExecArray, line: string): boolean {
   const domain = match[0].replace(/^(?:@|%40)/, "");
   return serviceAccountVerdict(localPartBefore(line, match.index), domain) === "identity";
+}
+
+function isPartnerName(match: RegExpExecArray, line: string): boolean {
+  return !(match[0] === "Studio" && /\bAI $/.test(line.slice(0, match.index)));
 }
 
 function isPersonalAddress(match: RegExpExecArray, line: string): boolean {
@@ -129,14 +141,14 @@ function isPrice(match: RegExpExecArray, line: string): boolean {
 }
 
 export const DENY_LIST: readonly DenyRule[] = [
-  { name: "personal email", scope: "identity", pattern: /@[a-z0-9][a-z0-9.-]*/gi, accept: isPersonalAddress },
+  { name: PERSONAL_EMAIL_RULE, scope: "identity", pattern: /@[a-z0-9][a-z0-9.-]*/gi, accept: isPersonalAddress },
   { name: "GCP project number", scope: "identity", pattern: /94934561284/g },
   { name: "service account", scope: "identity", pattern: /(?:@|%40)[a-z0-9][a-z0-9.-]*\.gserviceaccount\.com/gi, accept: isServiceAccount },
   { name: "TEST environment identity", scope: "identity", pattern: /octogee-test(?!er)|-test\.octogee\.com|gke_(?:[a-z0-9-]+_)?[a-z]+-[a-z]+\d/gi },
   { name: "admin host", scope: "identity", pattern: /admin\.octogee/gi },
   { name: "monitoring host", scope: "identity", pattern: /monitoring\.octogee/gi },
   { name: "partner or portfolio name", scope: "identity", pattern: /seven peaks|mountain mama|wild card|\bhobin\b|nucrew/gi },
-  { name: "partner or portfolio name", scope: "identity", pattern: /\bDan\b|\bTheos?\b|\bStudio\b/g },
+  { name: "partner or portfolio name", scope: "identity", pattern: /\bDan\b|\bTheos?\b|\bStudio\b/g, accept: isPartnerName },
   { name: "Stripe", scope: "wording", pattern: /\bstripe\b/gi },
   { name: "markup", scope: "wording", pattern: /\bmarkups?\b/gi },
   { name: "margin", scope: "wording", pattern: /\bmargins?\b/gi, accept: isBusinessMargin },
@@ -160,11 +172,16 @@ export function isTestFile(file: string): boolean {
   return TEST_FILE_PATTERNS.some(pattern => pattern.test(file));
 }
 
+function rulesFor(file: string): readonly DenyRule[] {
+  const scoped = VENDORED_FILES.includes(file) ? DENY_LIST.filter(rule => rule.scope === "identity") : DENY_LIST;
+  return THIRD_PARTY_AUTHOR_FILES.includes(file) ? scoped.filter(rule => rule.name !== PERSONAL_EMAIL_RULE) : scoped;
+}
+
 export function denyListHits(files: ReadonlyMap<string, string>): DenyHit[] {
   const hits: DenyHit[] = [];
   for (const [file, content] of files) {
     if (file === DENY_LIST_MODULE || isTestFile(file)) continue;
-    const rules = VENDORED_FILES.includes(file) ? DENY_LIST.filter(rule => rule.scope === "identity") : DENY_LIST;
+    const rules = rulesFor(file);
     content.split("\n").forEach((text, index) => {
       const reported = new Set<string>();
       for (const rule of rules) {

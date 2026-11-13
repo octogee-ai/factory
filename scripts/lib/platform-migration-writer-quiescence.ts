@@ -1,4 +1,5 @@
 import type { DeploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
+import { platformMigrationWriters } from "./platform-migration-writers.js";
 
 export const PLATFORM_CREDENTIAL_WRITER_CONTAINERS = new Set([
   "gateway",
@@ -10,22 +11,10 @@ export const PLATFORM_CREDENTIAL_WRITER_CONTAINERS = new Set([
 ]);
 export const PLATFORM_MIGRATION_WRITER_READINESS_TIMEOUT_MILLISECONDS = 600_000;
 export const PLATFORM_MIGRATION_SCHEDULER_ATTEMPT_DEADLINE_MILLISECONDS = 180_000;
-export const PLATFORM_MIGRATION_SCHEDULED_WRITER_FUNCTIONS = [
-  "cleanupFeedRetention",
-  "reapExpiredAgentImports",
-  "sweepProvisioningStarts",
-  "sweepTrialGrants",
-] as const;
-export const PLATFORM_MIGRATION_CRONJOB_WRITERS = [
-  "trial-expiry",
-  "notification-digest-daily",
-  "notification-digest-weekly",
-  "credit-auto-top-up",
-] as const;
 
 export function platformMigrationScheduledWriterNames(region: string): string[] {
   if (!/^[a-z]+-[a-z]+\d$/.test(region)) throw new Error(`invalid Scheduler region: ${region}`);
-  return PLATFORM_MIGRATION_SCHEDULED_WRITER_FUNCTIONS
+  return platformMigrationWriters().scheduledFunctions
     .map((functionName) => `firebase-schedule-${functionName}-${region}`)
     .sort();
 }
@@ -429,7 +418,7 @@ export function selectPlatformMigrationScheduledWriters(
 export function selectPlatformMigrationCronJobs(
   cronJobs: readonly KubernetesCronJob[],
 ): Array<{ name: string; suspended: boolean }> {
-  const expected = new Set<string>(PLATFORM_MIGRATION_CRONJOB_WRITERS);
+  const expected = new Set<string>(platformMigrationWriters().cronJobs);
   const discovered = new Map<string, { name: string; suspended: boolean }>();
   for (const cronJob of cronJobs) {
     const name = cronJob.metadata?.name;
@@ -467,7 +456,7 @@ function scheduledWriterReceipt(receipt: PlatformMigrationWriterReceipt): Schedu
   if (!scheduled || typeof scheduled.projectId !== "string" || typeof scheduled.region !== "string") {
     throw new Error("writer quiescence receipt has no scheduled writer contract");
   }
-  if (!Array.isArray(scheduled.jobs) || scheduled.jobs.length !== PLATFORM_MIGRATION_SCHEDULED_WRITER_FUNCTIONS.length) {
+  if (!Array.isArray(scheduled.jobs) || scheduled.jobs.length !== platformMigrationWriters().scheduledFunctions.length) {
     throw new Error("writer quiescence receipt has an invalid scheduled writer set");
   }
   const expected = platformMigrationScheduledWriterNames(scheduled.region);
@@ -479,10 +468,10 @@ function scheduledWriterReceipt(receipt: PlatformMigrationWriterReceipt): Schedu
 
 function cronJobReceipt(receipt: PlatformMigrationWriterReceipt): CronJobReceipt[] {
   const cronJobs = receipt.cronJobs;
-  if (!Array.isArray(cronJobs) || cronJobs.length !== PLATFORM_MIGRATION_CRONJOB_WRITERS.length) {
+  if (!Array.isArray(cronJobs) || cronJobs.length !== platformMigrationWriters().cronJobs.length) {
     throw new Error("writer quiescence receipt has an invalid Kubernetes CronJob set");
   }
-  const expected = [...PLATFORM_MIGRATION_CRONJOB_WRITERS].sort();
+  const expected = [...platformMigrationWriters().cronJobs].sort();
   for (let index = 0; index < expected.length; index += 1) {
     const cronJob = cronJobs[index];
     if (!cronJob || cronJob.name !== expected[index] || typeof cronJob.priorSuspended !== "boolean" || cronJob.quiescedSuspended !== true) {

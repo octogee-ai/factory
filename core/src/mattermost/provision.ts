@@ -15,6 +15,7 @@ import { userChannelMembers } from "./channel-members.js";
 import { mintAndPersistDefaultAgentToken } from "./default-agent-pat.js";
 import { USER_PAT_DESCRIPTION } from "./user-pat.js";
 import { mmUploadAvatar } from "./avatars.js";
+import { isPlaceholderEmail, placeholderEmail } from "../placeholder-email.js";
 
 export interface StoredMattermostNames {
   readonly username: string | null;
@@ -166,7 +167,7 @@ async function createOrFindMattermostUser(host: ManagedChannelHost, input: {
   const username = slug;
   const mmUser = await host.ensureUser({
     username,
-    email: email || `${uid}@octogee.local`,
+    email: email || placeholderEmail(uid),
     firstName,
     lastName: lastName || "",
     nickname: firstName || slug,
@@ -233,7 +234,7 @@ async function uploadUserAvatar(userMmUserId: string, email: string, photoURL?: 
     if (ok) log(`[mattermost] avatar uploaded from OAuth photo`);
     return;
   }
-  if (email && !email.endsWith("@octogee.local")) {
+  if (email && !isPlaceholderEmail(email)) {
     // eslint-disable-next-line sonarjs/hashing -- Gravatar API spec requires md5(email)
     const hash = crypto.createHash("md5").update(email.toLowerCase().trim()).digest("hex");
     const gravatarUrl = `https://gravatar.com/avatar/${hash}?d=identicon&s=200`;

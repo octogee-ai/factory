@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { placeholderEmail } from "@octogee/core/placeholder-email";
 import { giteaApiAsUser } from "../../lib/gitea.js";
 import {
   githubBranchesApi,
@@ -60,7 +61,7 @@ export function resolveCommitAuthor(
   const data = user as { displayName?: string; email?: string; username?: string } | undefined;
   const fallback = (data?.username || "").trim() || slug;
   const name = (data?.displayName || "").trim() || fallback;
-  const email = (data?.email || "").trim() || `${fallback}@octogee.local`;
+  const email = (data?.email || "").trim() || placeholderEmail(fallback);
   return { name, email };
 }
 

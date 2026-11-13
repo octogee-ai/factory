@@ -127,6 +127,6 @@ const FACE = /<g data-part="face">.*<\/g><\/svg>$/;
 export function characterBackSvg(look) {
     const svg = characterSvg(look);
     if (!FACE.test(svg))
-        throw new Error("Character markup no longer ends with its face");
+        throw new Error("Character SVG no longer ends with its face");
     return svg.replace(FACE, "</svg>");
 }

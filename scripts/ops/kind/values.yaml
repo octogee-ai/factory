@@ -49,7 +49,7 @@ gitea:
       memory: 128Mi
   gitea:
     admin:
-      email: admin@octogee.local
+      email: admin@users.invalid
     config:
       database:
         HOST: postgres:5432

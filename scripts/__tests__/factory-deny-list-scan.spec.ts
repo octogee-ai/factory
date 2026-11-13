@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { scanTree } from "../ci/factory-deny-list-scan.js";
-import { DENY_LIST, DENY_LIST_MODULE, VENDORED_FILES, denyListHits, isTestFile } from "../lib/factory-deny-list.js";
+import { DENY_LIST, DENY_LIST_MODULE, THIRD_PARTY_AUTHOR_FILES, VENDORED_FILES, denyListHits, isTestFile } from "../lib/factory-deny-list.js";
 
 const scriptsDir = fileURLToPath(new URL("..", import.meta.url));
 const script = join(scriptsDir, "ci/factory-deny-list-scan.ts");
@@ -348,8 +348,49 @@ describe("factory deny-list identity rules together", () => {
   });
 });
 
+describe("factory deny-list Google AI Studio", () => {
+  it.each([
+    "tagline: 'Gemini API key (Google AI Studio)',",
+    'return { accountLabel: "AI Studio key" };',
+  ])("does not read the Google product name in %s as a partner", content => {
+    expect(ruleHits("x.ts", content)).toEqual([]);
+  });
+
+  it.each([
+    "the Studio",
+    "Studio AI",
+    "AI Studio and Studio",
+    "OpenAI Studio",
+  ])("still reports the partner name in %s", content => {
+    expect(ruleHits("x.ts", content)).toEqual([["partner or portfolio name", "Studio"]]);
+  });
+});
+
+describe("factory deny-list third-party author files", () => {
+  const author = THIRD_PARTY_AUTHOR_FILES[0]!;
+
+  it("lists third-party author files by exact path, never by pattern", () => {
+    expect(THIRD_PARTY_AUTHOR_FILES).toContain("infra/gateway/openclaw-tarball/npm-12.2.1.patch");
+    for (const path of THIRD_PARTY_AUTHOR_FILES) expect(path).toMatch(/^[\w./-]+\.[a-z]+$/);
+  });
+
+  it.each(THIRD_PARTY_AUTHOR_FILES)("does not apply the personal email rule to %s", path => {
+    expect(ruleHits(path, '"author": "Beau Gunderson <beau@beaugunderson.com>"')).toEqual([]);
+  });
+
+  it("still applies every other identity rule to a listed third-party author file", () => {
+    const hits = ruleHits(author, "octogee-test 94934561284 deployer@x.iam.gserviceaccount.com admin.octogee.com Seven Peaks").map(([rule]) => rule);
+    expect(new Set(hits)).toEqual(new Set(["TEST environment identity", "GCP project number", "service account", "admin host", "partner or portfolio name"]));
+  });
+
+  it("applies the personal email rule to an unlisted file beside a third-party author file", () => {
+    const sibling = author.replace(/[^/]+$/, "ours.ts");
+    expect(ruleHits(sibling, "mail chris@gmail.com")).toEqual([["personal email", "@gmail.com"]]);
+  });
+});
+
 describe("factory deny-list vendored files", () => {
-  const vendored = VENDORED_FILES[0]!;
+  const vendored = VENDORED_FILES.find(path => !THIRD_PARTY_AUTHOR_FILES.includes(path))!;
 
   it("lists vendored third-party files by exact path, never by pattern", () => {
     expect(VENDORED_FILES.length).toBeGreaterThan(0);

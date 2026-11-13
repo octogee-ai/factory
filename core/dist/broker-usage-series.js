@@ -1,11 +1,11 @@
 // The admin usage panel's cost source. The gateway self-report ledger
-// (workspaces/{slug}/usage_models) records openclaw's own cost, which is $0 for
+// (workspaces/{slug}/usage_models) records openclaw's own cost, which is zero for
 // OpenRouter/GLM calls — the agent runtime never sees OpenRouter's price. The
 // LLM broker DOES (it injects usage:{include:true} and meters the reported
-// cost, #2114), so the per-owner event stream is the billing truth. This
+// cost, #2114), so the per-owner event stream is the cost of record. This
 // aggregates it per model + per date for the Ops panel.
 //
-// Owner-credential traffic (BYOSUB/BYOK) bypasses the broker and carries $0
+// Owner-credential traffic (BYOSUB/BYOK) bypasses the broker and carries zero
 // platform cost by definition, so it is absent here — correct for a platform
 // cost panel.
 export const BROKER_USAGE_SERIES_READ_LIMIT = 20_000;

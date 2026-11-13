@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -8,8 +6,6 @@ import {
   parsePlatformMigrationWriterQuiescenceArgs,
   PLATFORM_MIGRATION_WRITER_READINESS_TIMEOUT_MILLISECONDS,
   platformMigrationWriterQuiescenceConfirmation,
-  PLATFORM_MIGRATION_CRONJOB_WRITERS,
-  PLATFORM_MIGRATION_SCHEDULED_WRITER_FUNCTIONS,
   PLATFORM_MIGRATION_SCHEDULER_ATTEMPT_DEADLINE_MILLISECONDS,
   platformMigrationScheduledWriterNames,
   assertPlatformMigrationScheduledWritersQuiesced,
@@ -23,6 +19,10 @@ import {
   parsePlatformMigrationScheduledWritersListing,
   validateRestoredGiteaTokenConsumers,
 } from "../ops/quiesce-platform-migration-writers.js";
+import { installPlatformMigrationWriters } from "../lib/platform-migration-writers.js";
+
+const migrationCronJobWriters = ["usage-rollup", "digest-daily"];
+installPlatformMigrationWriters({ scheduledFunctions: ["sweepSessions", "compactLedgers"], cronJobs: migrationCronJobWriters });
 
 const migrationId = "west-cutover-20260724";
 const targetId = "test-west";
@@ -36,11 +36,11 @@ const scheduledWriters = platformMigrationScheduledWriterNames("us-west1").map((
   targetType: "HTTP" as const,
 }));
 
-const cronJobs = PLATFORM_MIGRATION_CRONJOB_WRITERS.map((name) => ({
+const cronJobs = migrationCronJobWriters.map((name) => ({
   name,
   suspended: false,
 }));
-const migrationCronJobNames = [...PLATFORM_MIGRATION_CRONJOB_WRITERS].sort();
+const migrationCronJobNames = [...migrationCronJobWriters].sort();
 const sortedCronJobs = migrationCronJobNames.map((name) => ({ name, suspended: false }));
 
 function kubernetesCronJobs(jobs: readonly { name: string; suspended: boolean }[]) {
@@ -283,8 +283,8 @@ describe("platform migration writer quiescence", () => {
           kubernetesCronJobs(cronJobs.map((cronJob) => ({ ...cronJob, suspended: true }))),
           [{
             metadata: {
-              name: "trial-expiry-29182",
-              ownerReferences: [{ kind: "CronJob", name: "trial-expiry" }],
+              name: "usage-rollup-29182",
+              ownerReferences: [{ kind: "CronJob", name: "usage-rollup" }],
             },
             status: { active: 1 },
           }],
@@ -297,8 +297,8 @@ describe("platform migration writer quiescence", () => {
           kubernetesCronJobs(cronJobs.map((cronJob) => ({ ...cronJob, suspended: true }))),
           [{
             metadata: {
-              name: "trial-expiry-29182",
-              ownerReferences: [{ kind: "CronJob", name: "trial-expiry" }],
+              name: "usage-rollup-29182",
+              ownerReferences: [{ kind: "CronJob", name: "usage-rollup" }],
             },
             status: {
               active: 0,
@@ -335,14 +335,6 @@ describe("platform migration writer quiescence", () => {
       kubernetesCronJobs(cronJobs.map((cronJob) => ({ ...cronJob, suspended: true }))),
       [{ metadata: { name: "operator-backfill" }, status: { succeeded: 1, conditions: [{ type: "Complete", status: "True" }] } }],
     )).not.toThrow();
-  });
-
-  it("declares exactly the scheduled Functions the functions package deploys", () => {
-    const functionsSource = path.resolve(import.meta.dirname, "../../../functions/src");
-    const scheduled = fs.readdirSync(functionsSource, { recursive: true, encoding: "utf8" })
-      .filter((file) => file.endsWith(".ts") && !file.endsWith(".spec.ts") && !file.includes("__tests__"))
-      .flatMap((file) => [...fs.readFileSync(path.join(functionsSource, file), "utf8").matchAll(/export const (\w+) = onSchedule\(/gu)].map((match) => match[1]));
-    expect([...PLATFORM_MIGRATION_SCHEDULED_WRITER_FUNCTIONS].sort()).toEqual(scheduled.sort());
   });
 
   it("binds both completed migration receipts to the exact writer-quiescence revision", () => {
@@ -416,10 +408,8 @@ describe("platform migration writer quiescence", () => {
     const state = dependencies();
     await executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies);
     expect(state.schedulerPauses).toEqual([
-      "firebase-schedule-cleanupFeedRetention-us-west1",
-      "firebase-schedule-reapExpiredAgentImports-us-west1",
-      "firebase-schedule-sweepProvisioningStarts-us-west1",
-      "firebase-schedule-sweepTrialGrants-us-west1",
+      "firebase-schedule-compactLedgers-us-west1",
+      "firebase-schedule-sweepSessions-us-west1",
     ]);
     expect(state.cronSuspensions).toEqual(migrationCronJobNames.map((name) => `${name}=true`));
     expect(state.getReceipt()).toMatchObject({

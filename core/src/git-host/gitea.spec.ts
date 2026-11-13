@@ -48,7 +48,7 @@ describe("createGiteaGitHost — managed Gitea admin operations", () => {
       expect(calls[0]).toMatchObject({ url: `${BASE}/admin/users`, method: "POST" });
       expect(calls[0].body).toMatchObject({
         username: "ws-acme",
-        email: "acme@octogee.local",
+        email: "acme@users.invalid",
         must_change_password: false,
         visibility: "private",
       });

@@ -12,6 +12,7 @@ import {
   workspaceGiteaOrg,
   workspaceRepoName,
 } from "../gitea-naming.js";
+import { placeholderEmail } from "../placeholder-email.js";
 import { GITEA_PAGE_SIZE, createGiteaKeyAdminClient, runGiteaKeySweep } from "./gitea-key-sweep.js";
 import type { GitHostNaming, GitRepoRef, GitRepoRole, ManagedGitHost } from "./types.js";
 
@@ -347,7 +348,7 @@ async function registerGatewayKey(
   const username = giteaUsername(workspaceSlug);
   const created = await api.request("POST", "/admin/users", {
     username,
-    email: `${workspaceSlug}@octogee.local`,
+    email: placeholderEmail(workspaceSlug),
     password: randomBytes(32).toString("hex"),
     must_change_password: false,
     visibility: "private",

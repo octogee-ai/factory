@@ -35,7 +35,7 @@ function displayNameFor(account: UserAccount): string {
 
 // Per-owner figures from the broker ledger (modelBrokerUsage*) — the only
 // source that may render a USD amount on the admin surface. Legacy
-// users/{uid}.usage carries openclaw-reported $0 costs and survives as token
+// users/{uid}.usage carries openclaw-reported zero costs and survives as token
 // telemetry only.
 export interface BrokerUserUsage {
   windowCostUsd?: number;

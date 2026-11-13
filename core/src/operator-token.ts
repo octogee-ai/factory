@@ -2,6 +2,7 @@ import { createPrivateKey, createPublicKey, sign, verify, type KeyObject } from 
 
 export const OPERATOR_KEY_ISSUER = "octogee-operator-key";
 const OPERATOR_TOKEN_MAX_SECONDS = 3600;
+const OPERATOR_TOKEN_CLOCK_SKEW_MILLISECONDS = 60_000;
 
 function decodeSegment(segment: string): Record<string, unknown> {
   const value = JSON.parse(Buffer.from(segment, "base64url").toString("utf8")) as unknown;
@@ -49,6 +50,7 @@ export function verifyOperatorToken(token: string, key: KeyObject, now: number):
   if (typeof claims.sub !== "string" || claims.sub.trim() === "") throw new Error("the operator token names no operator");
   if (typeof claims.iat !== "number" || typeof claims.exp !== "number") throw new Error("the operator token has no lifetime");
   if (claims.exp - claims.iat > OPERATOR_TOKEN_MAX_SECONDS) throw new Error("the operator token lives longer than an hour");
+  if (claims.iat * 1000 > now + OPERATOR_TOKEN_CLOCK_SKEW_MILLISECONDS) throw new Error("the operator token was issued in the future");
   if (claims.exp * 1000 <= now) throw new Error("the operator token has expired");
   return claims.sub;
 }

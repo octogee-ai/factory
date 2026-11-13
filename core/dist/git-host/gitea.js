@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { PROJECT_AGENT_REPO } from "@octogee/shared/types/project";
 import { GATEWAY_KEY_TITLE, gatewayKeyTitle as ownerGatewayKeyTitle, giteaUsername, isManagedGatewayKeyTitle, projectRepoName, systemConfigRepoName, workspaceGiteaOrg, workspaceRepoName, } from "../gitea-naming.js";
+import { placeholderEmail } from "../placeholder-email.js";
 import { GITEA_PAGE_SIZE, createGiteaKeyAdminClient, runGiteaKeySweep } from "./gitea-key-sweep.js";
 const BUILDERS_TEAM = "builders";
 export const giteaNaming = {
@@ -243,7 +244,7 @@ async function registerGatewayKey(api, workspaceSlug, pubKey, keyOwnerId, takesH
     const username = giteaUsername(workspaceSlug);
     const created = await api.request("POST", "/admin/users", {
         username,
-        email: `${workspaceSlug}@octogee.local`,
+        email: placeholderEmail(workspaceSlug),
         password: randomBytes(32).toString("hex"),
         must_change_password: false,
         visibility: "private",

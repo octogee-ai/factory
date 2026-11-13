@@ -38,6 +38,7 @@ vi.mock("../mattermost/avatars.js", () => ({ mmUploadAvatar: h.mmUploadAvatar })
 
 import { createMattermostChannelHost } from "../channel-host/mattermost.js";
 import { provisionMattermostUser } from "../mattermost/provision.js";
+import { DEFAULT_PLACEHOLDER_EMAIL_DOMAIN, installPlaceholderEmailDomain } from "../placeholder-email.js";
 
 const host = createMattermostChannelHost({
   baseUrl: "http://mm.test",
@@ -108,6 +109,7 @@ const createdChannelNames = () =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  installPlaceholderEmailDomain(DEFAULT_PLACEHOLDER_EMAIL_DOMAIN);
   h.setDocs({ "users/u1": {} });
   h.mmApiCall.mockImplementation(async (method: string, endpoint: string, body?: { name?: string }) => {
     if (method === "POST" && endpoint === "/users") return { id: "builder-1", delete_at: 0 };
@@ -324,6 +326,42 @@ describe("provisionMattermostUser — degraded paths", () => {
     expect(result["mattermost.userId"]).toBe("user-existing");
     expect(seq()).toContain("PUT /users/user-existing/active");
     expect(seq()).toContain("PUT /users/user-existing/patch");
+  });
+
+  it("finds a user who has no email by the placeholder address at the installed domain", async () => {
+    installPlaceholderEmailDomain("accounts.example");
+    h.mmApiCall.mockImplementation(async (method: string, endpoint: string, body?: { name?: string }) => {
+      if (method === "POST" && endpoint === "/users") return null;
+      if (method === "POST" && endpoint === "/channels") return { id: `ch:${body?.name}` };
+      if (method === "GET" && endpoint.startsWith("/users/username/")) return null;
+      if (method === "GET" && endpoint === "/users/email/u1%40accounts.example") return { id: "user-existing", delete_at: 0 };
+      if (method === "POST" && endpoint === "/teams") return { id: "team-1" };
+      if (method === "POST" && endpoint === "/bots") return { user_id: "coach-1" };
+      if (method === "GET" && endpoint.includes("/channels/name/")) return null;
+      return {};
+    });
+
+    const result = await call({ ...HAPPY, email: "" });
+
+    expect(h.mmApiCall).toHaveBeenCalledWith("POST", "/users", expect.objectContaining({ email: "u1@accounts.example" }));
+    expect(result["mattermost.userId"]).toBe("user-existing");
+  });
+
+  it.each([
+    ["the default domain", null, "u1@users.invalid"],
+    ["an installed domain", "accounts.example", "u1@accounts.example"],
+  ])("does not look up a Gravatar for a placeholder address at %s", async (_name, domain, email) => {
+    if (domain) installPlaceholderEmailDomain(domain);
+
+    await call({ ...HAPPY, email });
+
+    expect(h.mmUploadAvatar).not.toHaveBeenCalled();
+  });
+
+  it("looks up a Gravatar for a real address", async () => {
+    await call(HAPPY);
+
+    expect(h.mmUploadAvatar).toHaveBeenCalledWith("builder-1", expect.stringMatching(/^https:\/\/gravatar\.com\/avatar\//));
   });
 
   it("keeps coachUserId but omits the agent token when the PAT mint fails", async () => {
