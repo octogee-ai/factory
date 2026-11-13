@@ -19,7 +19,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.spec.json"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "3.1163.0",
+    "@aws-sdk/client-s3": "3.1164.0",
     "@google-cloud/kms": "^6.3.0",
     "@octogee/core": "file:../core",
     "@octogee/shared": "file:../shared",
