@@ -37,8 +37,12 @@ function stoppedVmMatches(
     ["TERMINATED", "STOPPED", "SUSPENDED"].includes(current.status);
 }
 
-export async function pausedNativeRetirementSourceFencedOff(
-  deps: { store: PlatformStateStore; describe: GatewayVmClient["describe"] },
+export async function pausedIsolatedRetirementSourceFencedOff(
+  deps: {
+    store: PlatformStateStore;
+    describe: GatewayVmClient["describe"];
+    podsAbsent: (gatewayId: string) => Promise<boolean>;
+  },
   input: NativeRetirementInput,
 ): Promise<boolean> {
   const [root, runtime] = await Promise.all([
@@ -46,6 +50,7 @@ export async function pausedNativeRetirementSourceFencedOff(
     deps.store.fleetRegistry.get(input.gatewayId),
   ]);
   if (root === null || !pausedRetirementClaimMatches(root, input)) return false;
+  if (runtime?.runtime === "cluster") return deps.podsAbsent(input.gatewayId);
   if (runtime === null || runtime.runtime !== "gce-vm") return false;
   const vm = record(runtime.vm);
   if (!nonEmpty(vm.instanceName) || !nonEmpty(vm.instanceId) || !nonEmpty(vm.zone)) return false;
