@@ -1,8 +1,7 @@
+import { authenticationFailureLimit, authenticatedRequestLimit } from "../middleware/authenticated-request-limit.js";
 import { Router, Request, Response, NextFunction } from "express";
-import { rateLimit } from "express-rate-limit";
 
 import { requireAuthenticatedUid } from "../middleware/auth.js";
-import { DEFAULT_RATE_LIMIT_OPTIONS } from "../middleware/security.js";
 import {
   userDefaultAgentId,
   gatewayClaudeSsoClient,
@@ -68,18 +67,12 @@ function validateSsoSubmission(req: Request, res: Response<unknown, { submission
 
 export function createByosubAuthRouter(): Router {
   const router = Router({ mergeParams: true });
-  const flowLimit = (limit: number) => rateLimit({
-    ...DEFAULT_RATE_LIMIT_OPTIONS,
-    windowMs: 60_000,
-    limit,
-    keyGenerator: req => req.uid!,
-    message: { error: "Too many subscription sign-in requests, please try again later." },
-  });
 
   router.post(
     "/connect",
+    authenticationFailureLimit,
     requireAuthenticatedUid,
-    flowLimit(12),
+    authenticatedRequestLimit(12),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const uid = req.uid!;
@@ -134,8 +127,9 @@ export function createByosubAuthRouter(): Router {
 
   router.get(
     "/status/:flowId",
+    authenticationFailureLimit,
     requireAuthenticatedUid,
-    flowLimit(120),
+    authenticatedRequestLimit(120),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const flowId = req.params.flowId as string;
@@ -170,8 +164,9 @@ export function createByosubAuthRouter(): Router {
 
   router.post(
     "/sso/submit",
+    authenticationFailureLimit,
     requireAuthenticatedUid,
-    flowLimit(12),
+    authenticatedRequestLimit(12),
     validateSsoSubmission,
     async (req: Request, res: Response<unknown, { submission: SsoSubmission }>, next: NextFunction) => {
       try {

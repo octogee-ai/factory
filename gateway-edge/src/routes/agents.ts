@@ -1,3 +1,4 @@
+import { authenticationFailureLimit, authenticatedRequestLimit } from "../middleware/authenticated-request-limit.js";
 import { Router, Request, Response, NextFunction } from "express";
 import { requireAuth } from "../middleware/auth.js";
 import { syncDefaultAgentIdentity } from "../lib/default-agent-identity.js";
@@ -17,7 +18,7 @@ function defaultAgentPatchFromBody(body: unknown): Partial<Record<DefaultAgentPa
   return patch;
 }
 
-router.patch("/me", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+router.patch("/me", authenticationFailureLimit, requireAuth, authenticatedRequestLimit(60), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.uid;
     if (!uid) {

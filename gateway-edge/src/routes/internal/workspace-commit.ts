@@ -1,3 +1,4 @@
+import { clientRequestLimit } from "../../middleware/authenticated-request-limit.js";
 import { PROJECT_AGENT_WORKSPACE_PARTS } from "@octogee/shared/types/project";
 import { Router, type Request, type Response } from "express";
 import {
@@ -120,7 +121,7 @@ function parseCommitRequest(
   return { agentId, slug, project, message: raw || DEFAULT_MESSAGE };
 }
 
-router.post("/commit", async (req: Request, res: Response) => {
+router.post("/commit", clientRequestLimit(1200, true), async (req: Request, res: Response) => {
   const parsed = parseCommitRequest(req.body as Record<string, unknown> | undefined);
   if ("code" in parsed) {
     res.status(parsed.status).json({ error: parsed.error, code: parsed.code });

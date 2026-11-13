@@ -1,3 +1,4 @@
+import { clientRequestLimit } from "../middleware/authenticated-request-limit.js";
 import { Router } from "express";
 import { logger } from "../middleware/logging.js";
 import { authorizeChannelAgentReadiness } from "../lib/channel-agent-readiness-authorization-broker.js";
@@ -9,7 +10,7 @@ export function createChannelAgentReadinessRouter(deps = {
   localGatewayId: () => process.env.GATEWAY_ID,
 }) {
   const router = Router({ mergeParams: true });
-  router.get<{ gatewayId: string; channelId: string }>("/:channelId", async (req, res) => {
+  router.get<{ gatewayId: string; channelId: string }>("/:channelId", clientRequestLimit(600), async (req, res) => {
     const gatewayId = req.params.gatewayId;
     const channelId = req.params.channelId;
     if (typeof gatewayId !== "string" || gatewayId !== deps.localGatewayId() ||

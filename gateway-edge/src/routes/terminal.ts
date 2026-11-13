@@ -1,3 +1,4 @@
+import { authenticationFailureLimit, authenticatedRequestLimit } from "../middleware/authenticated-request-limit.js";
 import type { IncomingMessage } from "node:http";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { WebSocket, type RawData } from "ws";
@@ -90,7 +91,7 @@ function requireTerminalAccess(deps: TerminalRouterDeps) {
 
 export function createTerminalRouter(deps: TerminalRouterDeps): Router {
   const router = Router({ mergeParams: true });
-  router.use(requireAuthenticatedUid);
+  router.use(authenticationFailureLimit, requireAuthenticatedUid, authenticatedRequestLimit(30));
   router.use(requireTerminalAccess(deps));
 
   router.post("/ticket", async (req: TerminalRequest, res) => {

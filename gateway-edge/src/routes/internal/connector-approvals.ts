@@ -1,3 +1,4 @@
+import { clientRequestLimit } from "../../middleware/authenticated-request-limit.js";
 import { Router } from "express";
 import { requireByotSyncInternalAuth } from "../../middleware/byot-sync-auth.js";
 import { openAuthenticatedUpstream } from "../../chat-proxy/openclaw/authenticated-upstream.js";
@@ -26,7 +27,7 @@ function validCommand(value: unknown): value is NativeConnectorCommand {
 
 export function createInternalConnectorApprovalRouter() {
   const router = Router({ mergeParams: true });
-  router.post("/", requireByotSyncInternalAuth, async (req, res, next) => {
+  router.post("/", clientRequestLimit(1200, true), requireByotSyncInternalAuth, async (req, res, next) => {
     try {
       const command = req.body?.command;
       if (req.body?.purpose !== "connector-approval" || !validCommand(command)) { res.status(400).json({ error: "invalid_approval_command" }); return; }

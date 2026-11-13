@@ -1,3 +1,4 @@
+import { clientRequestLimit } from "../../middleware/authenticated-request-limit.js";
 import { Router, type Response } from "express";
 import { requireGatewayInternalAuth } from "../../middleware/gateway-internal-auth.js";
 import { logger } from "../../middleware/logging.js";
@@ -45,7 +46,7 @@ export interface InternalVmRouterDeps {
 export function createInternalVmRouter(deps: InternalVmRouterDeps): Router {
   const router = Router();
   const fetchImpl = deps.fetchImpl ?? fetch;
-  router.use(requireGatewayInternalAuth);
+  router.use(clientRequestLimit(600, true), requireGatewayInternalAuth);
 
   const forward = async (res: Response, path: string, body: Record<string, unknown>): Promise<void> => {
     if (!deps.controlUrl) {

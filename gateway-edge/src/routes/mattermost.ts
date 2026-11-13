@@ -1,3 +1,4 @@
+import { authenticationFailureLimit, authenticatedRequestLimit } from "../middleware/authenticated-request-limit.js";
 import { Router, Request, Response, NextFunction } from "express";
 import { requireAuth } from "../middleware/auth.js";
 import { readAgent } from "../lib/firestoreReads.js";
@@ -15,7 +16,7 @@ function extractValidGatewayId(user: { provisioning?: unknown }): string {
   return typeof raw === "string" && GATEWAY_ID_RE.test(raw) ? raw : "";
 }
 
-router.get("/token", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+router.get("/token", authenticationFailureLimit, requireAuth, authenticatedRequestLimit(120), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.uid!;
     const userData = req.user!;

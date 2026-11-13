@@ -1,3 +1,4 @@
+import { clientRequestLimit } from "../../middleware/authenticated-request-limit.js";
 import { Router } from "express";
 import { createGatewayInternalAuth } from "../../middleware/gateway-internal-auth.js";
 import { persistUserProjects, persistSharedUserFiles } from "../../lib/project-persistence.js";
@@ -8,7 +9,7 @@ import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 export function createProjectPersistenceRouter(persist = persistUserProjects): Router {
   const router = Router();
-  router.use(createGatewayInternalAuth({ allowSharedGateway: true }));
+  router.use(clientRequestLimit(600, true), createGatewayInternalAuth({ allowSharedGateway: true }));
   router.post("/flush", async (req, res) => {
     if (process.env.GATEWAY_CLASS === "shared") {
       if (!isValidUsername(req.body?.slug)) { res.status(400).json({ error: "invalid project owner" }); return; }

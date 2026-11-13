@@ -1,3 +1,4 @@
+import { clientRequestLimit, authenticationFailureLimit, authenticatedRequestLimit } from "../../middleware/authenticated-request-limit.js";
 import { Router, Request, Response } from "express";
 import type { Project } from "@octogee/shared/types/index";
 import { FieldValue } from "../../lib/db.js";
@@ -58,7 +59,7 @@ async function publicCanvasGithubToken(
   return token;
 }
 
-router.get("/:wid/:pid/readme", async (req: Request, res: Response) => {
+router.get("/:wid/:pid/readme", clientRequestLimit(1200), async (req: Request, res: Response) => {
   const { wid, pid } = req.params as { wid: string; pid: string };
   if (!WORKSPACE_SLUG_RE.test(wid) || !isValidProjectId(pid)) {
     res.status(404).json({ error: "Project not found" });
@@ -93,7 +94,7 @@ router.get("/:wid/:pid/readme", async (req: Request, res: Response) => {
   }
 });
 
-router.put("/:wid/:pid/canvas-file", requireAuth, async (req: Request, res: Response) => {
+router.put("/:wid/:pid/canvas-file", authenticationFailureLimit, requireAuth, authenticatedRequestLimit(60), async (req: Request, res: Response) => {
   const { wid, pid } = req.params as { wid: string; pid: string };
   const canvasFile = (req.body as { canvasFile?: unknown } | undefined)?.canvasFile;
 

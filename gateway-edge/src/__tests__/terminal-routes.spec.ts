@@ -84,6 +84,17 @@ describe("terminal locality route — ticket boundary", () => {
     expect(resolveAccess).not.toHaveBeenCalled();
   });
 
+  it("limits ticket requests per verified user before resolving native access", async () => {
+    const app = appFor();
+    const path = `/api/g/${GATEWAY}/terminal/ticket`;
+    for (let index = 0; index < 30; index++) {
+      await request(app).post(path).set(as("owner")).send(selected).expect(200);
+    }
+    await request(app).post(path).set(as("owner")).send(selected).expect(429);
+    expect(resolveAccess).toHaveBeenCalledTimes(30);
+    await request(app).post(path).set(as("member")).send(selected).expect(403);
+  });
+
   it("answers 403 forbidden for a workspace member without native admin scope", async () => {
     const res = await request(appFor()).post(`/api/g/${GATEWAY}/terminal/ticket`).set(as("member"));
     expect(res.status).toBe(403);

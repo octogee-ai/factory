@@ -1,3 +1,4 @@
+import { clientRequestLimit } from "../../middleware/authenticated-request-limit.js";
 import { assertWorkspaceIdentityReady } from "@octogee/core/openclaw-workspace-bootstrap";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { parseAgentId } from "@octogee/shared/types/identity";
@@ -80,6 +81,7 @@ export function createInternalAgentMessageRouter(): Router {
   const router = Router({ mergeParams: true });
   router.post(
     "/",
+    clientRequestLimit(1200, true),
     requireAgentMessageAuth,
     async (req: Request, res: Response, next: NextFunction) => {
       let agentId: string | undefined;

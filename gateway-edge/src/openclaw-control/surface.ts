@@ -24,6 +24,8 @@ import {
 
 import { fetchGatewayToken } from "../chat-proxy/openclaw/gateway-token.js";
 import { logger } from "../middleware/logging.js";
+import { clientRequestLimit } from "../middleware/authenticated-request-limit.js";
+import { isDashboardAssetRequest } from "../middleware/dashboard-asset-request.js";
 import { workspaceServingDenial, type WorkspaceServingResolver } from "./workspace-serving.js";
 import {
   authorizeOpenClawControlSession,
@@ -744,6 +746,12 @@ export function createOpenClawControlHttpRouter(
     throw new Error("OpenClaw Dashboard HTTP timeout must be a positive integer");
   }
   const router = Router({ mergeParams: true });
+  const limitNavigation = clientRequestLimit(240);
+  router.use((req, res, next) => {
+    const path = req.originalUrl.split("?", 1)[0];
+    if (isDashboardAssetRequest({ method: req.method, path })) return next();
+    return limitNavigation(req, res, next);
+  });
   router.get("/launch/:ticket", async (req: Request, res: Response) => {
     const startedAt = performance.now();
     let outcome: OpenClawDashboardHttpOutcome = "error";
