@@ -151,7 +151,7 @@ try {
   await wait(async () => { try { return (await fetch("http://127.0.0.1:18894/readyz")).ok; } catch { return false; } }, "Source must become ready");
   const mm = "http://host.docker.internal:62065";
   await new Promise(resolve => setTimeout(resolve, 2000));
-  const post = await fetch(`${mm}/api/v4/posts`, { method: "POST", headers: { authorization: `Bearer ${fixture.adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ channel_id: keeper.channelId, message: "Hold this synthetic reply until the user activation abort completes." }) });
+  const post = await fetch(`${mm}/api/v4/posts`, { method: "POST", redirect: "error", headers: { authorization: `Bearer ${fixture.adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ channel_id: keeper.channelId, message: "Hold this synthetic reply until the user activation abort completes." }) });
   assert(post.ok);
   await Promise.race([providerStarted, new Promise((_, reject) => setTimeout(() => reject(new Error("Source chat did not reach the held provider")), 60_000).unref())]);
   assert(heldReply && !heldReply.writableEnded, "Source chat must remain active");
@@ -173,7 +173,7 @@ try {
   }
   heldReply.end(`data: ${JSON.stringify({ id: "synthetic-abort", object: "chat.completion.chunk", choices: [{ index: 0, delta: { content: " — activation abort completed." }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`);
   await wait(async () => {
-    const response = await fetch(`${mm}/api/v4/channels/${keeper.channelId}/posts?per_page=10`, { headers: { authorization: `Bearer ${fixture.adminToken}` } });
+    const response = await fetch(`${mm}/api/v4/channels/${encodeURIComponent(keeper.channelId)}/posts?per_page=10`, { redirect: "error", headers: { authorization: `Bearer ${fixture.adminToken}` } });
     const data = await response.json() as { posts: Record<string, { user_id: string; message: string }> };
     return Object.values(data.posts).some(item => item.user_id === keeper.botUserId && item.message.includes("activation abort completed"));
   }, "Active source must deliver its reply after abort");
