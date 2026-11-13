@@ -45,7 +45,11 @@ assert(localHosts.has(databaseUrl.hostname) && databaseUrl.pathname === "/detach
 process.env.OPENCLAW_AGENT_STORE_DSN = connection;
 const fixture = JSON.parse(await fs.readFile(values.fixture, "utf8")) as MattermostFixture;
 fixture.baseUrl = values["mattermost-url"] ?? fixture.baseUrl;
-assert(localHosts.has(new URL(fixture.baseUrl).hostname), "Mattermost must be a disposable local server");
+const mattermostOrigin = new URL(fixture.baseUrl);
+assert(localHosts.has(mattermostOrigin.hostname) && ["http:", "https:"].includes(mattermostOrigin.protocol) &&
+  !mattermostOrigin.username && !mattermostOrigin.password && mattermostOrigin.pathname === "/" &&
+  !mattermostOrigin.search && !mattermostOrigin.hash, "Mattermost must be a disposable local server origin");
+fixture.baseUrl = mattermostOrigin.origin;
 assert(fixture.entries.length === 8 && fixture.entries.every(entry => entry.agentId && entry.accountId && entry.token && entry.channelId), "Expected six migrating accounts and two keeper accounts");
 const travelers = fixture.entries.filter(entry => entry.accountId.startsWith("detachproof-"));
 assert.equal(travelers.length, 6);
@@ -192,11 +196,11 @@ async function startGateway(name: string, entries: Account[]): Promise<Gateway> 
 
 async function mattermostHelp(entry: Account) {
   const headers = { authorization: `Bearer ${fixture.adminToken}`, "content-type": "application/json" };
-  const response = await fetch(`${fixture.baseUrl}/api/v4/posts`, { method: "POST", headers, body: JSON.stringify({ channel_id: entry.channelId, message: "/help" }) });
+  const response = await fetch(`${fixture.baseUrl}/api/v4/posts`, { method: "POST", redirect: "error", headers, body: JSON.stringify({ channel_id: entry.channelId, message: "/help" }) });
   assert(response.ok, `Mattermost fixture post failed: ${response.status}`);
   const post = await response.json() as { id: string; create_at: number };
   await waitFor(async () => {
-    const result = await fetch(`${fixture.baseUrl}/api/v4/channels/${entry.channelId}/posts?per_page=30`, { headers });
+    const result = await fetch(`${fixture.baseUrl}/api/v4/channels/${encodeURIComponent(entry.channelId)}/posts?per_page=30`, { redirect: "error", headers });
     assert(result.ok, `Mattermost fixture history failed: ${result.status}`);
     const body = await result.json() as { posts: Record<string, { user_id: string; create_at: number; message: string }> };
     return Object.values(body.posts).some(item => item.user_id === entry.botUserId && item.create_at >= post.create_at && item.message.length > 0);

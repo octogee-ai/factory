@@ -15,7 +15,7 @@ function isExpectedIapRedirect(code: string, redirectUrl: string) {
 function runLibrary(functionName: string, ...args: string[]) {
   return spawnSync(
     "bash",
-    ["-c", `source "$1"; shift; ${functionName} "$@"`, "--", library, ...args],
+    ["-c", 'source "$1"; shift; "$@"', "--", library, functionName, ...args],
     { encoding: "utf8" },
   );
 }

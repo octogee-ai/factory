@@ -86,7 +86,7 @@ function runPublishBlock(opts: {
     const fakeNode = path.join(bin, "node");
     fs.writeFileSync(
       fakeNode,
-      `#!/bin/sh\necho called > "$FAKE_NODE_MARKER"\nexit ${opts.nodeExit ?? 0}\n`,
+      '#!/bin/sh\necho called > "$FAKE_NODE_MARKER"\nexit "$FAKE_NODE_EXIT"\n',
     );
     fs.chmodSync(fakeNode, 0o755);
 
@@ -95,8 +95,6 @@ function runPublishBlock(opts: {
       log() { echo "$*" >&2; }
       export GATEWAY_ID=gw-test
       export GCP_PROJECT_ID=octogee-test
-      export GATEWAY_PROFILE="${opts.profile ?? ""}"
-      export GATEWAY_AUTH_SECRET_MANAGER_PUBLISH="${opts.publish ?? ""}"
       export OPENCLAW_GATEWAY_TOKEN=token-for-test
       eval "$(sed -n '/^# Publish the fresh gateway auth token/,/^# ── End gateway auth token publish/p' "$1")"
     `;
@@ -105,6 +103,9 @@ function runPublishBlock(opts: {
       env: {
         PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
         FAKE_NODE_MARKER: marker,
+        FAKE_NODE_EXIT: String(opts.nodeExit ?? 0),
+        GATEWAY_PROFILE: opts.profile ?? "",
+        GATEWAY_AUTH_SECRET_MANAGER_PUBLISH: opts.publish ?? "",
       },
     });
     return {
@@ -172,15 +173,17 @@ function runRunnerBlock(
     const script = `
       set -e
       log() { echo "$*" >&2; }
-      export GATEWAY_PROFILE="${profile}"
-      export GATEWAY_CLASS_EFFECTIVE="${gatewayClass}"
-      export RUNNER_MARKER="${marker}"
       TSX=/octogee/scripts/node_modules/.bin/tsx
       ${runnerBlockSource()}
     `;
-    const r = spawnSync("sh", ["-c", script, "--", ENTRYPOINT], {
+    const r = spawnSync("sh", ["-c", script], {
       encoding: "utf8",
-      env: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
+      env: {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        GATEWAY_PROFILE: profile,
+        GATEWAY_CLASS_EFFECTIVE: gatewayClass,
+        RUNNER_MARKER: marker,
+      },
     });
     const calls = fs.existsSync(marker)
       ? fs.readFileSync(marker, "utf8").trim().split("\n").filter(Boolean)
