@@ -286,4 +286,11 @@ describe('with no user identity installed', () => {
     expect(result.body).toEqual({ error: 'Authentication unavailable' });
     expect(freshLogger.error).toHaveBeenCalledWith(expect.stringContaining('no user identity provider is installed'));
   });
+
+  it('refuses to load a user', async () => {
+    vi.resetModules();
+    const fresh = await import('../middleware/auth.js');
+
+    await expect(fresh.loadUserWithInstalledProvider('u1')).rejects.toThrow('no user identity provider is installed');
+  });
 });

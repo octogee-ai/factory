@@ -353,6 +353,12 @@ revoked token or a deactivated Mattermost account can therefore keep working for
 up to 60 seconds. A suspended platform user is refused at once, because the API
 reads the user's platform state on every request.
 
+A gateway's routes under `/g/<gateway>/` accept the same tokens. The gateway
+has no Mattermost or platform state of its own, so it asks the platform API
+whose token it is and remembers the answer for up to 60 seconds. On a gateway,
+a revoked token can keep working for up to 120 seconds: 60 at the API plus 60 at
+the gateway. A suspension reaches a gateway within 60 seconds.
+
 ## Talk to the agent
 
 Open the Coach channel in Mattermost and send a message. The agent answers in
