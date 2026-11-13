@@ -1,16 +1,20 @@
 version: 2
 updates:
   - package-ecosystem: npm
-    directory: /
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
-    groups:
-      security-updates:
-        applies-to: security-updates
-        patterns: ['*']
-  - package-ecosystem: npm
-    directory: /scripts
+    directories:
+      - /
+      - /core
+      - /core/src/templates/project-seeds/vite-static
+      - /gateway-edge
+      - /glm-controller
+      - /infra/gateway/extensions/platform/octogee-access-tools
+      - /infra/gateway/extensions/platform/octogee-broker-tools
+      - /infra/gateway/isolated-toolchain
+      - /octogee-api
+      - /scripts
+      - /shared
+      - /test-helpers
+      - /tests
     schedule:
       interval: weekly
     open-pull-requests-limit: 5

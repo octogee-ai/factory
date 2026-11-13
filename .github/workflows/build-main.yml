@@ -111,7 +111,7 @@ jobs:
           printf 'sha=%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
           jq -r '.registry as $registry | .images | to_entries[] |
             .key as $name | [.value.digest, .value.platforms[]][] |
-            "\(.)  \($registry)/\($name)"' "$RUNNER_TEMP/image-manifest.json" > "$RUNNER_TEMP/image-subjects.txt"
+            "\(sub("^sha256:"; ""))  \($registry)/\($name)"' "$RUNNER_TEMP/image-manifest.json" > "$RUNNER_TEMP/image-subjects.txt"
           {
             echo "### Platform images at ${GITHUB_SHA:0:7}"
             echo

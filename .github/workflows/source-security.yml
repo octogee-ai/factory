@@ -1,0 +1,134 @@
+name: Source security
+
+on:
+  pull_request:
+    paths:
+      - '.github/**'
+      - '**/Dockerfile*'
+      - '**/*.Dockerfile'
+      - '**/*.tf'
+      - '**/*.tfvars'
+      - 'helm/**'
+      - 'scripts/ops/kind/**'
+      - 'scripts/ci/install-security-tool.sh'
+      - '**/package-lock.json'
+  schedule:
+    - cron: '11 8 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dependencies:
+    name: OSV lockfile audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Scan maintained npm lockfiles
+        run: |
+          set -euo pipefail
+          bash scripts/ci/install-security-tool.sh osv-scanner "$RUNNER_TEMP/bin"
+          git ls-files -z -- '*package-lock.json' ':(exclude,glob)**/dist/**' ':(exclude,glob)**/fixtures/**' > "$RUNNER_TEMP/lockfiles"
+          lockfiles=()
+          while IFS= read -r -d '' file; do
+            lockfiles+=(--lockfile="$file")
+          done < "$RUNNER_TEMP/lockfiles"
+          if (( ${#lockfiles[@]} == 0 )); then
+            echo "::error::No npm lockfiles found"
+            exit 1
+          fi
+          status=0
+          "$RUNNER_TEMP/bin/osv-scanner" scan source "${lockfiles[@]}" --format json --output-file "$RUNNER_TEMP/osv.json" || status=$?
+          if [[ "$GITHUB_EVENT_NAME" == pull_request && "$status" == 1 ]] &&
+            jq -e 'any(.results[]?.packages[]?; (.vulnerabilities // [] | length) > 0)' "$RUNNER_TEMP/osv.json" > /dev/null; then
+            echo "::notice::OSV found known vulnerabilities. See the lockfile report."
+            exit 0
+          fi
+          exit "$status"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: ${{ !cancelled() }}
+        with:
+          name: osv-lockfiles
+          path: ${{ runner.temp }}/osv.json
+          if-no-files-found: error
+
+  configuration:
+    name: Trivy configuration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Render the public Helm manifests
+        run: |
+          set -euo pipefail
+          digest="sha256:$(printf '%064d' 0)"
+          tag=aaaaaaa
+          args=()
+          for image in octogee-api gateway-edge glm-controller mattermost; do
+            args+=(--set-string "$image.image.repository=registry.example/$image"
+              --set-string "$image.image.tag=$tag" --set-string "$image.image.digest=$digest")
+          done
+          mkdir -p "$RUNNER_TEMP/rendered-helm"
+          helm template octogee helm/octogee --namespace octogee-local -f scripts/ops/kind/values.yaml "${args[@]}" \
+            --set-string "glm-controller.platformRelease.sourceSha=$(printf 'a%.0s' {1..40})" \
+            --set-string glm-controller.platformRelease.gatewayImageRepository=registry.example/octogee-gateway \
+            --set-string "glm-controller.platformRelease.gatewayImageTag=$tag@$digest" \
+            --set-string "glm-controller.platformRelease.builderImageTag=$tag@$digest" \
+            --set-string glm-controller.platformRelease.gatewayEdgeImageRepository=registry.example/gateway-edge \
+            --set-string "glm-controller.platformRelease.gatewayEdgeImageTag=$tag@$digest" > "$RUNNER_TEMP/rendered-helm/platform.yaml"
+          helm template octogee-gw-scan helm/octogee-gateway --namespace octogee-local \
+            --set-string gatewayId=scan --set-string "imageTag=$tag" \
+            --set-string image.repository=registry.example/octogee-gateway \
+            --set-string gatewayEdge.image.repository=registry.example/gateway-edge \
+            --set-string env.mmSiteUrl=https://mattermost.example.com \
+            --set-string env.mmInternalUrl=http://mattermost.octogee-local.svc.cluster.local:8065 \
+            --set-string 'gatewayEdge.publicAppOrigins[0]=https://app.example.com' > "$RUNNER_TEMP/rendered-helm/gateway.yaml"
+      - name: Scan Dockerfiles, Terraform, and rendered Kubernetes manifests
+        run: |
+          set -euo pipefail
+          bash scripts/ci/install-security-tool.sh trivy "$RUNNER_TEMP/bin"
+          trivy="$RUNNER_TEMP/bin/trivy"
+          "$trivy" config --misconfig-scanners dockerfile,terraform --exit-code 0 --format json \
+            --output "$RUNNER_TEMP/source-config.json" .
+          "$trivy" config --misconfig-scanners kubernetes --exit-code 0 --format json \
+            --output "$RUNNER_TEMP/helm-config.json" "$RUNNER_TEMP/rendered-helm"
+          {
+            printf '### Trivy configuration findings (report-only)\n\n'
+            for file in source-config helm-config; do
+              printf '**%s**\n\n' "$file"
+              jq -r '[.Results[]?.Misconfigurations[]?.Severity] | group_by(.)[] | "- \(.[0]): \(length)"' "$RUNNER_TEMP/$file.json"
+              printf '\n'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: trivy-configuration
+          path: |
+            ${{ runner.temp }}/source-config.json
+            ${{ runner.temp }}/helm-config.json
+          if-no-files-found: error
+
+  workflows:
+    name: zizmor
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Audit GitHub Actions workflows
+        run: |
+          set -euo pipefail
+          bash scripts/ci/install-security-tool.sh zizmor "$RUNNER_TEMP/bin"
+          "$RUNNER_TEMP/bin/zizmor" --offline --strict-collection --format sarif .github > "$RUNNER_TEMP/zizmor.sarif"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: zizmor
+          path: ${{ runner.temp }}/zizmor.sarif
+          if-no-files-found: error
