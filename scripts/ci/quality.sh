@@ -38,7 +38,7 @@ case "$check" in
       for lockfile in ${files[@]+"${files[@]}"}; do args+=("--lockfile=$lockfile"); done
       if [ "${#args[@]}" -eq 1 ]; then echo 'No changed lockfiles remain'; exit 0; fi
     else
-      while IFS= read -r lockfile; do args+=("--lockfile=$lockfile"); done < <(git ls-files '*package-lock.json')
+      while IFS= read -r lockfile; do args+=("--lockfile=$lockfile"); done < <(git ls-files --recurse-submodules '*package-lock.json')
       [ "${#args[@]}" -gt 1 ] || { echo 'No tracked lockfiles found' >&2; exit 1; }
     fi
     osv-scanner scan source "${args[@]}"

@@ -84,7 +84,7 @@ describe("platform boundary", () => {
     expect([...reachableSources(manifest.platformEntrypoints, repoRoot)].filter((file) => file.includes("testing/firestore-store"))).toEqual([]);
     const isTestFile = (file: string) =>
       /\.spec\.ts$/.test(file) || file.includes("/test-setup/") || file.startsWith("platform/core/src/testing/firestore-store/");
-    const importers = execFileSync("git", ["grep", "--untracked", "-l", "testing/firestore-store", "--", "*.ts", ":!*/dist/*"], { cwd: repoRoot, encoding: "utf8" })
+    const importers = execFileSync("git", ["grep", "--recurse-submodules", "-l", "testing/firestore-store", "--", "*.ts", ":!*/dist/*"], { cwd: repoRoot, encoding: "utf8" })
       .split("\n")
       .filter((file) => file !== "" && /["']([^"']*testing\/firestore-store[^"']*)["']/.test(readFileSync(resolve(repoRoot, file), "utf8")));
     expect(importers.filter((file) => !isTestFile(file))).toEqual([]);

@@ -59,3 +59,37 @@ it('copies current source, excludes ignored files and git metadata, and scans sy
     });
   });
 });
+function withSubmodule(run: (root: string, git: (...args: string[]) => void) => void) {
+  const inner = mkdtempSync(join(tmpdir(), 'ci-secret-submodule-'));
+  const innerGit = (...args: string[]) => { execFileSync('/usr/bin/git', args, { cwd: inner, stdio: 'pipe' }); };
+  try {
+    innerGit('init', '-b', 'main');
+    innerGit('config', 'user.name', 'CI fixture');
+    innerGit('config', 'user.email', 'ci@example.invalid');
+    writeFileSync(join(inner, 'inner.js'), 'export const inner = true;\n');
+    innerGit('add', '.');
+    innerGit('commit', '-m', 'inner');
+    fixture((root, git) => {
+      git('-c', 'protocol.file.allow=always', 'submodule', 'add', inner, 'vendor');
+      git('commit', '-m', 'submodule');
+      run(root, git);
+    });
+  } finally { rmSync(inner, { recursive: true, force: true }); }
+}
+it.each(['tracked', 'untracked'])('scans %s source inside an initialized submodule', mode => {
+  withSubmodule(root => {
+    const key = 'ghp_' + createHash('sha256').update('synthetic submodule scanner test').digest('hex').slice(0, 36);
+    writeFileSync(join(root, 'vendor', mode === 'untracked' ? 'new.js' : 'inner.js'), `export const token = "${key}";\n`);
+    scanWorkingTree(root, (directory: string) => {
+      expect(existsSync(join(directory, 'vendor', '.git'))).toBe(false);
+      const working = spawnSync(gitleaks, ['detect', '--no-git', `--config=${config}`, '--source=.', '--redact', '--exit-code=1'], { cwd: directory, encoding: 'utf8' });
+      expect(working.status, working.stderr).toBe(1);
+    });
+  });
+});
+it('refuses to scan past a submodule that is not initialized', () => {
+  withSubmodule((root, git) => {
+    git('submodule', 'deinit', '--force', 'vendor');
+    expect(() => scanWorkingTree(root, () => undefined)).toThrow('Submodule vendor is not initialized');
+  });
+});
