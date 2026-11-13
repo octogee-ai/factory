@@ -38,9 +38,12 @@ Deploys the TEST platform and site in parallel, publishes the accepted desktop
 image when the build includes one, journals each isolated gateway's desired
 release, and waits for shared and isolated gateway live-image convergence.
 Paused isolated gateways receive the desired release without waking; retired gateways are
-skipped. The end-to-end tests then run against the deployed environment. A
-failure there marks the shipment failed after the deployment itself has
-completed.
+skipped. It then resumes the isolated gateway named by the TEST deployment target's
+`shipTestIsolatedGatewayId`, requires it to serve the shipped build within 20 minutes,
+and parks it again, whether or not the check passes. The shipment fails when the target
+names no such gateway or the gateway does not exist. The end-to-end tests then
+run against the deployed environment. A failure there marks the shipment failed
+after the deployment itself has completed.
 
 ```bash
 npm run ci:ship-test -- --sha=<full-main-sha> --actor=operator:<name>

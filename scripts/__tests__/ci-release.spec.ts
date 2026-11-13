@@ -4,7 +4,7 @@ import { deployRelease, fleetStoreStages, installReleaseTools, releaseOptions } 
 
 const options = releaseOptions(['--environment=test', `--sha=${'a'.repeat(40)}`, '--actor=operator:test']);
 function dependencies() {
-  return { manifest: vi.fn(async () => ({ sourceSha: options.sha })), lock: vi.fn(async (run: () => Promise<void>) => run()), platform: vi.fn(async () => undefined), site: vi.fn(async () => undefined), desktop: vi.fn(async () => undefined), fleet: vi.fn(async () => undefined) };
+  return { manifest: vi.fn(async () => ({ sourceSha: options.sha })), lock: vi.fn(async (run: () => Promise<void>) => run()), platform: vi.fn(async () => undefined), site: vi.fn(async () => undefined), desktop: vi.fn(async () => undefined), fleet: vi.fn(async () => undefined), isolatedCheck: vi.fn(async () => undefined) };
 }
 function deferred() {
   let resolve!: () => void;
@@ -100,6 +100,23 @@ it.each(['platform', 'site', 'desktop'] as const)('does not advance the fleet af
   await expect(deployRelease({ ...options, shipTest: true }, deps)).rejects.toThrow('failed');
   expect(deps.fleet).not.toHaveBeenCalled();
 });
+it('checks the isolated gateway only in Ship TEST, after the fleet converges', async () => {
+  const deps = dependencies();
+  await deployRelease({ ...options, shipTest: true }, deps);
+  expect(deps.isolatedCheck).toHaveBeenCalledOnce();
+  expect(deps.isolatedCheck.mock.invocationCallOrder[0]).toBeGreaterThan(deps.fleet.mock.invocationCallOrder[0]);
+  const deploy = dependencies();
+  await deployRelease(options, deploy);
+  const prod = dependencies();
+  await deployRelease(releaseOptions(['--environment=prod', `--sha=${'a'.repeat(40)}`, '--actor=operator:test', '--ship-prod']), prod);
+  for (const unchecked of [deploy, prod]) expect(unchecked.isolatedCheck).not.toHaveBeenCalled();
+});
+it('does not check the isolated gateway when the fleet does not converge', async () => {
+  const deps = dependencies();
+  deps.fleet.mockRejectedValue(new Error('fleet timed-out'));
+  await expect(deployRelease({ ...options, shipTest: true }, deps)).rejects.toThrow('fleet timed-out');
+  expect(deps.isolatedCheck).not.toHaveBeenCalled();
+});
 it('runs the PROD fleet after platform, desktop and site deployment', async () => {
   const prod = releaseOptions(['--environment=prod', `--sha=${'a'.repeat(40)}`, '--actor=operator:test', '--ship-prod']);
   const deps = dependencies();
@@ -112,16 +129,17 @@ it('rejects a shipment targeting the wrong environment', () => {
   expect(() => releaseOptions(['--environment=test', `--sha=${'a'.repeat(40)}`, '--actor=operator:test', '--ship-prod'])).toThrow();
 });
 it.each([
-  ['desktop', ['ops/release-desktop-image.ts']],
-  ['fleet', ['ops/deploy-fleet.ts', `--sha=${options.sha}`, '--timeout-ms=3600000']],
-] as const)('runs the %s stage against the deployed PostgreSQL store through a tunnel it closes afterwards', async (label, script) => {
+  ['desktop', 'desktop', ['ops/release-desktop-image.ts']],
+  ['fleet', 'fleet', ['ops/deploy-fleet.ts', `--sha=${options.sha}`, '--timeout-ms=3600000']],
+  ['isolatedCheck', 'isolated-check', ['ops/check-isolated-gateway.ts', `--sha=${options.sha}`, '--timeout-ms=1200000']],
+] as const)('runs the %s stage against the deployed PostgreSQL store through a tunnel it closes afterwards', async (key, label, script) => {
   const close = vi.fn(async () => {});
   const inspect = vi.fn(async () => ({ host: '10.89.0.11', port: 5432, database: 'platform', user: 'runtime', password: 'runtime-password', sslmode: 'require', image: 'fleet-controller@sha256:abc' }));
   const tunnel = vi.fn(async () => ({ port: 15432, close }));
   const storeDependencies = vi.fn(() => ({ inspect, tunnel }));
   const stage = vi.fn(async () => undefined);
 
-  await fleetStoreStages({ environment: options.environment, sha: options.sha, stage, withStore: withFleetStore, storeDependencies })[label]();
+  await fleetStoreStages({ environment: options.environment, sha: options.sha, stage, withStore: withFleetStore, storeDependencies })[key]();
 
   expect(storeDependencies).toHaveBeenCalledWith('test');
   expect(stage).toHaveBeenCalledWith(label, 'node', ['--import', './node_modules/tsx/dist/loader.mjs', ...script], {

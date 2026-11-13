@@ -4027,6 +4027,20 @@ async function gatewayPatchRefusal(
   return null;
 }
 
+export async function applyGatewayRootPatch(
+  store: PlatformStateStore,
+  gatewayId: string,
+  patch: Record<string, unknown>,
+  updatedBy: string,
+): Promise<GatewayPatchRefusal | { ok: true }> {
+  return store.transaction({ label: "admin.fleet.patchGateway" }, async (transaction) => {
+    const refusal = await gatewayPatchRefusal(transaction, gatewayId);
+    if (refusal) return refusal;
+    await transaction.gateways.roots.patch(gatewayId, { ...patch, updatedAt: Date.now(), updatedBy });
+    return { ok: true as const };
+  });
+}
+
 const IN_FLIGHT_OPERATION_STATUSES = ["pending", "running"] as const;
 
 export function inFlightOperationsForUid(
@@ -5148,16 +5162,10 @@ router.post(
             { label: "admin.fleet.patchGateway.dryRun", readOnly: true },
             (transaction) => gatewayPatchRefusal(transaction, id),
           ),
-          action: async (claim: OperationAuditActionClaim) => store.transaction({ label: "admin.fleet.patchGateway" }, async (transaction) => {
-            const refusal = await gatewayPatchRefusal(transaction, id);
-            if (refusal) return refusal;
-            await transaction.gateways.roots.patch(id, {
-              ...built.ok.patch,
-              updatedAt: Date.now(),
-              updatedBy,
-            });
-            return { ok: true as const, operationId: claim.auditId };
-          }),
+          action: async (claim: OperationAuditActionClaim) => {
+            const applied = await applyGatewayRootPatch(store, id, built.ok.patch, updatedBy);
+            return applied.ok ? { ok: true as const, operationId: claim.auditId } : applied;
+          },
         });
         if (!patchResult.ok) {
           res.status(409).json({ error: patchResult.error, gatewayId: id });

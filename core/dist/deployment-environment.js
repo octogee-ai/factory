@@ -212,6 +212,8 @@ export function validateDeploymentTargetsDocument(document) {
             stringField(target, "kubeContext", label);
         if (target.pinEnvironment !== undefined)
             stringField(target, "pinEnvironment", label);
+        if (target.shipTestIsolatedGatewayId !== undefined)
+            stringField(target, "shipTestIsolatedGatewayId", label);
         if (HOSTED_TARGET_FIELDS.some((field) => Object.hasOwn(target, field))) {
             validateHostedTarget(target, targetId);
             validatePromotionSourceField(target, targetId, environment);
@@ -279,6 +281,7 @@ function settings(targetId, target) {
         gatewayValuesFile: target.gatewayValuesFile,
         ...(target.kubeContext === undefined ? {} : { kubeContext: target.kubeContext }),
         ...(target.pinEnvironment === undefined ? {} : { pinEnvironment: target.pinEnvironment }),
+        ...(target.shipTestIsolatedGatewayId === undefined ? {} : { shipTestIsolatedGatewayId: target.shipTestIsolatedGatewayId }),
     };
     if (!("clusterProjectId" in target))
         return platform;

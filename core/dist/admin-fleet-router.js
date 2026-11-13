@@ -2736,6 +2736,15 @@ async function gatewayPatchRefusal(transaction, gatewayId) {
     }
     return null;
 }
+export async function applyGatewayRootPatch(store, gatewayId, patch, updatedBy) {
+    return store.transaction({ label: "admin.fleet.patchGateway" }, async (transaction) => {
+        const refusal = await gatewayPatchRefusal(transaction, gatewayId);
+        if (refusal)
+            return refusal;
+        await transaction.gateways.roots.patch(gatewayId, { ...patch, updatedAt: Date.now(), updatedBy });
+        return { ok: true };
+    });
+}
 const IN_FLIGHT_OPERATION_STATUSES = ["pending", "running"];
 export function inFlightOperationsForUid(transaction, uid) {
     return transaction.journal.operations.listForUid(uid, { statuses: [...IN_FLIGHT_OPERATION_STATUSES] });
@@ -3631,17 +3640,10 @@ export function addAdminFleetRoutes(router, deps) {
                     ? { outcome: "completed" }
                     : { outcome: "failed", error: result.error },
                 dryRunRefusal: () => store.transaction({ label: "admin.fleet.patchGateway.dryRun", readOnly: true }, (transaction) => gatewayPatchRefusal(transaction, id)),
-                action: async (claim) => store.transaction({ label: "admin.fleet.patchGateway" }, async (transaction) => {
-                    const refusal = await gatewayPatchRefusal(transaction, id);
-                    if (refusal)
-                        return refusal;
-                    await transaction.gateways.roots.patch(id, {
-                        ...built.ok.patch,
-                        updatedAt: Date.now(),
-                        updatedBy,
-                    });
-                    return { ok: true, operationId: claim.auditId };
-                }),
+                action: async (claim) => {
+                    const applied = await applyGatewayRootPatch(store, id, built.ok.patch, updatedBy);
+                    return applied.ok ? { ok: true, operationId: claim.auditId } : applied;
+                },
             });
             if (!patchResult.ok) {
                 res.status(409).json({ error: patchResult.error, gatewayId: id });

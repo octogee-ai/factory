@@ -129,7 +129,8 @@ export function matchesFleetPlatformRelease(record: PlatformReleaseRecord | null
   return record.imageTag === expected.imageTag && record.payloadHash === releasePayloadHash(expected);
 }
 
-function matchesGatewayPayload(gateway: FleetGateway, actual: ReleasePayload | null, options: FleetDeployOptions): boolean {
+type ExpectedBuild = Pick<FleetDeployOptions, "sourceSha" | "payload">;
+function matchesGatewayPayload(gateway: FleetGateway, actual: ReleasePayload | null, options: ExpectedBuild): boolean {
   if (gateway.gatewayClass === "builder") return matchesPayload(actual, options.payload);
   if (!actual || !isReleasePayload(actual) || !actual.profileImages || !actual.gatewayEdgeImage || !sourceTagMatches(actual.imageTag, options.sourceSha)) return false;
   const expected = retagPayload(options.payload, actual.imageTag.split("@")[0]);
@@ -195,7 +196,7 @@ function retiredAssessment(result: FleetTargetResult, gateway: FleetGateway, tim
   return { ...result, status: shared ? "shared-retired" : "retired-skipped" };
 }
 
-function targetAssessment(gateway: FleetGateway, options: FleetDeployOptions, timing: ObservationTiming): FleetTargetResult {
+export function targetAssessment(gateway: FleetGateway, options: ExpectedBuild, timing: ObservationTiming): FleetTargetResult {
   const result: FleetTargetResult = {
     gatewayId: gateway.gatewayId, gatewayClass: gateway.gatewayClass, addedBy: gateway.addedBy, desiredStatus: gateway.desiredStatus,
     desiredRelease: gateway.desiredRelease, liveRelease: gateway.liveRelease, status: "waiting", reasons: [],

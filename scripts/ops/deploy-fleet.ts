@@ -120,7 +120,7 @@ export async function readFleetSnapshot(store: PlatformStateStore, observePods: 
   return { gateways, retirements, sharedReplacements: [...(scalerState?.replacements ?? [])], platform: platformRecordOf(platform) };
 }
 
-async function observeGatewayPods(environment: "test" | "prod"): Promise<unknown> {
+export async function observeGatewayPods(environment: "test" | "prod"): Promise<unknown> {
   const settings = deploymentEnvironmentSettings(environment);
   const pods = await execFile("kubectl", ["--context", settings.kubeContext, "--namespace", settings.namespace, "get", "pods", "--selector", "app=octogee-gateway", "-o", "json"], { timeout: 30_000, maxBuffer: 16 * 1024 * 1024 });
   return JSON.parse(pods.stdout);

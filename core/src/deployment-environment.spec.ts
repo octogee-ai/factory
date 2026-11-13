@@ -255,6 +255,20 @@ describe("deployment targets manifest location", () => {
     expect(deploymentEnvironmentForNamespace("octogee-test")).toBe("unknown");
   });
 
+  it("names the isolated gateway Ship TEST checks only where a target sets one", () => {
+    process.env[DEPLOYMENT_TARGETS_ENV] = manifestWith((document) => {
+      Object.assign(document.targets["test-central"], { shipTestIsolatedGatewayId: "check-s-1" });
+    });
+    resetDeploymentTargetsForTests();
+    expect(deploymentEnvironmentSettings("test").shipTestIsolatedGatewayId).toBe("check-s-1");
+    expect(deploymentEnvironmentSettings("prod")).not.toHaveProperty("shipTestIsolatedGatewayId");
+    const empty = manifestWith((document) => {
+      Object.assign(document.targets["test-central"], { shipTestIsolatedGatewayId: "" });
+    });
+    expect(() => loadDeploymentTargetsDocument(empty))
+      .toThrow("deployment target test-central.shipTestIsolatedGatewayId must be a non-empty string");
+  });
+
   it("resolves an active custom environment without GCP configuration", () => {
     const dir = mkdtempSync(join(tmpdir(), "platform-deployment-targets-"));
     try {

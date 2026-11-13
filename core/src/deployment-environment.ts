@@ -61,6 +61,7 @@ interface PlatformTargetDocument {
   mattermostOrigin: string;
   gatewayValuesFile: string;
   pinEnvironment?: string;
+  shipTestIsolatedGatewayId?: string;
 }
 
 interface HostedTargetDocument extends PlatformTargetDocument {
@@ -134,6 +135,7 @@ export interface DeploymentEnvironmentSettings {
   previewOrigin: string;
   gatewayValuesFile: string;
   pinEnvironment: string;
+  shipTestIsolatedGatewayId?: string;
 }
 
 export type DeploymentTargetSettings = Pick<DeploymentEnvironmentSettings,
@@ -422,6 +424,7 @@ export function validateDeploymentTargetsDocument(document: unknown): asserts do
     stringFields(target, TARGET_STRING_FIELDS, label);
     if (target.kubeContext !== undefined) stringField(target, "kubeContext", label);
     if (target.pinEnvironment !== undefined) stringField(target, "pinEnvironment", label);
+    if (target.shipTestIsolatedGatewayId !== undefined) stringField(target, "shipTestIsolatedGatewayId", label);
     if (HOSTED_TARGET_FIELDS.some((field) => Object.hasOwn(target, field))) {
       validateHostedTarget(target, targetId);
       validatePromotionSourceField(target, targetId, environment);
@@ -498,6 +501,7 @@ function settings(
     gatewayValuesFile: target.gatewayValuesFile,
     ...(target.kubeContext === undefined ? {} : { kubeContext: target.kubeContext }),
     ...(target.pinEnvironment === undefined ? {} : { pinEnvironment: target.pinEnvironment }),
+    ...(target.shipTestIsolatedGatewayId === undefined ? {} : { shipTestIsolatedGatewayId: target.shipTestIsolatedGatewayId }),
   };
   if (!("clusterProjectId" in target)) return platform;
   return {

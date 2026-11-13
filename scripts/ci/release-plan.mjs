@@ -31,6 +31,7 @@ export function fleetStoreStages({ environment, sha, stage, withStore, storeDepe
   return {
     desktop: () => againstStore('desktop', ['ops/release-desktop-image.ts']),
     fleet: () => againstStore('fleet', ['ops/deploy-fleet.ts', `--sha=${sha}`, '--timeout-ms=3600000']),
+    isolatedCheck: () => againstStore('isolated-check', ['ops/check-isolated-gateway.ts', `--sha=${sha}`, '--timeout-ms=1200000']),
   };
 }
 
@@ -48,5 +49,6 @@ export async function deployRelease(options, deps) {
     if (failures.length === 1) throw failures[0];
     if (failures.length) throw new AggregateError(failures, `Platform and site deployments failed: ${failures.map(error => error.message).join('; ')}`);
     if (options.shipTest || options.shipProd) await deps.fleet(manifest);
+    if (options.shipTest) await deps.isolatedCheck(manifest);
   });
 }

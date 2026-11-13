@@ -50,6 +50,7 @@ interface PlatformTargetDocument {
     mattermostOrigin: string;
     gatewayValuesFile: string;
     pinEnvironment?: string;
+    shipTestIsolatedGatewayId?: string;
 }
 interface HostedTargetDocument extends PlatformTargetDocument {
     secretNameSuffix: string;
@@ -120,6 +121,7 @@ export interface DeploymentEnvironmentSettings {
     previewOrigin: string;
     gatewayValuesFile: string;
     pinEnvironment: string;
+    shipTestIsolatedGatewayId?: string;
 }
 export type DeploymentTargetSettings = Pick<DeploymentEnvironmentSettings, "name" | "targetId" | "lifecycle" | "clusterName" | "namespace" | "siteOrigin" | "appOrigin" | "apiOrigin" | "gitOrigin" | "mattermostOrigin" | "gatewayValuesFile"> & Partial<DeploymentEnvironmentSettings>;
 export declare function validateDeploymentTargetsDocument(document: unknown): asserts document is DeploymentTargetsDocument;

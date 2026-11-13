@@ -399,6 +399,13 @@ type ReasonedActivationLeaseMutationOutcome = {
 export declare function classifyActivationLeaseTermination(result: ActivationLeaseTerminationOutcome): NormalFleetMutationResult;
 export declare function classifyActivationLeaseReturn(result: ActivationLeaseReturnOutcome): NormalFleetMutationResult;
 export declare function classifyReasonedActivationLeaseMutation(result: ReasonedActivationLeaseMutationOutcome): NormalFleetMutationResult;
+type GatewayPatchRefusal = {
+    ok: false;
+    error: string;
+};
+export declare function applyGatewayRootPatch(store: PlatformStateStore, gatewayId: string, patch: Record<string, unknown>, updatedBy: string): Promise<GatewayPatchRefusal | {
+    ok: true;
+}>;
 export declare function inFlightOperationsForUid(transaction: Pick<PlatformStateTransaction, "journal">, uid: string): Promise<readonly Stored<OperationRecord>[]>;
 export declare function isInFlightUserMigration(operation: OperationRecord): boolean;
 export declare function requestActivationLeaseTermination(transaction: PlatformStateTransaction, input: {
