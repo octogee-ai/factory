@@ -76,6 +76,10 @@ because environment variables would put every user's key in one process.
 
 ## Sign-in for chat and git
 
+On the full platform, users on a shared gateway reach their agent only through
+chat and git. The OpenClaw Control UI, with the sign-in in the table above, is
+for users on an isolated gateway.
+
 Each host uses its own login. On the default hosts, Gitea supports OIDC at no
 cost. Mattermost Team Edition has no single sign-on that we could confirm, and
 it stops creating accounts at 250 activated users across the server. Bots do

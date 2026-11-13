@@ -18,6 +18,10 @@ two installers.
   platform images this repository publishes, or builds them from your checkout.
   See [The full platform on kind](kind.md).
 
+On the full platform, users on a shared gateway reach their agent through
+Mattermost and Gitea. The OpenClaw Control UI is for users on an isolated
+gateway only.
+
 ## What you need to sign up for
 
 This is the complete list. Mattermost, Gitea, PostgreSQL, file storage and the

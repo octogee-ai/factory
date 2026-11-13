@@ -42,17 +42,18 @@ gateway:
 | One user's agent state is readable by another's | Each user's files live under their own directory, and each agent has its own store, a separate PostgreSQL schema. Database logins are per gateway, so an isolated gateway can reach only its owner's stores. Inside a shared gateway the separation holds because agents cannot run code. |
 | A sandbox escape reaches the node | Shared gateway pods run in a gVisor sandbox on nodes with no platform credentials. |
 
-What a user loses on a shared gateway is real: no shell, no coding CLIs, no
-native Control UI. So octogee-cloud has a second class.
+A user on a shared gateway works with their agent through Mattermost and Gitea.
+What they give up is real: no shell, no coding CLIs, and no OpenClaw Control UI,
+which only isolated gateways provide. So octogee-cloud has a second class.
 
 ## Isolated gateways, and moving between the two
 
 An isolated gateway serves exactly one user. It is what OpenClaw's
 documentation calls a single-user gateway, and it is the same trust boundary
-OCE gives every Agent: full OpenClaw, host tools included, on a virtual machine
-that holds no platform credentials. Isolated gateways run only as Google Cloud
-virtual machines today. People the user invites are trusted the way a teammate
-is, exactly as upstream describes.
+OCE gives every Agent: full OpenClaw, host tools and the Control UI included, on
+a virtual machine that holds no platform credentials. Isolated gateways run only
+as Google Cloud virtual machines today. People the user invites are trusted the
+way a teammate is, exactly as upstream describes.
 
 The part that is specific to octogee-cloud is the movement. A user's agents,
 chat channels, repositories, agent stores and schedules are records the fleet

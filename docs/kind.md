@@ -188,6 +188,10 @@ When `user inspect` shows provisioning `complete` and the user mounted on
 - a Gitea account `ws-lin` and an organization `lin`, with a `workspace`
   repository and an empty `system_config` repository.
 
+A user on a shared gateway works with their agent through Mattermost and Gitea.
+The OpenClaw Control UI is for users on an isolated gateway, and kind runs only
+shared gateways.
+
 ## Sign in to Mattermost and Gitea
 
 Issue the user's passwords. The command prints a chat password and a git

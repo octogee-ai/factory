@@ -10,7 +10,9 @@ octogee-cloud runs OpenClaw agents for many users. The fleet controller places
 each user on a shared gateway, where many users share one OpenClaw gateway and
 host code is denied, or on an isolated gateway of their own, and moves users
 between the two. Each user gets a Mattermost account and team for chat and a
-Gitea organization for git. Operators drive the fleet with the
+Gitea organization for git. Users on a shared gateway reach their agent through
+those two; the OpenClaw Control UI is for users on an isolated gateway only.
+Operators drive the fleet with the
 [`octogee-fleet`](https://github.com/octogee-ai/octogee-fleet) command line,
 which talks to the fleet controller's Admin API.
 [Why octogee-cloud](docs/why-octogee-cloud.md) explains the trust model.

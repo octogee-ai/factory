@@ -16,13 +16,15 @@ curl -fsSL https://raw.githubusercontent.com/octogee-ai/octogee-cloud/main/insta
 
 [Try it locally](docs/getting-started.md), or [run it in production](docs/running-in-the-cloud.md) on GKE or EKS.
 To run the full platform, with the fleet controller, users and shared gateways,
-on a local kind cluster, see [The full platform on kind](docs/kind.md).
+on a local kind cluster, see [The full platform on kind](docs/kind.md). Users on
+a shared gateway work through Mattermost and Gitea; the OpenClaw Control UI is
+for isolated gateways only.
 
 ## What you need to sign up for
 
-For `install.sh` on your own machine, one model key; Gemini's free tier works.
-Agents on the full platform cannot use a Gemini key. On Google Cloud, also a
-billing account and a domain. [See every account and tier](docs/getting-started.md#what-you-need-to-sign-up-for).
+For `install.sh` on your own machine, one model key; Gemini's free tier works
+there, but not on the full platform. On Google Cloud, also a billing account
+and a domain. [See every account and tier](docs/getting-started.md#what-you-need-to-sign-up-for).
 
 ## What is here
 
