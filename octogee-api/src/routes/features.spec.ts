@@ -1,6 +1,6 @@
 import express, { type RequestHandler } from "express";
 import request from "supertest";
-import { describe, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { FeaturePolicy } from "../lib/feature-policy.js";
 import { createFeatureRoutes } from "./features.js";
@@ -65,7 +65,8 @@ describe("GET /api/features", () => {
     }));
     const client = request(api);
     for (let count = 0; count < 120; count++) await client.get("/api/features").set("authorization", "Bearer test-a").expect(200);
-    await client.get("/api/features").set("authorization", "Bearer test-a").expect(429);
+    const rejected = await client.get("/api/features").set("authorization", "Bearer test-a").expect(429);
+    expect(rejected.body).toEqual({ error: "Too many requests, please try again later." });
     await client.get("/api/features").set("authorization", "Bearer test-b").expect(200);
   });
 });
