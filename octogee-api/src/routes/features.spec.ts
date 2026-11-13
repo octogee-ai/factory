@@ -16,6 +16,7 @@ describe("GET /api/features", () => {
     const api = express();
     api.use("/api/features", createFeatureRoutes({
       auth,
+      requireAccount: (_req, _res, next) => next(),
       featurePolicy: new FeaturePolicy({
         evaluate: async () => ({
           isEnabled: (key) => key === "release-agent-import",
@@ -42,6 +43,7 @@ describe("GET /api/features", () => {
     const api = express();
     api.use("/api/features", createFeatureRoutes({
       auth,
+      requireAccount: (_req, _res, next) => next(),
       featurePolicy: new FeaturePolicy({
         evaluate: async () => { throw new Error("provider unavailable"); },
       }),
@@ -49,5 +51,21 @@ describe("GET /api/features", () => {
 
     await request(api).get("/api/features")
       .expect(503, { error: "feature_evaluation_unavailable" });
+  });
+
+  it("limits requests from one verified account without throttling another account at the same address", async () => {
+    const api = express();
+    api.use("/api/features", createFeatureRoutes({
+      auth: (req, _res, next) => {
+        req.uid = req.get("authorization") === "Bearer test-a" ? "user-a" : "user-b";
+        next();
+      },
+      requireAccount: (_req, _res, next) => next(),
+      featurePolicy: new FeaturePolicy({ evaluate: async () => ({ isEnabled: () => false }) }),
+    }));
+    const client = request(api);
+    for (let count = 0; count < 120; count++) await client.get("/api/features").set("authorization", "Bearer test-a").expect(200);
+    await client.get("/api/features").set("authorization", "Bearer test-a").expect(429);
+    await client.get("/api/features").set("authorization", "Bearer test-b").expect(200);
   });
 });
