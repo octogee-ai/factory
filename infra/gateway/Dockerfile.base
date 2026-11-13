@@ -2,9 +2,11 @@ FROM node:26.13.0-trixie-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300
 
 FROM gateway-debian AS gateway-debian-backports
 
+ARG OS_PACKAGE_REFRESH=2026-11-11
+
 COPY infra/gateway/debian-backports/CVE-2026-6653.patch infra/gateway/debian-backports/CVE-2026-60002.patch /patches/
 COPY infra/gateway/debian-backports/build.sh /tmp/build-debian-backports.sh
-RUN bash /tmp/build-debian-backports.sh
+RUN test -n "$OS_PACKAGE_REFRESH" && bash /tmp/build-debian-backports.sh
 
 FROM gateway-debian AS gateway-core-system
 
