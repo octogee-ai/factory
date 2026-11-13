@@ -42,7 +42,13 @@ jobs:
             exit 1
           fi
           status=0
-          "$RUNNER_TEMP/bin/osv-scanner" scan source "${lockfiles[@]}" --format json --output-file "$RUNNER_TEMP/osv.json" || status=$?
+          "$RUNNER_TEMP/bin/osv-scanner" scan source "${lockfiles[@]}" --all-packages --format json --output-file "$RUNNER_TEMP/osv.json" || status=$?
+          if [[ "$status" == 0 || "$status" == 1 ]]; then
+            jq -er --argjson expected "${#lockfiles[@]}" '
+              [.results[]?.source.path] | unique | length |
+              if . == $expected then "Scanned \(.) npm lockfiles." else error("OSV did not report every lockfile") end
+            ' "$RUNNER_TEMP/osv.json" >> "$GITHUB_STEP_SUMMARY"
+          fi
           if [[ "$GITHUB_EVENT_NAME" == pull_request && "$status" == 1 ]] &&
             jq -e 'any(.results[]?.packages[]?; (.vulnerabilities // [] | length) > 0)' "$RUNNER_TEMP/osv.json" > /dev/null; then
             echo "::notice::OSV found known vulnerabilities. See the lockfile report."
