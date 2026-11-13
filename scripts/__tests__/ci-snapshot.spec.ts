@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
-import { exportSource, snapshot, worktreeSource } from '../ci/snapshot.mjs';
+import { exportSource, snapshot, sourceCiScript, worktreeSource } from '../ci/snapshot.mjs';
 
 function repository() {
   const root = mkdtempSync(join(tmpdir(), 'ci-snapshot-test-'));
@@ -54,6 +54,98 @@ it('exports a disposable copy of the selected commit that deployment can mutate 
     expect(readFileSync(join(root, 'input'), 'utf8')).toBe('second');
     expect(execFileSync('/usr/bin/git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root, encoding: 'utf8' })).toBe('');
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+function superproject() {
+  const directory = mkdtempSync(join(tmpdir(), 'ci-snapshot-submodule-test-'));
+  const run = (cwd: string, ...args: string[]) => execFileSync('/usr/bin/git', ['-c', 'user.name=CI fixture', '-c', 'user.email=ci@example.invalid', '-c', 'commit.gpgSign=false', '-c', 'protocol.file.allow=always', ...args], { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
+  const upstream = join(directory, 'upstream');
+  const root = join(directory, 'root');
+  run(directory, 'init', '-q', '-b', 'main', upstream);
+  writeFileSync(join(upstream, 'library'), 'pinned');
+  mkdirSync(join(upstream, 'scripts', 'ci'), { recursive: true });
+  writeFileSync(join(upstream, 'scripts', 'ci', 'run-main.mjs'), '');
+  run(upstream, 'add', '.');
+  run(upstream, 'commit', '-qm', 'pinned');
+  const pinned = run(upstream, 'rev-parse', 'HEAD');
+  writeFileSync(join(upstream, 'library'), 'newer');
+  run(upstream, 'commit', '-qam', 'newer');
+  run(directory, 'init', '-q', '-b', 'main', root);
+  writeFileSync(join(root, 'input'), 'committed');
+  run(root, 'submodule', 'add', '-q', upstream, 'platform');
+  run(join(root, 'platform'), 'checkout', '-q', pinned);
+  run(root, 'add', '.');
+  run(root, 'commit', '-qm', 'fixture');
+  run(root, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+  return { directory, root, pinned, head: run(root, 'rev-parse', 'HEAD'), run };
+}
+
+const read = (source: string, file: string) => readFileSync(join(source, file), 'utf8');
+
+it.each([
+  ['snapshot', (root: string, sha: string) => snapshot(root, { sha })],
+  ['worktree', (root: string, sha: string) => worktreeSource(root, sha)],
+  ['export', (root: string, sha: string) => exportSource(root, sha)],
+])('materializes the pinned platform submodule in a %s source', (_, materialize) => {
+  const fixture = superproject();
+  try {
+    writeFileSync(join(fixture.root, 'platform', 'library'), 'local edit');
+    const copy = materialize(fixture.root, fixture.head);
+    try {
+      expect(read(copy.source, 'input')).toBe('committed');
+      expect(read(copy.source, 'platform/library')).toBe('pinned');
+    } finally { copy.remove(); }
+    expect(existsSync(copy.source)).toBe(false);
+  } finally { rmSync(fixture.directory, { recursive: true, force: true }); }
+});
+
+it.each([
+  ['worktree', (root: string, sha: string) => worktreeSource(root, sha)],
+  ['export', (root: string, sha: string) => exportSource(root, sha)],
+])('resolves CI scripts inside the platform submodule of a %s source', (_, materialize) => {
+  const fixture = superproject();
+  try {
+    const copy = materialize(fixture.root, fixture.head);
+    try {
+      expect(sourceCiScript(copy.source, 'run-main.mjs')).toBe('platform/scripts/ci/run-main.mjs');
+    } finally { copy.remove(); }
+  } finally { rmSync(fixture.directory, { recursive: true, force: true }); }
+});
+
+it('carries the checked-out platform commit, its edits and its new files into a working snapshot', () => {
+  const fixture = superproject();
+  try {
+    const platform = join(fixture.root, 'platform');
+    fixture.run(platform, 'checkout', '-q', 'main');
+    writeFileSync(join(platform, 'added'), 'untracked');
+    writeFileSync(join(fixture.root, 'input'), 'edited');
+    const clean = snapshot(fixture.root);
+    try {
+      expect(read(clean.source, 'platform/library')).toBe('pinned');
+      expect(existsSync(join(clean.source, 'platform/added'))).toBe(false);
+    } finally { clean.remove(); }
+    const working = snapshot(fixture.root, { working: true });
+    try {
+      expect(read(working.source, 'input')).toBe('edited');
+      expect(read(working.source, 'platform/library')).toBe('newer');
+      expect(read(working.source, 'platform/added')).toBe('untracked');
+      writeFileSync(join(platform, 'library'), 'uncommitted');
+    } finally { working.remove(); }
+    const edited = snapshot(fixture.root, { working: true });
+    try {
+      expect(read(edited.source, 'platform/library')).toBe('uncommitted');
+    } finally { edited.remove(); }
+  } finally { rmSync(fixture.directory, { recursive: true, force: true }); }
+});
+
+it.each(['snapshot', 'worktree', 'export'])('refuses a %s source when the platform submodule is not initialized', kind => {
+  const fixture = superproject();
+  try {
+    fixture.run(fixture.root, 'submodule', 'deinit', '-q', '--force', 'platform');
+    const materialize = { snapshot: () => snapshot(fixture.root), worktree: () => worktreeSource(fixture.root, fixture.head), export: () => exportSource(fixture.root, fixture.head) }[kind]!;
+    expect(materialize).toThrow(/platform is not initialized/);
+    expect(fixture.run(fixture.root, 'worktree', 'list', '--porcelain')).not.toContain('octogee-worktree-');
+  } finally { rmSync(fixture.directory, { recursive: true, force: true }); }
 });
 
 it('publishes committed bytes but checks changed and non-ignored new files locally', () => {

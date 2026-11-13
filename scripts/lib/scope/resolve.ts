@@ -33,6 +33,17 @@ const PRODUCT_DIR = "product/";
 const overlaidPlatformPath = (path: string) =>
   path.startsWith(PRODUCT_DIR) ? `platform/${path.slice(PRODUCT_DIR.length)}` : path;
 
+const MANIFEST_PATHS: readonly string[] = [
+  ...OWNERSHIP.map((o) => o.dir),
+  ...EDGES.map((edge) => edge.when),
+  ...GLOBAL_EXACT,
+  ...GLOBAL_PREFIX,
+];
+
+function manifestPathsBeneath(path: string): string[] {
+  return MANIFEST_PATHS.filter((entry) => entry.startsWith(`${path}/`));
+}
+
 function longestOwner(path: string): (typeof OWNERSHIP)[number] | undefined {
   let best: (typeof OWNERSHIP)[number] | undefined;
   for (const o of OWNERSHIP) {
@@ -56,9 +67,12 @@ export function resolveScope(changedPaths: string[], deletedPaths: ReadonlySet<s
 
   for (const path of changedPaths) {
     addPathScope(acc, path);
+    addSubmoduleScope(acc, path);
   }
 
-  const unmapped = changedPaths.filter((path) => !deletedPaths.has(path) && !isGlobal(path) && !isInert(path) && !ownerOf(path));
+  const unmapped = changedPaths.filter(
+    (path) => !deletedPaths.has(path) && !isGlobal(path) && !isInert(path) && !ownerOf(path) && !manifestPathsBeneath(path).length,
+  );
   if (unmapped.length) {
     throw new Error(`No CI owner for ${unmapped.join(", ")}; add it to OWNERSHIP in platform/scripts/lib/scope/manifest.ts`);
   }
@@ -76,6 +90,13 @@ function addPathScope(acc: ScopeAccumulator, path: string): void {
 
   addOwnerScope(acc, path);
   addEdgeScopes(acc, path);
+}
+
+function addSubmoduleScope(acc: ScopeAccumulator, path: string): void {
+  const beneath = manifestPathsBeneath(path);
+  if (!beneath.length) return;
+  acc.reasons.push(`submodule:${path}`);
+  for (const entry of beneath) addPathScope(acc, entry);
 }
 
 function markGlobalOrInert(acc: ScopeAccumulator, path: string): boolean {

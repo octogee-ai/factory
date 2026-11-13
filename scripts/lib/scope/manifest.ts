@@ -435,6 +435,7 @@ export const GLOBAL_EXACT: ReadonlySet<string> = new Set([
   "tsconfig.base.json",
   ".github/workflows/checks.yml",
   ".github/workflows/test.yml",
+  ".gitmodules",
 ]);
 export const GLOBAL_PREFIX: readonly string[] = [".github/actions/setup-ci/", "platform/scripts/lib/scope/", "platform/scripts/lib/ci-", "platform/scripts/ops/ci-", "platform/scripts/ci/", "ci/"];
 

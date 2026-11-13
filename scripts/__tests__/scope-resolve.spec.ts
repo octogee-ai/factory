@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import {
@@ -7,7 +8,7 @@ import {
   serializeGhaOutputs,
   type JobKey,
 } from "../lib/scope/resolve.js";
-import { UNIT_PACKAGES } from "../lib/scope/manifest.js";
+import { EDGES, GLOBAL_EXACT, GLOBAL_PREFIX, OWNERSHIP, UNIT_PACKAGES } from "../lib/scope/manifest.js";
 
 // Helper: assert the resolved job set equals exactly `expected` (order-free).
 function expectJobs(paths: string[], expected: JobKey[]) {
@@ -449,5 +450,39 @@ describe("resolveScope — deleted paths", () => {
   it("still runs the owner of a deleted file", () => {
     const removed = "platform/gateway-edge/src/retired.ts";
     expect(resolveScope([removed], new Set([removed])).jobs).toContain("gateway-edge");
+  });
+});
+
+describe("resolveScope — platform submodule", () => {
+  const manifestPaths = [...OWNERSHIP.map((o) => o.dir), ...EDGES.map((edge) => edge.when), ...GLOBAL_EXACT, ...GLOBAL_PREFIX];
+  const scopeOfEverythingBeneath = (directory: string) => {
+    const scopes = manifestPaths.filter((entry) => entry.startsWith(`${directory}/`)).map((entry) => resolveScope([entry]));
+    return { everything: scopes.some((scope) => scope.everything), jobs: [...new Set(scopes.flatMap((scope) => scope.jobs))].sort() };
+  };
+  const scopeOf = (paths: string[]) => {
+    const scope = resolveScope(paths);
+    return { everything: scope.everything, jobs: [...scope.jobs].sort() };
+  };
+
+  it("runs every platform-consuming job when the platform submodule pin moves", () => {
+    const expected = scopeOfEverythingBeneath("platform");
+    expect(expected.jobs.length).toBeGreaterThan(0);
+    expect(scopeOf(["platform"])).toEqual(expected);
+    expect(resolveScope(["platform"]).reasons).toContain("submodule:platform");
+  });
+
+  it("treats a changed submodule path as every manifest path beneath it", () => {
+    const directory = posix.dirname(OWNERSHIP.find((o) => o.dir.endsWith("infra/gateway/"))!.dir);
+    const expected = scopeOfEverythingBeneath(directory);
+    expect(expected.jobs).toEqual(expect.arrayContaining(["gateway-edge", "glm-controller", "octogee-broker-tools", "scripts", "tests"]));
+    expect(scopeOf([directory])).toEqual(expected);
+  });
+
+  it("runs everything when the submodule declaration changes", () => {
+    expect(resolveScope([".gitmodules"]).everything).toBe(true);
+  });
+
+  it("still refuses a submodule path that no manifest entry covers", () => {
+    expect(() => resolveScope(["vendored"])).toThrow(/No CI owner for vendored/);
   });
 });
