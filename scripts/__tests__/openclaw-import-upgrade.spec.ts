@@ -127,6 +127,17 @@ it("detects replacement of a carried anchor while Native Doctor runs", async () 
   await expect(upgradeImportedAgentStores(f)).rejects.toThrow(/anchor changed/);
 });
 
+it("rejects an anchor replaced with an identical file during custody verification", async () => {
+  const f = await fixture();
+  const file = f.stores[0]!.anchorPath;
+  f.assertCurrent.mockImplementationOnce(async () => {
+    await fs.copyFile(file, `${file}.replacement`);
+    await fs.rename(`${file}.replacement`, file);
+  });
+  await expect(upgradeImportedAgentStores(f)).rejects.toThrow(/anchor changed/);
+  expect(f.run).not.toHaveBeenCalled();
+});
+
 it("skips Doctor when all authorized PostgreSQL agents already match the installed Native schema", async () => {
   const f = await fixture();
   const query = vi.fn(async () => [{ store_id: f.stores[0]!.storeId, version: 38, role: "agent", agent_id: f.stores[0]!.agentId, schema_version: 38 }]);

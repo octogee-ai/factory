@@ -9,6 +9,7 @@ import * as os from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { readPostgresAgentAnchor, queryAgentStore, type PostgresAgentAnchor } from "@octogee/core/agent-postgres";
 import { runOpenClaw, type OpenClawCommand } from "./openclaw-cli.js";
+import { readOpenClawFileSnapshot, readPostgresAnchorSnapshot, sameOpenClawFileSnapshot } from "./openclaw-file-snapshot.js";
 
 import { runWithSourceDoctorDiagnostics, type SourceDoctorDiagnosticContext } from "./source-doctor-diagnostics.js";
 
@@ -40,7 +41,7 @@ export interface PostgresSourceDoctorOptions {
   expectedAnchors?: readonly (PostgresAgentAnchor & { agentId: string })[];
 }
 
-interface SourceAgentStore { agentId: string; file: string; anchor: PostgresAgentAnchor; bytes: Buffer }
+interface SourceAgentStore { agentId: string; file: string; anchor: PostgresAgentAnchor; snapshot: ReturnType<typeof readOpenClawFileSnapshot> }
 
 async function postgresSourceStores(agentIds: string[], env: NodeJS.ProcessEnv): Promise<SourceAgentStore[]> {
   if (agentIds.length === 0 || new Set(agentIds).size !== agentIds.length) throw new Error("source Doctor requires a unique nonempty agent roster");
@@ -48,22 +49,21 @@ async function postgresSourceStores(agentIds: string[], env: NodeJS.ProcessEnv):
   await assertCanonicalSources(agentIds, root);
   return agentIds.map(agentId => {
     const file = path.join(root, "agents", agentId, "agent", "openclaw-agent.sqlite");
-    const anchor = readPostgresAgentAnchor(file);
+    const snapshot = readOpenClawFileSnapshot(file);
+    const anchor = readPostgresAnchorSnapshot(snapshot.bytes);
     if (!anchor) throw new Error(`source Doctor requires a PostgreSQL anchor: ${agentId}`);
-    return { agentId, file, anchor, bytes: fsSync.readFileSync(file) };
+    return { agentId, file, anchor, snapshot };
   });
 }
 
 export async function captureSourceDoctorServiceAnchor(env: NodeJS.ProcessEnv = process.env): Promise<(PostgresAgentAnchor & { agentId: string; sha256: string }) | null> {
   const root = await fs.realpath(env.OPENCLAW_STATE_DIR || env.OPENCLAW_DIR || DEFAULT_OPENCLAW_STATE_DIR);
   const configPath = env.OPENCLAW_CONFIG_PATH || path.join(root, "openclaw.json");
-  const stat = await fs.lstat(configPath);
-  if (!stat.isFile() || stat.nlink !== 1 || await fs.realpath(configPath) !== path.resolve(configPath)) throw new Error("source Doctor config is not canonical");
-  const config = JSON.parse(await fs.readFile(configPath, "utf8"));
+  const config = JSON.parse(readOpenClawFileSnapshot(configPath).bytes.toString("utf8"));
   const agentId = UNMATCHED_ROUTE_AGENT_ID;
   if (!config.agents?.entries?.[agentId] && !config.bindings?.some((binding: { agentId?: string }) => binding.agentId === agentId)) return null;
   const [store] = await postgresSourceStores([agentId], env);
-  return { agentId, ...store!.anchor, sha256: createHash("sha256").update(store!.bytes).digest("hex") };
+  return { agentId, ...store!.anchor, sha256: createHash("sha256").update(store!.snapshot.bytes).digest("hex") };
 }
 
 async function includeSourceServiceStore(stores: SourceAgentStore[], input: PostgresSourceDoctorOptions): Promise<SourceAgentStore[]> {
@@ -86,13 +86,8 @@ function assertRecordedSourceAnchors(stores: SourceAgentStore[], expected: Postg
 
 function assertSourceAnchors(stores: SourceAgentStore[]): void {
   for (const store of stores) {
-    const stat = fsSync.lstatSync(store.file);
-    if (!stat.isFile() || stat.nlink !== 1 || fsSync.realpathSync(store.file) !== store.file || !fsSync.readFileSync(store.file).equals(store.bytes)) {
+    if (!sameOpenClawFileSnapshot(store.snapshot, readOpenClawFileSnapshot(store.file))) {
       throw new Error(`source Doctor original anchor bytes changed: ${store.agentId}`);
-    }
-    const current = readPostgresAgentAnchor(store.file);
-    if (current?.storeId !== store.anchor.storeId || current.schema !== store.anchor.schema) {
-      throw new Error(`source Doctor anchor identity changed: ${store.agentId}`);
     }
   }
 }
@@ -104,7 +99,7 @@ function positivePostgresInteger(value: unknown): number {
 }
 
 export function postgresSourceMetadataMatches(input: {
-  rows: Array<Record<string, unknown>>; store: SourceAgentStore; expectedVersion: number; exact: boolean;
+  rows: Array<Record<string, unknown>>; store: Pick<SourceAgentStore, "agentId" | "anchor">; expectedVersion: number; exact: boolean;
 }): boolean {
   const { rows, store, expectedVersion, exact } = input, row = rows[0];
   const version = positivePostgresInteger(row?.version), ownerVersion = positivePostgresInteger(row?.schema_version);
@@ -162,13 +157,11 @@ export async function verifyPostgresSourceDoctorAgentStores(agentIds: string[], 
 async function captureServingConfig(env: NodeJS.ProcessEnv) {
   const root = await fs.realpath(env.OPENCLAW_STATE_DIR || env.OPENCLAW_DIR || DEFAULT_OPENCLAW_STATE_DIR);
   const file = env.OPENCLAW_CONFIG_PATH || path.join(root, "openclaw.json");
-  const stat = await fs.lstat(file);
-  if (!stat.isFile() || stat.nlink !== 1 || await fs.realpath(file) !== path.resolve(file)) throw new Error("source Doctor config is not canonical");
-  const bytes = await fs.readFile(file);
-  const config = JSON.parse(bytes.toString("utf8"));
+  const snapshot = readOpenClawFileSnapshot(file);
+  const config = JSON.parse(snapshot.bytes.toString("utf8"));
   if (config.agents?.ownership !== "explicit" || !config.agents.entries || typeof config.agents.entries !== "object" ||
       Array.isArray(config.agents.entries) || config.agents.list !== undefined) throw new Error("source Doctor requires canonical explicit agent entries");
-  return { file, bytes, mode: stat.mode & 0o777, config };
+  return { file, snapshot, config };
 }
 
 function sourceConfigObject(value: unknown): Record<string, unknown> | null {
@@ -245,10 +238,10 @@ function sourceServingConfig(config: Record<string, unknown>, stores: SourceAgen
 async function narrowServingConfig(snapshot: Awaited<ReturnType<typeof captureServingConfig>>, stores: SourceAgentStore[], input: PostgresSourceDoctorOptions, next: Record<string, unknown>): Promise<void> {
   await input.assertCurrent();
   assertSourceAnchors(stores);
-  if (!fsSync.readFileSync(snapshot.file).equals(snapshot.bytes)) throw new Error("source Doctor serving config changed during repair");
+  if (!sameOpenClawFileSnapshot(snapshot.snapshot, readOpenClawFileSnapshot(snapshot.file))) throw new Error("source Doctor serving config changed during repair");
   if (JSON.stringify(next) === JSON.stringify(snapshot.config)) return;
   const temporary = snapshot.file + ".tmp";
-  fsSync.writeFileSync(temporary, "", { flag: "wx", mode: snapshot.mode });
+  fsSync.writeFileSync(temporary, "", { flag: "wx", mode: snapshot.snapshot.mode });
   try { writeOpenClawConfig(next, snapshot.file); }
   finally { if (fsSync.existsSync(temporary)) fsSync.unlinkSync(temporary); }
   await input.assertCurrent();
@@ -326,8 +319,7 @@ export async function repairSourceDoctorAgentStores(agentIds: string[], input: P
         assertSourceAnchors(stores);
         const file = path.join(privateRoot, "agents", store.agentId, "agent", "openclaw-agent.sqlite");
         await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-        await fs.copyFile(store.file, file, fs.constants.COPYFILE_EXCL);
-        await fs.chmod(file, 0o600);
+        await fs.writeFile(file, store.snapshot.bytes, { flag: "wx", mode: 0o600 });
         entries[store.agentId] = { workspace: path.join(privateRoot, "workspaces", store.agentId) };
       }
       const initializedConfig = JSON.parse(await fs.readFile(configPath, "utf8"));

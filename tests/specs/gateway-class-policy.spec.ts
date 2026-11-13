@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -194,6 +194,21 @@ function runPolicyWithDir(
 function runPolicy(gatewayClass: string, config: Record<string, unknown>) {
   return runPolicyWithDir(gatewayClass, config).config;
 }
+
+it("rejects a linked session store and leaves its target untouched during shared startup", () => {
+  const agentId = "octogee-acme-coach";
+  const sessions = JSON.stringify({ active: { agentRuntimeOverride: "codex" } });
+  let target = "";
+  expect(() => runPolicyWithDir("shared", { agents: { entries: { [agentId]: {} } } }, dir => {
+    seedCanonicalAgentRuntimeDisk(dir, agentId);
+    target = path.join(dir, "other-sessions.json");
+    writeFileSync(target, sessions);
+    const sessionDir = path.join(dir, "agents", agentId, "sessions");
+    mkdirSync(sessionDir);
+    symlinkSync(target, path.join(sessionDir, "sessions.json"));
+  })).toThrow(/ELOOP/u);
+  expect(readFileSync(target, "utf8")).toBe(sessions);
+});
 
 it("keeps the scoped Meta Responses route through shared gateway startup", () => {
   const agentId = "octogee-ember-coach";

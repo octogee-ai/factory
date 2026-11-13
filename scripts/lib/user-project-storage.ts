@@ -32,10 +32,14 @@ async function hasProjectState(root: string, name: string): Promise<boolean> {
 }
 
 async function removeEmptyGitPlaceholder(gitPath: string): Promise<boolean> {
-  const stat = await lstat(gitPath);
-  if (stat.isSymbolicLink()) throw new Error("project Git placeholder is not a real directory");
-  if (!stat.isDirectory()) return false;
-  const git = await open(gitPath, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  let git;
+  try { git = await open(gitPath, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOTDIR") throw error;
+    const stat = await lstat(gitPath);
+    if (stat.isSymbolicLink() || stat.isDirectory()) throw error;
+    return false;
+  }
   try {
     if ((await readdir(anchoredDirectory(git.fd, gitPath))).length) return false;
     await rmdir(gitPath);
