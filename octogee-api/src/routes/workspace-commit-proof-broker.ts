@@ -1,3 +1,4 @@
+import { brokerRequestLimit } from "../middleware/broker-request-limit.js";
 import { Router, type Request, type Response } from "express";
 import {
   verifyWorkspaceCommitProof,
@@ -56,7 +57,7 @@ function targetsMatch(a: WorkspaceCommitProofTarget, b: WorkspaceCommitProofTarg
 export function createWorkspaceCommitProofBrokerRoutes(opts: { store: WorkspaceCommitProofStore }): Router {
   const router = Router();
 
-  router.post("/verify-proof", async (req, res) => {
+  router.post("/verify-proof", brokerRequestLimit(1800), async (req, res) => {
     if (!boundGateway(req, res)) return;
     const proof = proofBody(req);
     const requestedTarget = targetBody(req);
