@@ -112,15 +112,17 @@ describe("metadata transport bounds", () => {
   });
 });
 
-function inspection(fetchImpl: any, current = () => true, params: any = { agentId: "a" }, client: any = { authenticatedUserId: "owner", authenticatedUserProfile: { profileId: "profile" } }) {
-  let handler: any; const respond = vi.fn();
-  registerBrokerInspection({ registerGatewayMethod: (_name: any, fn: any) => { handler = fn; }, pluginConfig: {} } as any, { fetchImpl, readToken: async () => "projected-ksa" });
-  return { run: () => handler({ params, client, respond, hasCurrentClientAuthority: current }), respond };
+function inspection(fetchImpl: any, current = () => true, params: any = { agentId: "a" }, client: any = { authenticatedUserId: "owner", authenticatedUserProfile: { profileId: "profile" } }, setup: { pluginConfig?: any; env?: NodeJS.ProcessEnv } = {}) {
+  let handler: any; const respond = vi.fn(); const logger = { error: vi.fn() };
+  registerBrokerInspection({ registerGatewayMethod: (_name: any, fn: any) => { handler = fn; }, pluginConfig: setup.pluginConfig ?? { brokerUrl: "https://broker.example" }, logger } as any,
+    { fetchImpl, readToken: async () => "projected-ksa", env: setup.env ?? {} });
+  return { run: () => handler({ params, client, respond, hasCurrentClientAuthority: current }), respond, logger };
 }
 describe("private inspection", () => {
   it("uses host-attested identity and strips unexpected credentials from responses", async () => {
     const fetcher = vi.fn(async () => Response.json({ schemaVersion: 1, agentId: "a", tier: "hobby", credential: { path: "platform_broker", provider: null, apiKey: "secret" }, apiKey: "secret" }));
     const test = inspection(fetcher); await test.run();
+    expect(String(fetcher.mock.calls[0][0])).toBe("https://broker.example/internal/byok/broker-inspect");
     expect(JSON.parse(fetcher.mock.calls[0][1].body)).toEqual({ agentId: "a", requesterUid: "owner" });
     expect(test.respond.mock.calls[0][0]).toBe(true);
     expect(JSON.stringify(test.respond.mock.calls)).not.toContain("secret");
@@ -128,6 +130,24 @@ describe("private inspection", () => {
   it("does not trust a wire requester UID or unattested service client", async () => {
     const fetcher = vi.fn();
     for (const test of [inspection(fetcher, () => true, { agentId: "a", requesterUid: "owner" }), inspection(fetcher, () => true, { agentId: "a" }, {})]) { await test.run(); expect(test.respond.mock.calls[0][0]).toBe(false); }
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it("falls back to the fleet broker, then the API, when the plugin config names no broker", async () => {
+    const fetcher = vi.fn(async () => Response.json({ schemaVersion: 1, agentId: "a" }));
+    for (const env of [{ FLEET_BROKER_URL: "https://fleet.example", OCTOGEE_API_URL: "https://api.example" }, { OCTOGEE_API_URL: "https://api.example" }]) {
+      await inspection(fetcher, () => true, undefined, undefined, { pluginConfig: {}, env }).run();
+    }
+    expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual([
+      "https://fleet.example/internal/byok/broker-inspect", "https://api.example/internal/byok/broker-inspect",
+    ]);
+  });
+  it("logs and reports unavailable instead of guessing a broker when none is configured", async () => {
+    const fetcher = vi.fn();
+    for (const setup of [{ pluginConfig: {}, env: {} }, { pluginConfig: { brokerUrl: "" }, env: { FLEET_BROKER_URL: "", OCTOGEE_API_URL: "" } }]) {
+      const test = inspection(fetcher, () => true, undefined, undefined, setup); await test.run();
+      expect(test.respond).toHaveBeenCalledExactlyOnceWith(false, undefined, { code: "UNAVAILABLE", message: "Owner-authorized broker metadata unavailable" });
+      expect(test.logger.error).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("no broker URL"));
+    }
     expect(fetcher).not.toHaveBeenCalled();
   });
   it("rechecks authority after the private read", async () => {

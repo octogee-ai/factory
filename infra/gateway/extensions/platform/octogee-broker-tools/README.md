@@ -63,7 +63,10 @@ token cannot read them, and no separate read token is issued.
 ## Broker auth profiles
 
 Gateway method `octogee.brokerProfiles.materialize`, scope `operator.admin`.
-Parameters: `{ "agentIds": ["<agent id>", ...] }`, 1 to 128 ids.
+Parameters: `{ "agentIds": ["<agent id>", ...] }`, 1 to 128 ids. Each id must
+have octogee-cloud's agent id form, `octogee-<user>-coach` or
+`octogee-<user>-proj-<project>-coach`, which is the form its secret resolver
+serves `agent-model-token-*` secrets for.
 
 For each agent on the gateway's roster, the plugin adds any missing broker auth
 profiles: `anthropic:default`, plus `platform-openrouter:default`,
@@ -73,13 +76,14 @@ an existing profile with the same id points at a different credential.
 
 ## Configuration
 
-| Key         | Default                                                                       |
-| ----------- | ----------------------------------------------------------------------------- |
-| `brokerUrl` | `FLEET_BROKER_URL`, then `OCTOGEE_API_URL`, then `https://api.octogee.com`     |
-| `tokenPath` | `OCTOGEE_API_SA_TOKEN_PATH`, then `/var/run/octogee/api-token/token`          |
+| Key         | When unset                                                           |
+| ----------- | -------------------------------------------------------------------- |
+| `brokerUrl` | `FLEET_BROKER_URL`, then `OCTOGEE_API_URL`; there is no default      |
+| `tokenPath` | `OCTOGEE_API_SA_TOKEN_PATH`, then `/var/run/octogee/api-token/token` |
 
-Both are used only for usage reads. octogee-cloud's gateway configuration sets
-them:
+Both are used only for usage reads. With no broker URL, usage reads respond
+unavailable and the gateway log says which settings to set. octogee-cloud's
+gateway configuration sets them:
 
 ```json
 "octogee-broker-tools": {
