@@ -123,6 +123,24 @@ describe("kind-install.sh", () => {
     expect(json("images.yaml")["glm-controller"].image.digest).toBe(`sha256:${"3".repeat(64)}`);
   });
 
+  it("copies the isolated gateway and VM bridge images only when asked, and points the release and the VM bridge at them", () => {
+    const extra = [...IMAGES, "octogee-gateway-builder", "vm-bridge"];
+    const result = run(["up", "--pull", `--manifest=${manifest(CHECKOUT, extra)}`, `--images=${extra.join(",")}`], "x86_64");
+    expect(result.status, result.stderr).toBe(0);
+    expect(copies()).toEqual(extra.map((name, index) =>
+      `docker KUBECONFIG=unset buildx imagetools create --prefer-index=false --tag=localhost:5001/octogee/${name}:ccccccc ${REGISTRY}/${name}@sha256:${String(index + 3).repeat(64)}`));
+    const values = json("images.yaml");
+    expect(values["glm-controller"].platformRelease.builderImageTag).toBe(`ccccccc@sha256:${"8".repeat(64)}`);
+    expect(values.global.computer.bridge.image).toEqual({ repository: "localhost:5001/octogee/vm-bridge", tag: "ccccccc", digest: `sha256:${"9".repeat(64)}` });
+  });
+
+  it("refuses the isolated gateway image on an arm64 host before copying any image", () => {
+    const result = run(["up", "--pull", `--sha=${PUBLISHED}`, "--images=glm-controller,octogee-gateway-builder"]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("octogee-gateway-builder is not published for linux/arm64");
+    expect(copies()).toEqual([]);
+  });
+
   it("refuses a manifest from another build instead of pulling from tags", () => {
     const result = run(["up", "--pull", `--manifest=${manifest(PUBLISHED)}`]);
     expect(result.status).not.toBe(0);

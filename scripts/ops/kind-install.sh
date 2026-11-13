@@ -12,7 +12,7 @@ SHA=""
 MANIFEST=""
 CONTEXT_DIR="$ROOT"
 OPENCLAW_DIR=""
-IMAGES=""
+IMAGES="glm-controller,octogee-api,gateway-edge,octogee-gateway,mattermost"
 
 log() { printf '\n== %s\n' "$*"; }
 die() { printf 'kind-install: %s\n' "$*" >&2; exit 1; }
@@ -137,20 +137,18 @@ ensure_builder() {
 }
 
 build_images() {
-  local plan="$STATE/bake.json" metadata="$STATE/bake-metadata.json" selection=()
-  [[ -n "$IMAGES" ]] && selection=(--images="$IMAGES")
+  local plan="$STATE/bake.json" metadata="$STATE/bake-metadata.json"
   stage_openclaw
   ensure_builder
   node "$ROOT/scripts/ci/cloud-build.mjs" plan --registry="$PUBLISHED" --sha="$SHA" \
-    --platform="$PLATFORM" --root="$CONTEXT_DIR" --push --tag-prefix="$PUSH_PREFIX" ${selection[@]+"${selection[@]}"} > "$plan"
+    --platform="$PLATFORM" --root="$CONTEXT_DIR" --push --tag-prefix="$PUSH_PREFIX" --images="$IMAGES" > "$plan"
   docker buildx bake --builder="$BUILDER" --allow=fs.read="$CONTEXT_DIR" --file="$plan" --metadata-file="$metadata"
-  node "$ROOT/scripts/ci/cloud-build.mjs" digests --platform="$PLATFORM" --metadata="$metadata" ${selection[@]+"${selection[@]}"} > "$STATE/digests.built.json"
+  node "$ROOT/scripts/ci/cloud-build.mjs" digests --platform="$PLATFORM" --metadata="$metadata" --images="$IMAGES" > "$STATE/digests.built.json"
   record_digests "$STATE/digests.built.json"
 }
 
 pull_images() {
-  local options=()
-  [[ -n "$IMAGES" ]] && options+=(--images="$IMAGES")
+  local options=(--images="$IMAGES")
   [[ -n "$MANIFEST" ]] && options+=(--manifest="$MANIFEST")
   node "$ROOT/scripts/ci/cloud-build.mjs" copy --registry="$PUBLISHED" --sha="$SHA" --platform="$PLATFORM" \
     --tag-prefix="$IMAGE_PREFIX" ${options[@]+"${options[@]}"} > "$STATE/digests.pulled.json"
@@ -180,7 +178,9 @@ const required = ["glm-controller", "gateway-edge", "octogee-gateway", "mattermo
 const missing = required.filter(name => !images[name]);
 if (missing.length) throw new Error(`No image was built or copied for ${missing.join(", ")}`);
 const image = name => ({ repository: `${prefix}${name}`, tag, digest: images[name] ?? `sha256:${"0".repeat(64)}` });
+const isolatedImage = images["octogee-gateway-builder"] ? "octogee-gateway-builder" : "octogee-gateway";
 console.log(JSON.stringify({
+  ...(images["vm-bridge"] ? { global: { computer: { bridge: { image: image("vm-bridge") } } } } : {}),
   mattermost: { image: image("mattermost") },
   "octogee-api": { image: image("octogee-api"), ...(images["octogee-api"] ? {} : { replicas: 0 }) },
   llmBroker: images["octogee-api"] ? { image: image("octogee-api") } : { enabled: false },
@@ -191,7 +191,7 @@ console.log(JSON.stringify({
       sourceSha: sha,
       gatewayImageRepository: `${prefix}octogee-gateway`,
       gatewayImageTag: `${tag}@${images["octogee-gateway"]}`,
-      builderImageTag: `${tag}@${images["octogee-gateway"]}`,
+      builderImageTag: `${tag}@${images[isolatedImage]}`,
       gatewayEdgeImageRepository: `${prefix}gateway-edge`,
       gatewayEdgeImageTag: `${tag}@${images["gateway-edge"]}`,
       openclawSourceSha: openclaw,

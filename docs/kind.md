@@ -129,8 +129,8 @@ The script:
 3. creates the kind cluster `octogee` with its own kubeconfig, so your current
    kubectl context does not change. kind reports that it set the context
    `kind-octogee`; it set it only in that kubeconfig;
-4. with `--pull`, copies each published image for your machine's architecture
-   into the local registry, keeping its digest;
+4. with `--pull`, copies each published image kind runs, for your machine's
+   architecture, into the local registry, keeping its digest;
 5. without `--pull`, downloads the pinned OpenClaw build, checks its sha256
    against `infra/gateway/openclaw-tarball/current.json`, builds the platform
    images for your machine's architecture with a dedicated BuildKit builder,
@@ -167,7 +167,7 @@ port 18080.
 | `--sha=<sha>` | With `--pull`, copy the images published for this full commit SHA. |
 | `--manifest=<file>` | With `--pull`, copy the exact image digests from an extracted Build main manifest. Its SHA must match the selected commit. |
 | `--skip-build` | Reinstall the images from the last build or copy, under that commit. |
-| `--images=<a,b>` | Build or copy only these platform images. |
+| `--images=<a,b>` | Build or copy only these platform images. The default is every image kind runs, which leaves out `octogee-gateway-builder` and `vm-bridge`. Name either one to add it; the isolated gateway image exists only for amd64. |
 | `--context-dir=<dir>` | Build from another platform tree. |
 | `--openclaw-dir=<dir>` | Take the OpenClaw build from local files instead of downloading it. The files keep their release names. |
 
@@ -382,10 +382,15 @@ with its cache; remove it with `docker buildx rm octogee-cloud-kind`.
 ## Images from GitHub
 
 The Build main workflow (`.github/workflows/build-main.yml`) builds the same
-images for `linux/amd64` and `linux/arm64` on every push to `main`. It pushes
-them to `ghcr.io/octogee-ai/octogee-cloud/<image>`, tagged with the full and
-short commit SHA, and keeps an image manifest of every digest as a workflow
-artifact named `image-manifest-<sha>`. `kind-install.sh up --pull` installs
+images for `linux/amd64` and `linux/arm64` on every push to `main`, together
+with the two that only an install with isolated gateways runs: the VM bridge
+(`vm-bridge`) for both architectures, and the isolated gateway image
+(`octogee-gateway-builder`) for `linux/amd64` only. Isolated gateways run only
+on Google Cloud VMs, and that image's toolchain is built for x86_64. The
+workflow pushes every image to `ghcr.io/octogee-ai/octogee-cloud/<image>`,
+tagged with the full and short commit SHA, and keeps an image manifest of every
+digest as a workflow artifact named `image-manifest-<sha>`. The manifest lists
+each image's platforms. `kind-install.sh up --pull` installs
 these images. The post-build kind smoke test takes the amd64 digests directly
 from that run’s manifest and uses `octogee-fleet gateway ls` to query the new
 cluster’s Admin API. It then runs `kind-agent-round-trip.mjs` with Muse Ember on
