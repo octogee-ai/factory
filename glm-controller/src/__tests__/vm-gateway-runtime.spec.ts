@@ -1846,12 +1846,13 @@ describe("runtime policy and stamping", () => {
   it.each([
     ["a configured VM runtime", spec],
     ["no VM runtime", null],
-  ] as const)("stamps a new user whose tier's profile is a pod as a cluster gateway with no VM spec, with %s", async (_label, vmSpec) => {
+  ] as const)("refuses to stamp a new gateway whose tier's profile is a pod, and writes nothing, with %s", async (_label, vmSpec) => {
     const { store, docs } = recordingStore({ "config/orchestrator": { sizingProfiles: { ...FIXTURE_SIZING_PROFILES, pod: podProfile } } });
 
-    expect(await stampGatewayRuntime({ store, gatewayId: "b-pod", initial: initialRuntime("b-pod"), gatewayClass: "builder", sizingTier: "xs", vmSpec, log: vi.fn() })).toBe("cluster");
+    await expect(stampGatewayRuntime({ store, gatewayId: "b-pod", initial: initialRuntime("b-pod"), gatewayClass: "builder", sizingTier: "xs", vmSpec, log: vi.fn() }))
+      .rejects.toThrow("gateway b-pod: sizing tier xs names a pod computer, and this fleet controller cannot create its home claim");
 
-    expect(docs["glmGateways/b-pod"]).toEqual({ ...initialRuntimeDoc("b-pod"), runtime: "cluster" });
+    expect(docs).not.toHaveProperty("glmGateways/b-pod");
   });
 
   it("keeps the stamped VM spec of a VM gateway whose tier now names a pod", async () => {

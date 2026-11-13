@@ -32,7 +32,10 @@ function parkedUserStore(): PlatformStateStore {
   };
   return {
     users: transaction.users,
-    config: { orchestrator: { getSizingProfile: async () => ({ isolation: "isolated", sizingTier: "s", computer: {}, fallbackStorageGb: null }) } },
+    config: { orchestrator: { getSizingProfile: async () => ({
+      isolation: "isolated", sizingTier: "s", fallbackStorageGb: null,
+      computer: { runtime: "gce-vm", desktop: "x11", machineType: "e2-medium", provisioningModel: "STANDARD", bootDisk: { sizeGb: 80, type: "pd-balanced" }, homeSizeGiB: 10 },
+    }) } },
     transaction: async (_options: unknown, body: (tx: unknown) => Promise<unknown>) => body(transaction),
   } as unknown as PlatformStateStore;
 }
