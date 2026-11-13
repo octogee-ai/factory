@@ -1115,24 +1115,33 @@ function projectAgentModelsJson(agentDir, providers) {
 }
 
 function readSessionMap(sessionsPath) {
-  const sessions = JSON.parse(fs.readFileSync(sessionsPath, "utf8"));
-  if (!objectValue(sessions)) {
-    throw new Error(`apply-gateway-class-policy: ${sessionsPath} is not a session map`);
+  let fd;
+  try {
+    fd = fs.openSync(sessionsPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
   }
-  return sessions;
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.nlink !== 1) throw new Error(`apply-gateway-class-policy: ${sessionsPath} is not a regular session file`);
+    const sessions = JSON.parse(fs.readFileSync(fd, "utf8"));
+    if (!objectValue(sessions)) throw new Error(`apply-gateway-class-policy: ${sessionsPath} is not a session map`);
+    return sessions;
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 function resetLegacySessionStore(sessionsPath) {
-  if (!fs.existsSync(sessionsPath)) return false;
   const sessions = readSessionMap(sessionsPath);
+  if (!sessions) return false;
   let changed = false;
   for (const entry of Object.values(sessions)) {
     changed = clearSessionRuntimeState(entry) || changed;
   }
   if (!changed) return false;
-  const tmpPath = `${sessionsPath}.oauth-purge.tmp`;
-  fs.writeFileSync(tmpPath, `${JSON.stringify(sessions)}\n`, { mode: 0o600 });
-  fs.renameSync(tmpPath, sessionsPath);
+  atomicWrite(sessionsPath, `${JSON.stringify(sessions)}\n`);
   return true;
 }
 
@@ -1278,15 +1287,15 @@ function clearSessionRuntimeState(rawEntry) {
 }
 
 function scrubUnsafeLegacySessions(sessionsPath, directRuntimeModelRefs) {
-  if (!fs.existsSync(sessionsPath)) return false;
   const sessions = readSessionMap(sessionsPath);
+  if (!sessions) return false;
   let changed = false;
   for (const entry of Object.values(sessions)) {
     if (sessionEntryUsesUnsafeRuntime(entry, directRuntimeModelRefs)) {
       changed = clearSessionRuntimeState(entry) || changed;
     }
   }
-  if (changed) fs.writeFileSync(sessionsPath, `${JSON.stringify(sessions)}\n`, { mode: 0o600 });
+  if (changed) atomicWrite(sessionsPath, `${JSON.stringify(sessions)}\n`);
   return changed;
 }
 
@@ -1550,19 +1559,15 @@ function resolveOpenclawJsonPath() {
   return path.join(dir, "openclaw.json");
 }
 
-function atomicWriteJson(configPath, config) {
-  const tmpPath = `${configPath}.tmp`;
-  const fd = fs.openSync(
-    tmpPath,
-    fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC,
-    0o600,
-  );
+function atomicWrite(destination, bytes) {
+  const staging = fs.mkdtempSync(path.join(path.dirname(destination), ".gateway-policy-"));
   try {
-    fs.writeFileSync(fd, JSON.stringify(config, null, 2));
+    const file = path.join(staging, "next");
+    fs.writeFileSync(file, bytes, { flag: "wx", mode: 0o600 });
+    fs.renameSync(file, destination);
   } finally {
-    fs.closeSync(fd);
+    fs.rmSync(staging, { recursive: true, force: true });
   }
-  fs.renameSync(tmpPath, configPath);
 }
 
 export function applyGatewayClassPolicy({ openclawJsonPath, env = process.env } = {}) {
@@ -1614,7 +1619,7 @@ export function applyGatewayClassPolicy({ openclawJsonPath, env = process.env } 
       gatewayClass,
     };
   }
-  atomicWriteJson(configPath, config);
+  atomicWrite(configPath, JSON.stringify(config, null, 2));
   return { applied: true, path: configPath, gatewayClass };
 }
 

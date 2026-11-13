@@ -2,9 +2,10 @@ import { MIGRATION_IMPORT_DOCTOR_PHASE_TIMEOUT_MS } from "@octogee/shared/types/
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { queryAgentStore, readPostgresAgentAnchor } from "@octogee/core/agent-postgres";
+import { queryAgentStore } from "@octogee/core/agent-postgres";
 import { installedAgentSchemaVersion, postgresSourceMetadataMatches } from "./openclaw-source-doctor.js";
 import { runOpenClaw, type OpenClawCommand } from "./openclaw-cli.js";
+import { readOpenClawFileSnapshot, readPostgresAnchorSnapshot, sameOpenClawFileSnapshot } from "./openclaw-file-snapshot.js";
 
 const descriptorCache = new WeakMap<OpenClawCommand, Promise<number>>();
 
@@ -62,9 +63,7 @@ export async function upgradeImportedAgentStores(input: {
   if (!env.OPENCLAW_AGENT_STORE_DSN?.trim()) throw new Error("import upgrade requires a PostgreSQL DSN");
   assertValidRoster(input.stores);
   const captured = await Promise.all(input.stores.map(async store => {
-    const stat = await fs.lstat(store.anchorPath);
-    if (!path.isAbsolute(store.anchorPath) || !stat.isFile() || stat.nlink !== 1 ||
-        await fs.realpath(store.anchorPath) !== path.resolve(store.anchorPath)) throw new Error(`import upgrade anchor is not canonical: ${store.agentId}`);
+    if (!path.isAbsolute(store.anchorPath)) throw new Error(`import upgrade anchor is not canonical: ${store.agentId}`);
     for (const suffix of ["-wal", "-shm", "-journal"]) {
       const sidecar = await fs.lstat(store.anchorPath + suffix).catch((error: NodeJS.ErrnoException) => {
         if (error.code === "ENOENT") return null;
@@ -72,17 +71,16 @@ export async function upgradeImportedAgentStores(input: {
       });
       if (sidecar) throw new Error(`import upgrade anchor is not closed: ${store.agentId}`);
     }
-    const anchor = readPostgresAgentAnchor(store.anchorPath);
+    const snapshot = readOpenClawFileSnapshot(store.anchorPath);
+    const anchor = readPostgresAnchorSnapshot(snapshot.bytes);
     if (!anchor || anchor.storeId !== store.storeId || anchor.schema !== store.schema) throw new Error(`import upgrade anchor identity mismatch: ${store.agentId}`);
-    return { ...store, bytes: await fs.readFile(store.anchorPath) };
+    return { ...store, snapshot };
   }));
   const assertCurrent = async () => {
     input.signal?.throwIfAborted();
     await input.assertCurrent();
     for (const store of captured) {
-      const stat = await fs.lstat(store.anchorPath);
-      if (!stat.isFile() || stat.nlink !== 1 || await fs.realpath(store.anchorPath) !== store.anchorPath ||
-          !(await fs.readFile(store.anchorPath)).equals(store.bytes)) throw new Error(`import upgrade anchor changed: ${store.agentId}`);
+      if (!sameOpenClawFileSnapshot(store.snapshot, readOpenClawFileSnapshot(store.anchorPath))) throw new Error(`import upgrade anchor changed: ${store.agentId}`);
     }
     input.signal?.throwIfAborted();
   };
@@ -137,7 +135,7 @@ export async function upgradeImportedAgentStores(input: {
     for (const store of captured) {
       const file = path.join(root, "agents", store.agentId, "agent", "openclaw-agent.sqlite");
       await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-      await fs.writeFile(file, store.bytes, { mode: 0o600, flag: "wx" });
+      await fs.writeFile(file, store.snapshot.bytes, { mode: 0o600, flag: "wx" });
       entries[store.agentId] = { workspace: path.join(root, "workspaces", store.agentId) };
     }
     await fs.writeFile(configPath, JSON.stringify({ ...initialized, gateway: { mode: "local" }, plugins: { enabled: false },
