@@ -1,3 +1,4 @@
+import { brokerRequestLimit } from "../middleware/broker-request-limit.js";
 import { isBlobObjectVersion } from "@octogee/shared/types/fleet-broker";
 import { gcsBlobStore, runtimeBlobStore } from "../lib/runtime-blob-store.js";
 import type { WorkspaceProject } from "@octogee/core/platform-state";
@@ -1379,7 +1380,7 @@ function installNpmCacheCapabilityRoutes(
     }
   });
 
-  router.post("/npm-cache-authorize", (req, res) => {
+  router.post("/npm-cache-authorize", brokerRequestLimit(6000), (req, res) => {
     const bound = req.boundTenant;
     if (bound?.kind !== "platform" || bound.actor !== "npm-cache-proxy") {
       res.status(403).json(FORBIDDEN);
@@ -4123,7 +4124,7 @@ function installAgentRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps):
     }
   });
 
-  router.post("/agent/set-coach-identity", async (req, res) => {
+  router.post("/agent/set-coach-identity", brokerRequestLimit(240), async (req, res) => {
     const assigned = await requireAssignedAgentWorkspace(deps, req, res);
     if (!assigned) return;
     if (!await verifyOwnerWorkspaceTurnFailClosed(deps.verifyOwnerWorkspaceTurn, {

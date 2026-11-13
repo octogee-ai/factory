@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import * as crypto from "node:crypto";
 import express, { type Request, type Response as ExpressResponse, type NextFunction } from "express";
+import { rateLimit } from "express-rate-limit";
 
 import type {
   ModelBrokerProviderKeyResolver,
@@ -1472,8 +1473,8 @@ async function authorizeBrokerCredential(
   return await ownerAllowsBrokerRequest(deps, lookup.record, res) ? lookup.record : null;
 }
 
-function createBrokerCatalogHandler(deps: LlmBrokerAppDeps, now: () => number) {
-  return async (req: Request, res: ExpressResponse): Promise<void> => {
+function authorizeBrokerCatalog(deps: LlmBrokerAppDeps, now: () => number) {
+  return async (req: Request, res: ExpressResponse, next: NextFunction): Promise<void> => {
     res.setHeader("cache-control", "no-store");
     try {
       const record = await authorizeBrokerCredential(deps, req, res, now);
@@ -1482,6 +1483,19 @@ function createBrokerCatalogHandler(deps: LlmBrokerAppDeps, now: () => number) {
         res.status(403).json({ error: "model catalog requires a model credential" });
         return;
       }
+      res.locals.catalogCredential = record;
+      next();
+    } catch (error) {
+      reportBrokerResolutionError(deps, error);
+      res.status(503).json({ error: "model catalog unavailable" });
+    }
+  };
+}
+
+function createBrokerCatalogHandler(deps: LlmBrokerAppDeps, now: () => number) {
+  return async (req: Request, res: ExpressResponse): Promise<void> => {
+    const record: ModelBrokerTokenRecord = res.locals.catalogCredential;
+    try {
       const configured = record.provider === "vertex"
         ? providerConfigured(deps, "vertex")
         : Boolean(await resolveProviderKeyForRequest({
@@ -1732,7 +1746,18 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
     });
   });
 
-  app.get("/v1/catalog", createBrokerCatalogHandler(deps, now));
+  app.get("/v1/catalog", rateLimit({
+    windowMs: 60_000, limit: 2400, standardHeaders: false, legacyHeaders: false,
+    skipSuccessfulRequests: true,
+    requestWasSuccessful: (_req, res) => Boolean(res.locals.catalogCredential),
+  }), authorizeBrokerCatalog(deps, now), rateLimit({
+    windowMs: 60_000, limit: 120, standardHeaders: "draft-7", legacyHeaders: false,
+    keyGenerator: (_req, res) => {
+      const record: ModelBrokerTokenRecord = res.locals.catalogCredential;
+      return JSON.stringify([record.gatewayId, record.ownerUid]);
+    },
+    message: { error: "model catalog rate limit exceeded" },
+  }), createBrokerCatalogHandler(deps, now));
 
   app.use(
     "/v1",

@@ -1,3 +1,4 @@
+import { brokerRequestLimit } from "../middleware/broker-request-limit.js";
 import { Router, type Request } from 'express';
 import { isValidGatewayId } from '@octogee/shared/types/glm';
 import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
@@ -26,7 +27,7 @@ function isVoiceConversationRequest(req: Request, body: VoiceConversationRequest
 function mountGrantOperation<T>(router: Router, deps: WorkspaceConversationDeps, path: string,
   validate: (body: unknown) => body is T,
   execute: (dependencies: WorkspaceConversationDeps, gatewayId: string, request: T) => Promise<unknown>): void {
-  router.post(path, async (req: Request, res, next) => {
+  router.post(path, brokerRequestLimit(2400), async (req: Request, res, next) => {
     try {
       const gatewayId = req.boundTenant?.kind === 'gateway' ? req.boundTenant.gatewayId : null;
       const body: unknown = req.body;
@@ -41,7 +42,7 @@ function mountGrantOperation<T>(router: Router, deps: WorkspaceConversationDeps,
 
 export function createVoiceConversationRoutes(deps: WorkspaceConversationDeps): Router {
   const router = Router();
-  router.post('/conversation', async (req: Request, res, next) => {
+  router.post('/conversation', brokerRequestLimit(1200), async (req: Request, res, next) => {
     try {
       const body = req.body ?? {};
       if (!isVoiceConversationRequest(req, body)) { res.status(403).json({ error: 'forbidden' }); return; }
