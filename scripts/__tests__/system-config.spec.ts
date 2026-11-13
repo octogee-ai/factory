@@ -214,6 +214,26 @@ describe("system_config restore", () => {
     expect(fs.readFileSync(path.join(repoDir, ".gitignore"), "utf-8")).toContain("*.tmp");
   });
 
+  it("does not write a seed through an existing link or use a predictable metadata file", async () => {
+    fs.writeFileSync(templatePath, JSON.stringify({ agents: { list: [] } }));
+    const outsideConfig = path.join(dir, "outside-config.json");
+    const outsideMetadata = path.join(dir, "outside-metadata.json");
+    const config = path.join(repoDir, "openclaw.json");
+    fs.writeFileSync(outsideMetadata, "unchanged");
+    fs.symlinkSync(outsideConfig, config);
+    fs.symlinkSync(outsideMetadata, path.join(repoDir, ".octogee.json.tmp"));
+    vi.mocked(gitExec).mockImplementation((_cwd: string, argv: string[]) => argv.join(" ") === "rev-parse --verify HEAD" ? null : "ok");
+    const restore = () => restoreSystemConfigForSlug("acme", {
+      openclawDir, templatePath,
+      env: withUserClaim({ GATEWAY_ID: "walter-green", MM_URL: "http://mm" }, "walter"), log: () => {},
+    });
+    await expect(restore()).rejects.toMatchObject({ code: "EEXIST" });
+    expect(fs.existsSync(outsideConfig)).toBe(false);
+    fs.unlinkSync(config);
+    await expect(restore()).resolves.toMatchObject({ seeded: true, restored: true });
+    expect(fs.readFileSync(outsideMetadata, "utf8")).toBe("unchanged");
+  });
+
   it("does not force shared-class Google write approval into a new user system config", async () => {
     templatePath = path.resolve(__dirname, "../../infra/gateway/openclaw.template.json");
     vi.mocked(gitExec).mockImplementation((_cwd: string, argv: string[]) =>
