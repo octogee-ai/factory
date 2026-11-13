@@ -165,8 +165,10 @@ node gateway-edge/openclaw-browser-resources/build.mjs /path/to/openclaw "$(git 
 ```
 
 Its `provenance.json` records that source and a digest of the generator and
-adapter files in `gateway-edge/openclaw-browser-resources/`, so the committed
-bundle can be checked against the pin and against the files that shaped it.
+adapter files in `gateway-edge/openclaw-browser-resources/`.
+`scripts/__tests__/openclaw-browser-resources-provenance.spec.ts` fails when the
+bundle names a source other than `sourceSha`, or when those files changed
+without a rebuild.
 
 Once `current.json` names the new build, run the state pin-roll ceremony.
 
