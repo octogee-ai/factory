@@ -152,6 +152,17 @@ describe("byosub-auth sidecar router", () => {
     expect(brokerByosubFlow).not.toHaveBeenCalled();
   });
 
+  it("bounds sign-in starts without blocking status checks for an existing flow", async () => {
+    ssoStart.mockResolvedValue({ flowId: "f1", verificationUrl: "https://x", state: "pending" });
+    readByosubFlow.mockResolvedValue({ uid: TEST_UID, gatewayId: "walter", agentId: AGENT, provider: "anthropic" });
+    ssoStatus.mockResolvedValue({ state: "pending" });
+    const client = request(app());
+    for (let attempt = 0; attempt < 12; attempt++) await client.post("/byosub/connect").send({ provider: "anthropic" }).expect(200);
+    await client.post("/byosub/connect").send({ provider: "anthropic" }).expect(429);
+    expect(ssoStart).toHaveBeenCalledTimes(12);
+    await client.get("/byosub/status/f1").expect(200);
+  });
+
   it("status: reads the brokered flow and proxies the in-pod status for the owner", async () => {
     readByosubFlow.mockResolvedValue({ uid: TEST_UID, gatewayId: "walter", agentId: AGENT, provider: "anthropic" });
     ssoStatus.mockResolvedValue({ state: "pending" });
@@ -186,6 +197,17 @@ describe("byosub-auth sidecar router", () => {
   it.each([42, ["f1"], { id: "f1" }])("sso/submit: rejects a non-string flow id before broker lookup", async flowId => {
     await request(app()).post("/byosub/sso/submit").send({ flowId, code: "abc" }).expect(400);
     expect(readByosubFlow).not.toHaveBeenCalled();
+    expect(ssoSubmit).not.toHaveBeenCalled();
+  });
+
+  it("sso/submit: rejects an identifier with a path separator before broker lookup", async () => {
+    await request(app()).post("/byosub/sso/submit").send({ flowId: "flow/other", code: "abc" }).expect(400);
+    expect(readByosubFlow).not.toHaveBeenCalled();
+  });
+
+  it("sso/submit: does not forward a valid submission for another owner", async () => {
+    readByosubFlow.mockResolvedValue({ uid: "someone-else", gatewayId: "walter", agentId: AGENT, provider: "anthropic" });
+    await request(app()).post("/byosub/sso/submit").send({ flowId: "f1", code: "abc" }).expect(404);
     expect(ssoSubmit).not.toHaveBeenCalled();
   });
 

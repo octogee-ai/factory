@@ -1,6 +1,8 @@
 import { Router, Request, Response, NextFunction } from "express";
+import { rateLimit } from "express-rate-limit";
 
 import { requireAuthenticatedUid } from "../middleware/auth.js";
+import { DEFAULT_RATE_LIMIT_OPTIONS } from "../middleware/security.js";
 import {
   userDefaultAgentId,
   gatewayClaudeSsoClient,
@@ -52,12 +54,32 @@ function hasPrivateSubscriptionRuntime(): boolean {
   return isIsolatedGatewayClassValue(process.env.GATEWAY_CLASS?.trim());
 }
 
+interface SsoSubmission { flowId: string; code: string }
+
+function validateSsoSubmission(req: Request, res: Response<unknown, { submission: SsoSubmission }>, next: NextFunction): void {
+  const { flowId, code } = (req.body ?? {}) as { flowId?: unknown; code?: unknown };
+  if (typeof flowId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/u.test(flowId) || typeof code !== "string" || !code) {
+    res.status(400).json({ error: "flowId and code required" });
+    return;
+  }
+  res.locals.submission = { flowId, code };
+  next();
+}
+
 export function createByosubAuthRouter(): Router {
   const router = Router({ mergeParams: true });
+  const flowLimit = (limit: number) => rateLimit({
+    ...DEFAULT_RATE_LIMIT_OPTIONS,
+    windowMs: 60_000,
+    limit,
+    keyGenerator: req => req.uid!,
+    message: { error: "Too many subscription sign-in requests, please try again later." },
+  });
 
   router.post(
     "/connect",
     requireAuthenticatedUid,
+    flowLimit(12),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const uid = req.uid!;
@@ -113,6 +135,7 @@ export function createByosubAuthRouter(): Router {
   router.get(
     "/status/:flowId",
     requireAuthenticatedUid,
+    flowLimit(120),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const flowId = req.params.flowId as string;
@@ -148,13 +171,11 @@ export function createByosubAuthRouter(): Router {
   router.post(
     "/sso/submit",
     requireAuthenticatedUid,
-    async (req: Request, res: Response, next: NextFunction) => {
+    flowLimit(12),
+    validateSsoSubmission,
+    async (req: Request, res: Response<unknown, { submission: SsoSubmission }>, next: NextFunction) => {
       try {
-        const { flowId, code } = (req.body ?? {}) as { flowId?: unknown; code?: unknown };
-        if (typeof flowId !== "string" || !flowId || typeof code !== "string" || !code) {
-          res.status(400).json({ error: "flowId and code required" });
-          return;
-        }
+        const { flowId, code } = res.locals.submission;
         const flow = await readByosubFlow(flowId);
         if (!flow || flow.uid !== req.uid!) {
           res.status(404).json({ error: "flow not found" });
