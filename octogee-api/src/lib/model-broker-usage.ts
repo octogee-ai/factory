@@ -13,6 +13,8 @@ import {
   windowOwnerKey,
 } from "@octogee/shared/types/model-broker-usage";
 
+import type { ModelBrokerUsageLedger as PlatformUsageLedger } from "@octogee/core/model-broker-usage-ledger";
+
 import {
   parseFundedBudgetLedger,
   type FundedBudgetLedger,
@@ -810,4 +812,55 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
     this.rateWindows.set(key, next);
     return next;
   }
+}
+
+export type LedgerModelBrokerUsageStore = Pick<
+  Required<ModelBrokerUsageStore>,
+  "recordUsage" | "readWindowUsage" | "readWeekUsage" | "reserveRateWindow"
+>;
+
+export function createLedgerModelBrokerUsageStore(ledger: PlatformUsageLedger): LedgerModelBrokerUsageStore {
+  return {
+    async recordUsage(input) {
+      if (input.balanceDebit || input.fundedBudget) {
+        throw new Error("the platform usage ledger keeps no balance or funded budget");
+      }
+      const now = input.now ?? Date.now();
+      const cacheWriteTtl = input.cacheWriteTtl ?? "5m";
+      const cost = resolveRecordedCost(input, cacheWriteTtl);
+      const chargeUsd = resolvedChargeUsd(input, cost);
+      const eventId = input.eventId ?? crypto.randomUUID();
+      const windowStartMs = usageWindowStartMs(now);
+      await ledger.record({
+        eventId,
+        ownerKey: windowOwnerKey(input),
+        createdAt: now,
+        event: eventDocument({ ...input, eventId, now, cacheWriteTtl, cost, chargeUsd, windowStartMs }),
+        totalTokens: totalTokens(input.usage),
+        costUsd: cost.total,
+        chargeUsd,
+        spendPeriods: input.countsTowardSpendWindow === false
+          ? []
+          : [{ period: "window", startMs: windowStartMs }, { period: "week", startMs: weekWindowStartMs(now) }],
+      });
+    },
+
+    async readWindowUsage(input) {
+      const windowStartMs = usageWindowStartMs(input.now ?? Date.now());
+      const ownerKey = windowOwnerKey(input);
+      return { ownerKey, windowStartMs, ...await ledger.readSpend(ownerKey, "window", windowStartMs) };
+    },
+
+    async readWeekUsage(input) {
+      const weekStartMs = weekWindowStartMs(input.now ?? Date.now());
+      const ownerKey = windowOwnerKey(input);
+      return { ownerKey, weekStartMs, ...await ledger.readSpend(ownerKey, "week", weekStartMs) };
+    },
+
+    async reserveRateWindow(input) {
+      const windowStartMs = rateWindowStartMs(input.now ?? Date.now());
+      const ownerKey = rateWindowOwnerKey(input);
+      return { ownerKey, windowStartMs, requestCount: await ledger.reserveRequest(ownerKey, windowStartMs) };
+    },
+  };
 }

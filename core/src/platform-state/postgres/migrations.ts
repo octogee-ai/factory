@@ -1126,6 +1126,33 @@ CREATE TABLE user_accounts (
 );
 `;
 
+const MODEL_BROKER_USAGE = String.raw`
+CREATE TABLE model_broker_usage_events (
+  event_id    text PRIMARY KEY CHECK (event_id <> ''),
+  owner_key   text NOT NULL CHECK (owner_key <> ''),
+  created_at  bigint NOT NULL,
+  event       jsonb NOT NULL CHECK (jsonb_typeof(event) = 'object')
+);
+CREATE INDEX model_broker_usage_events_owner_idx ON model_broker_usage_events (owner_key, created_at);
+
+CREATE TABLE model_broker_spend_periods (
+  owner_key      text NOT NULL CHECK (owner_key <> ''),
+  period         text NOT NULL CHECK (period IN ('window', 'week')),
+  start_ms       bigint NOT NULL,
+  request_count  bigint NOT NULL CHECK (request_count > 0),
+  total_tokens   bigint NOT NULL CHECK (total_tokens >= 0),
+  cost_usd       double precision NOT NULL CHECK (cost_usd >= 0),
+  charge_usd     double precision NOT NULL CHECK (charge_usd >= 0),
+  PRIMARY KEY (owner_key, period, start_ms)
+);
+
+CREATE TABLE model_broker_rate_windows (
+  owner_key      text NOT NULL CHECK (owner_key <> ''),
+  start_ms       bigint NOT NULL,
+  request_count  integer NOT NULL CHECK (request_count > 0),
+  PRIMARY KEY (owner_key, start_ms)
+);
+`;
 export const PLATFORM_STATE_MIGRATIONS: readonly PlatformStateMigration[] = [
   { version: 1, name: "core-schema", sql: CORE_SCHEMA },
   { version: 2, name: "change-feed", sql: CHANGE_FEED },
@@ -1141,4 +1168,5 @@ export const PLATFORM_STATE_MIGRATIONS: readonly PlatformStateMigration[] = [
   { version: 12, name: "neutral-stored-names", sql: NEUTRAL_STORED_NAMES },
   { version: 13, name: "activity-receipts", sql: ACTIVITY_RECEIPTS },
   { version: 14, name: "user-accounts", sql: USER_ACCOUNTS },
+  { version: 15, name: "model-broker-usage", sql: MODEL_BROKER_USAGE },
 ];
