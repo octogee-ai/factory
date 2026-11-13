@@ -214,7 +214,8 @@ describe("connect — auth-url", () => {
     for (let attempt = 0; attempt < 60; attempt++) {
       await client.get(path).set("Authorization", rateLimitAuth.bearer()).expect(200);
     }
-    await client.get(path).set("Authorization", rateLimitAuth.bearer()).expect(429);
+    const rejected = await client.get(path).set("Authorization", rateLimitAuth.bearer()).expect(429);
+    expect(rejected.body).toEqual({ error: "Too many connector requests, please try again later." });
     await client.get(path).set("Authorization", auth.bearer()).expect(200);
     await client.get("/api/connect/availability").set("Authorization", rateLimitAuth.bearer()).expect(200);
   });
