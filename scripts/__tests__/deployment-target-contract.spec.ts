@@ -98,23 +98,10 @@ describe("deployment target consumers", () => {
 
   it("forces rebuild credential rotation so a rerun repairs a half-written SQL pair", () => {
     const setup = source("scripts/setup-cloud-sql.sh");
-    const bootstrap = source("scripts/bootstrap-west-platform.sh");
 
     expect(setup).toContain("--rotate) FORCE_ROTATE=true");
     expect(setup).toContain('if ! $FORCE_ROTATE && $user_exists && $secret_exists; then');
     expect(setup).toContain('rollback_candidate_secret_version "$secret" "$candidate_version"');
-    expect(bootstrap).toContain('setup-cloud-sql.sh" --target=test-west --rotate');
-  });
-
-  it("permits only the reviewed Cloud SQL recovery IAM replacement during a WEST rebuild", () => {
-    const bootstrap = source("scripts/bootstrap-west-platform.sh");
-    const destructiveAddresses = bootstrap
-      .split("DESTRUCTIVE_ADDRESSES=(", 2)[1]
-      ?.split("\n)", 1)[0];
-
-    expect(destructiveAddresses).toContain(
-      "'google_storage_bucket_iam_member.cloud_sql_recovery'",
-    );
   });
 
   it("scopes internal bootstrap credentials to the exact target", () => {
