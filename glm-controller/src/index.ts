@@ -4303,7 +4303,3 @@ export async function resolveSourceRevision(
     ...(gateway.gatewayClass ? { gatewayClass: gateway.gatewayClass } : {}),
   };
 }
-
-if (import.meta.url === `file://${process.argv[1]}`) {
-  void main({ userLifecycle: null });
-}

@@ -1,9 +1,11 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { buildImage, buildSummary, isolatedBaseRecipe, ensureImage, gatewayBaseRecipe, imagePlan } from "../ci/image-build.mjs";
+import {
+  IMAGE_BUILDS, PLATFORM_CONTEXT, buildImage, buildSummary, isolatedBaseRecipe, ensureImage, gatewayBaseRecipe, imagePlan,
+} from "../ci/image-build.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
 
@@ -58,6 +60,15 @@ describe("runner image builds", () => {
     expect(imagePlan("octogee-project-runner", { repository, sha }, root).contexts).toEqual({
       "obsidian-connect": "obsidian-connect", overlay: "product/octogee-api", "gateway-edge-overlay": "product/gateway-edge",
     });
+  });
+
+  it("gives each default overlay stage content so its build cache follows the overlay it copies", () => {
+    const stages = Object.values(IMAGE_BUILDS).filter(build => "overlays" in build).flatMap(({ dockerfile, overlays }) => {
+      const source = readFileSync(resolve(repoRoot, relative(PLATFORM_CONTEXT, dockerfile)), "utf8").split(/^FROM /m);
+      return Object.keys(overlays).flatMap(name => source.filter(stage => stage.startsWith(`scratch AS ${name}\n`)));
+    });
+    expect(stages).not.toHaveLength(0);
+    for (const stage of stages) expect(stage).toMatch(/^COPY /m);
   });
 
   it("builds product images from the repository root", () => {

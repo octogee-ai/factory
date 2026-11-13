@@ -1,3 +1,6 @@
+FROM scratch AS overlay
+COPY glm-controller/src/main.ts /src/main.ts
+
 FROM node:26.13.0-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS platform-npm
 ARG NPM_VERSION=12.2.1
 RUN apt-get update && apt-get install -y --no-install-recommends patch && rm -rf /var/lib/apt/lists/*
@@ -81,6 +84,7 @@ RUN npm ci --ignore-scripts
 
 COPY glm-controller/tsconfig.json ./
 COPY glm-controller/src ./src
+COPY --from=overlay / ./
 
 RUN npx tsc \
   && npm prune --omit=dev
@@ -98,4 +102,4 @@ COPY helm/octogee         /charts/octogee
 COPY helm/octogee-gateway /charts/octogee-gateway
 
 USER 1000:1000
-ENTRYPOINT ["/usr/bin/tini", "--", "node", "dist/glm-controller/src/product-main.js"]
+ENTRYPOINT ["/usr/bin/tini", "--", "node", "dist/glm-controller/src/main.js"]

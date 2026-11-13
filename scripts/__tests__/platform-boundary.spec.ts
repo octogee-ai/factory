@@ -60,7 +60,7 @@ describe("platform boundary", () => {
   });
 
   it("keeps the product composition roots out of the platform entrypoints", () => {
-    for (const root of ["platform/octogee-api/src/index.ts", "platform/octogee-api/src/product.ts", "platform/gateway-edge/src/routes/product-cluster-routes.ts", "platform/glm-controller/src/product-main.ts", "platform/gateway-edge/src/product-main.ts", "functions/src/index.ts"]) {
+    for (const root of ["platform/octogee-api/src/index.ts", "platform/octogee-api/src/product.ts", "platform/gateway-edge/src/routes/product-cluster-routes.ts", "product/glm-controller/src/main.ts", "platform/gateway-edge/src/product-main.ts", "functions/src/index.ts"]) {
       expect(manifest.platformEntrypoints).not.toContain(root);
       expect(report.reached).not.toContain(root);
     }

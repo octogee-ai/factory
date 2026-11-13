@@ -6,7 +6,6 @@ import type {
   PlacementPolicyReconcilerDeps,
   PlacementPolicySnapshot,
 } from "../../placement-policy-reconciler.js";
-import { createSharedGatewayMoves } from "../../product-shared-gateway-moves.js";
 
 export const FIXTURE_USERS_PER_GATEWAY = 4;
 
@@ -127,15 +126,6 @@ export function platformHarness(state: PlacementPolicySnapshot = snapshot()): Pl
     })),
     enqueueMigration: vi.fn(async (request) => request.operationId ?? "op-placement-1"),
     deleteRetiredDisposableGateway: vi.fn(async () => true),
-  };
-}
-
-export function productHarness(
-  state: PlacementPolicySnapshot & { buildersPerGateway?: number } = snapshot(),
-): PlacementPolicyReconcilerDeps {
-  return {
-    ...platformHarness(state),
-    sharedGatewayMoves: createSharedGatewayMoves(async () => state.buildersPerGateway ?? FIXTURE_USERS_PER_GATEWAY),
   };
 }
 
