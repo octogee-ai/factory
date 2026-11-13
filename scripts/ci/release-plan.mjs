@@ -20,6 +20,12 @@ function validateReleaseOptions(options) {
   if (options.shipProd && options.environment !== 'prod') throw new Error('Ship PROD requires the PROD environment');
 }
 
+export function installReleaseTools(run) {
+  run('npm', ['ci', '--prefix', 'platform/scripts', '--no-audit', '--no-fund']);
+  run('node', ['platform/scripts/ops/sync-local-file-deps.mjs', '--consumer', 'platform/scripts']);
+  run('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund']);
+}
+
 export function fleetStoreStages({ environment, sha, stage, withStore, storeDependencies }) {
   const againstStore = (label, args) => withStore(storeDependencies(environment), storeEnv => stage(label, 'node', ['--import', './node_modules/tsx/dist/loader.mjs', ...args], { cwd: 'platform/scripts', env: storeEnv }));
   return {

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { releaseOptions } from './release-plan.mjs';
 import { resolveRelease } from './release-source.mjs';
-import { exportSource, sourceCiScript } from './snapshot.mjs';
+import { deploymentSource, sourceCiScript } from './snapshot.mjs';
 import { dispatchWorkflow } from './actions-dispatch.mjs';
 
 const args = process.argv.slice(2);
@@ -19,7 +19,7 @@ if (!local) {
 } else {
   const { manifest, digest } = await resolveRelease(options.sha);
   const directory = mkdtempSync(join(tmpdir(), 'octogee-deploy-'));
-  const copy = exportSource(execFileSync('/usr/bin/git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim(), manifest.sourceSha);
+  const copy = deploymentSource(execFileSync('/usr/bin/git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim(), manifest.sourceSha);
   try {
     const manifestPath = join(directory, 'ci-release-manifest.json');
     writeFileSync(manifestPath, JSON.stringify(manifest));

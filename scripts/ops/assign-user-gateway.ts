@@ -1,4 +1,4 @@
-import "../product/lib/octogee-entitlements.js";
+import "../src/main.js";
 import { pathToFileURL } from "node:url";
 import { commitOperatorPlacement, planOperatorPlacement } from "@octogee/core/operator-placement";
 import { type PlatformUserRecord, type PlatformStateStore } from "@octogee/core/platform-state";

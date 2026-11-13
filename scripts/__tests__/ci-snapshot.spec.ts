@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
-import { exportSource, snapshot, sourceCiScript, worktreeSource } from '../ci/snapshot.mjs';
+import { deploymentSource, exportSource, snapshot, sourceCiScript, worktreeSource } from '../ci/snapshot.mjs';
 
 function repository() {
   const root = mkdtempSync(join(tmpdir(), 'ci-snapshot-test-'));
@@ -171,5 +171,84 @@ it('publishes committed bytes but checks changed and non-ignored new files local
         expect(existsSync(join(copy.source, 'ignored'))).toBe(false);
       } finally { copy.remove(); }
     }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+function layeredRepository(files: Record<string, string>) {
+  const root = mkdtempSync(join(tmpdir(), 'ci-snapshot-test-'));
+  const git = (...args: string[]) => execFileSync('/usr/bin/git', args, { cwd: root, encoding: 'utf8', stdio: 'pipe' }).trim();
+  git('init', '-b', 'main');
+  git('config', 'user.name', 'CI fixture');
+  git('config', 'user.email', 'ci@example.invalid');
+  for (const [file, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, file)), { recursive: true });
+    writeFileSync(join(root, file), text);
+  }
+  git('add', '.');
+  git('commit', '-m', 'fixture');
+  return { root, sha: git('rev-parse', 'HEAD') };
+}
+
+const platformTree = {
+  'platform/helm/octogee/Chart.yaml': 'platform chart',
+  'platform/helm/octogee/charts/octogee-api/values.yaml': 'platform values',
+  'platform/core/dist/index.js': 'committed build',
+  'platform/scripts/ci/release.mjs': 'release',
+};
+
+it('deploys the product files layered into the platform tree', () => {
+  const { root, sha } = layeredRepository({
+    ...platformTree,
+    'product/helm/octogee/charts/octogee-api/product/secret-env.yaml': 'product secret env',
+  });
+  try {
+    const copy = deploymentSource(root, sha);
+    try {
+      const platform = join(copy.source, 'platform');
+      expect(readFileSync(join(platform, 'helm/octogee/charts/octogee-api/product/secret-env.yaml'), 'utf8')).toBe('product secret env');
+      for (const [file, text] of Object.entries(platformTree)) expect(readFileSync(join(copy.source, file), 'utf8')).toBe(text);
+      expect(lstatSync(join(platform, 'helm')).isSymbolicLink()).toBe(false);
+    } finally { copy.remove(); }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it('leaves standalone product packages out of the platform tree', () => {
+  const { root, sha } = layeredRepository({
+    ...platformTree,
+    'platform/core/package.json': '{"name":"@octogee/core"}',
+    'product/core/package.json': '{"name":"@octogee/product-core"}',
+    'product/core/src/index.ts': 'product core',
+    'product/helm/octogee/charts/octogee-api/product/secret-env.yaml': 'product secret env',
+  });
+  try {
+    const copy = deploymentSource(root, sha);
+    try {
+      const platform = join(copy.source, 'platform');
+      expect(readFileSync(join(platform, 'core/package.json'), 'utf8')).toBe('{"name":"@octogee/core"}');
+      expect(existsSync(join(platform, 'core/src/index.ts'))).toBe(false);
+      expect(readFileSync(join(copy.source, 'product/core/package.json'), 'utf8')).toBe('{"name":"@octogee/product-core"}');
+      expect(readFileSync(join(platform, 'helm/octogee/charts/octogee-api/product/secret-env.yaml'), 'utf8')).toBe('product secret env');
+    } finally { copy.remove(); }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it('refuses to deploy a product file that would replace a platform file', () => {
+  const { root, sha } = layeredRepository({
+    ...platformTree,
+    'product/helm/octogee/Chart.yaml': 'product chart',
+  });
+  try {
+    expect(() => deploymentSource(root, sha)).toThrow('shadows platform files: octogee/Chart.yaml');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it('deploys the platform tree as committed when there is no product tree', () => {
+  const { root, sha } = layeredRepository(platformTree);
+  try {
+    const copy = deploymentSource(root, sha);
+    try {
+      for (const [file, text] of Object.entries(platformTree)) expect(readFileSync(join(copy.source, file), 'utf8')).toBe(text);
+      expect(existsSync(join(copy.source, 'product'))).toBe(false);
+    } finally { copy.remove(); }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

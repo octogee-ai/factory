@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { PROD_TARGET, TEST_TARGET } from "./fixtures/deployment.js";
+import { PROD_TARGET } from "./fixtures/deployment.js";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
 
@@ -135,17 +135,6 @@ describe("deployment target consumers", () => {
     );
   });
 
-  it("reserves central and west deployment namespaces from custom provisioning", () => {
-    const provision = source("scripts/provision-namespace.sh");
-    const terraform = source("terraform/environments/custom/variables.tf");
-
-    for (const namespace of ["octogee", "octogee-west"]) expect(provision).toContain(namespace);
-    expect(provision).toContain('"$TEST_NAMESPACE"|"$TEST_NAMESPACE-west")');
-    for (const namespace of ["octogee", TEST_TARGET.namespace, "octogee-west", `${TEST_TARGET.namespace}-west`]) {
-      expect(terraform).toContain(`"${namespace}"`);
-    }
-  });
-
   it("scopes internal bootstrap credentials to the exact target", () => {
     const setupSecrets = source("scripts/setup-secrets.sh");
     const setupGitea = source("scripts/setup-gitea.sh");
@@ -258,9 +247,8 @@ describe("deployment target consumers", () => {
     }
   });
 
-  it("preserves the candidate target in verification probes and repairs", () => {
+  it("preserves the candidate target in verification repairs", () => {
     const verify = source("scripts/verify-env.sh");
-    expect(verify).toContain('--deployment-target="$TARGET_ID" --check');
     expect(verify).toContain("--env=$ENV$TARGET_ARG");
   });
 

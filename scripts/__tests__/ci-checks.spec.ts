@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -113,6 +113,15 @@ describe("portable Linux PR checks", () => {
     expect(checkPlan(["package.json"], "quality").map(job => job.name)).toEqual(["eslint", "knip", "gitleaks", "osv-scanner", "trivy", "cargo-audit"]);
   });
 
+  it("runs a check repo-wide when a quality hook a tree contributes for it changes", () => {
+    expect(checkPlan(["tests/scripts/ci/quality.d/eslint.sh"], "quality").map(job => job.commands)).toEqual([
+      ["bash platform/scripts/ci/quality.sh eslint"],
+      ["bash platform/scripts/ci/quality.sh gitleaks"],
+    ]);
+    const hooked = ["knip", "osv-scanner", "trivy", "cargo-audit"].map(name => `tests/scripts/ci/quality.d/${name}.sh`);
+    expect(checkPlan(hooked, "quality").map(job => job.name)).toEqual(["knip", "gitleaks", "osv-scanner", "trivy", "cargo-audit"]);
+  });
+
   it("scans infrastructure configuration only when it changes", () => {
     expect(checkPlan(["platform/helm/octogee/values.yaml"], "quality").map(job => job.name)).toContain("trivy");
     expect(checkPlan(["platform/infra/gateway/Dockerfile"], "quality").map(job => job.name)).toContain("trivy");
@@ -203,6 +212,17 @@ describe("portable Linux PR checks", () => {
     expect(names).toEqual(expect.arrayContaining(["glm-controller", "glm-controller-product", "glm-controller-emulator"]));
   });
 
+  it("typechecks a product package with its product config when it ships one", () => {
+    const jobs = checkPlan(["platform/scripts/lib/config.ts"], "tests", false, false, { products: new Set(["scripts"]), productTypecheckConfigs: new Set(["scripts"]) });
+    expect(jobs.find(job => job.name === "scripts")!.commands).toEqual(["npx tsc --noEmit", "npm test"]);
+    expect(jobs.find(job => job.name === "scripts-product")!.commands).toEqual(["node ../../platform/scripts/ops/sync-local-file-deps.mjs --consumer .", "npx tsc --noEmit -p tsconfig.product.json", "npm test"]);
+  });
+
+  it("typechecks a product package with its platform typecheck when it ships no product config", () => {
+    const jobs = checkPlan(["platform/scripts/lib/config.ts"], "tests", false, false, { products: new Set(["scripts"]) });
+    expect(jobs.find(job => job.name === "scripts-product")!.commands).toEqual(["node ../../platform/scripts/ops/sync-local-file-deps.mjs --consumer .", "npx tsc --noEmit", "npm test"]);
+  });
+
   it("overlays every product directory except a standalone package with its own manifest", () => {
     const productRoot = mkdtempSync(join(tmpdir(), "octogee-products-"));
     mkdirSync(join(productRoot, "glm-controller/src"), { recursive: true });
@@ -260,7 +280,6 @@ describe("scoped quality script", () => {
     const root = mkdtempSync(join(tmpdir(), "quality-sh-"));
     mkdirSync(join(root, "platform/scripts/ci"), { recursive: true });
     copyFileSync(source, join(root, "platform/scripts/ci/quality.sh"));
-    writeFileSync(join(root, "platform/scripts/ds-tokens.mjs"), "");
     const bin = join(root, "bin");
     mkdirSync(bin);
     const calls = join(root, "calls");
@@ -286,6 +305,25 @@ describe("scoped quality script", () => {
     const { root, calls, env } = workspace();
     run(root, env, ["eslint"]);
     expect(readFileSync(calls, "utf8")).toBe("npm run lint -- --format=stylish --max-warnings=0\n");
+  });
+
+  it("runs the quality hooks a top-level tree contributes for the check it is running", () => {
+    const { root, calls, env } = workspace();
+    mkdirSync(join(root, "extra/scripts/ci/quality.d"), { recursive: true });
+    writeFileSync(join(root, "extra/scripts/ci/quality.d/eslint.sh"), `printf '%s\\n' "hook eslint" >> '${calls}'\n`);
+    run(root, env, ["eslint", "--", "deleted.ts"]);
+    expect(readFileSync(calls, "utf8")).toBe("hook eslint\n");
+    run(root, env, ["osv-scanner", "--", "gone/package-lock.json"]);
+    expect(readFileSync(calls, "utf8")).toBe("hook eslint\n");
+  });
+
+  it("fails the check when a quality hook fails", () => {
+    const { root, calls, env } = workspace();
+    mkdirSync(join(root, "extra/scripts/ci/quality.d"), { recursive: true });
+    writeFileSync(join(root, "extra/scripts/ci/quality.d/eslint.sh"), "exit 3\n");
+    writeFileSync(join(root, "kept.ts"), "");
+    expect(() => run(root, env, ["eslint", "--", "kept.ts"])).toThrow();
+    expect(existsSync(calls)).toBe(false);
   });
 
   it("audits only changed lockfiles that still exist", () => {

@@ -4,6 +4,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { TEST_TARGET } from "./fixtures/deployment.js";
+import { scriptsTreeWith } from "./fixtures/scripts-tree.js";
 
 const repoRoot = path.resolve(__dirname, "../..");
 const teardown = path.join(repoRoot, "scripts/teardown-env.sh");
@@ -49,6 +50,7 @@ type TeardownOptions = {
     | "paginated";
   gatewayControllerFailure?: "inspect" | "scale" | "pods";
   interactiveInput?: string;
+  envExtension?: string;
 };
 
 function runPrivateCentralTeardown(options: TeardownOptions = {}) {
@@ -385,12 +387,15 @@ fi
 `);
   executable(path.join(temp, "npx"), "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'npx %s\\n' \"$*\" >> \"$FAKE_CALL_LOG\"\n");
 
-  const args = [teardown, "--env=test", "--deployment-target=test-central"];
+  const root = options.envExtension === undefined
+    ? repoRoot
+    : scriptsTreeWith({ "fixture-extension": { "env.sh": options.envExtension } }, temp);
+  const args = [path.join(root, "scripts/teardown-env.sh"), "--env=test", "--deployment-target=test-central"];
   if (options.full ?? true) args.push("--full");
   if (!options.interactiveInput) args.push("--yes");
   if (options.resume) args.push("--resume");
   const result = spawnSync("bash", args, {
-    cwd: repoRoot,
+    cwd: root,
     env: {
       ...process.env,
       HOME: temp,
@@ -795,11 +800,14 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
     expect(result.stdout).not.toContain("firebase deploy --project");
   });
 
-  it("prints a TEST rebuild that recreates the live-test fixture before verify-env", () => {
-    const result = runPrivateCentralTeardown();
+  it("prints an env extension's after-deploy steps between the platform deploy and verify-env", () => {
+    const result = runPrivateCentralTeardown({
+      envExtension: 'ENV_REBUILD_STEPS_AFTER_DEPLOY+=(fixture_step)\nfixture_step() { echo "  fixture after deploy for $ENV$TARGET_ARG"; }\n',
+    });
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
-    const fixture = result.stdout.indexOf("scripts/product/ops/ensure-live-fixture-account.ts");
+    expect(result.stdout).toContain("Env extensions loaded: fixture-extension");
+    const fixture = result.stdout.indexOf("fixture after deploy for test --deployment-target=test-central");
     expect(fixture).toBeGreaterThan(result.stdout.indexOf("npm run ci:deploy"));
     expect(fixture).toBeLessThan(result.stdout.indexOf("./scripts/verify-env.sh"));
   });
@@ -928,19 +936,18 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
     expect(result.stdout).not.toContain("Still preserves PVCs");
   });
 
-  it("prints the orchestrator seed after the pods roll onto platform state and before the platform deploy", () => {
-    const result = runPrivateCentralTeardown();
+  it("prints an env extension's after-rollout steps after the pods roll and before the platform deploy", () => {
+    const result = runPrivateCentralTeardown({
+      envExtension: 'ENV_REBUILD_STEPS_AFTER_ROLLOUT+=(fixture_step)\nfixture_step() { echo "  fixture after rollout for $ENV"; }\n',
+    });
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     const roll = result.stdout.indexOf(`kubectl rollout restart deploy -n ${TEST_TARGET.namespace}`);
-    const seed = result.stdout.indexOf(
-      "npm run --prefix scripts with-platform-state -- --env=test -- npx tsx product/ops/seed-orchestrator-config.ts --env=test --deployment-target=test-central",
-    );
+    const step = result.stdout.indexOf("fixture after rollout for test");
     const deploy = result.stdout.indexOf("npm run ci:deploy -- --environment=test");
     expect(roll).toBeGreaterThan(-1);
-    expect(seed).toBeGreaterThan(roll);
-    expect(deploy).toBeGreaterThan(seed);
-    expect(result.calls).not.toContainEqual(expect.stringContaining("seed-orchestrator-config"));
+    expect(step).toBeGreaterThan(roll);
+    expect(deploy).toBeGreaterThan(step);
   });
 
   it("resets test-central through target-owned in-cluster credentials without a local proxy", () => {

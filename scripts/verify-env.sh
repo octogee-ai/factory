@@ -40,6 +40,8 @@ source "$SCRIPT_DIR/lib/iap-endpoint-health.sh"
 source "$SCRIPT_DIR/lib/gateway-image-bundle.sh"
 # shellcheck source=scripts/lib/gateway-capacity-placement.sh
 source "$SCRIPT_DIR/lib/gateway-capacity-placement.sh"
+# shellcheck source=scripts/lib/env-extensions.sh
+source "$SCRIPT_DIR/lib/env-extensions.sh"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'
@@ -158,11 +160,6 @@ gcloud container clusters get-credentials "$CLUSTER_NAME" \
   --region "$TARGET_REGION" --project "$CLUSTER_PROJECT" 2>/dev/null || true
 kubectl config use-context "$K8S_CONTEXT" >/dev/null 2>&1 || true
 
-ORCH_OUTPUT=""
-if [[ "$ENV" != "custom" ]]; then
-  ORCH_OUTPUT=$(node "$REPO_DIR/scripts/node_modules/tsx/dist/cli.mjs" "$REPO_DIR/scripts/product/ops/seed-orchestrator-config.ts" --env="$ENV" --deployment-target="$TARGET_ID" --check 2>&1 || true)
-fi
-
 # The shared pool is unnamed: the fleet controller mints `shared-N` slots on demand and the
 # floor lives on its Deployment as SHARED_POOL_MIN_REPLICAS. Every Ready slot is
 # an equivalent probe target; the first one drives the single-gateway checks.
@@ -202,6 +199,7 @@ echo -e "  Namespace: ${BOLD}${NAMESPACE}${NC}"
 echo -e "  Firebase:  ${BOLD}${FIREBASE_PROJECT}${NC}"
 echo -e "  Site:      ${BOLD}${SITE_URL}${NC}"
 echo -e "  Time:      $(date '+%Y-%m-%d %H:%M:%S %Z')"
+load_env_extensions "$SCRIPT_DIR"
 
 # ── 1. kubectl context ────────────────────────────────────────────────────────
 set_section infra
@@ -933,28 +931,7 @@ else
   fi
 fi
 
-# ── 8b. Orchestrator Config (Firestore) ──────────────────────────────────────
-# `config/orchestrator` holds the operator dials (shared pool autoscaling).
-# Shared pool membership is not configured anywhere: it derives from the
-# shared-class durable roots.
-#
-set_section bootstrap
-header "8b. Orchestrator Config"
-
-if [[ "$ENV" == "custom" ]]; then
-  info "Custom namespaces don't use config/orchestrator — skipping"
-else
-  if echo "$ORCH_OUTPUT" | grep -q "release preflight passed"; then
-    pass "$(echo "$ORCH_OUTPUT" | grep "release preflight passed" | head -1 | sed -E 's/^[^a-z]*//')"
-  elif echo "$ORCH_OUTPUT" | grep -Eq "is missing or invalid"; then
-    fail "operator dials are missing or invalid: $(echo "$ORCH_OUTPUT" | grep -E "is missing or invalid" | head -1)"
-    if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} node scripts/node_modules/tsx/dist/cli.mjs scripts/product/ops/seed-orchestrator-config.ts --env=$ENV$TARGET_ARG"
-    fi
-  else
-    warn "Orchestrator config probe failed; verify operator ADC: $(echo "$ORCH_OUTPUT" | head -1)"
-  fi
-fi
+run_env_hooks ${ENV_VERIFY_SECTIONS[@]+"${ENV_VERIFY_SECTIONS[@]}"}
 
 set_section bootstrap
 # ── Env contract ──────────────────────────────────────────────────────

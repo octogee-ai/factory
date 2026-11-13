@@ -100,58 +100,58 @@ describe("resolveScope — ownership", () => {
     );
   });
 
-  it("octogee-chat-tools resolves to its own job (sibling extension dir)", () => {
+  it("octogee-chat-tools resolves to its own job and the extension specs (sibling extension dir)", () => {
     expectJobs(
-      ["platform/infra/gateway/extensions/product/octogee-chat-tools/src/tools.ts"],
-      ["octogee-chat-tools"],
+      ["product/infra/gateway/extensions/octogee-chat-tools/src/tools.ts"],
+      ["octogee-chat-tools", "tests"],
     );
   });
 
-  it("octogee-access-tools resolves to its own job", () => {
+  it("octogee-access-tools resolves to its own job and the extension specs", () => {
     expectJobs(
       ["platform/infra/gateway/extensions/platform/octogee-access-tools/access-client.ts"],
-      ["octogee-access-tools"],
+      ["octogee-access-tools", "tests"],
     );
   });
 
-  it("octogee-activity-tools resolves to its behavioral suite", () => {
+  it("octogee-activity-tools resolves to its behavioral suite and the extension specs", () => {
     expectJobs(
-      ["platform/infra/gateway/extensions/product/octogee-activity-tools/plugin-runtime-native.ts"],
-      ["octogee-activity-tools"],
+      ["product/infra/gateway/extensions/octogee-activity-tools/plugin-runtime-native.ts"],
+      ["octogee-activity-tools", "tests"],
     );
     const unitPackage = UNIT_PACKAGES.find(({ name }) => name === "octogee-activity-tools");
     expect(unitPackage).toEqual({
       name: "octogee-activity-tools",
-      dir: "platform/infra/gateway/extensions/product/octogee-activity-tools",
+      dir: "product/infra/gateway/extensions/octogee-activity-tools",
       typecheck: "npm run typecheck --silent",
     });
   });
 
   it("octogee-connector-tools resolves to its own job and cross-package contracts", () => {
     expectJobs(
-      ["platform/infra/gateway/extensions/product/octogee-connector-tools/connector-client.ts"],
+      ["product/infra/gateway/extensions/octogee-connector-tools/connector-client.ts"],
       ["octogee-connector-tools", "tests"],
     );
   });
 
-  it("octogee-web-tools resolves to its own job", () => {
+  it("octogee-web-tools resolves to its own job and the extension specs", () => {
     expectJobs(
-      ["platform/infra/gateway/extensions/product/octogee-web-tools/web-client.ts"],
-      ["octogee-web-tools"],
+      ["product/infra/gateway/extensions/octogee-web-tools/web-client.ts"],
+      ["octogee-web-tools", "tests"],
     );
   });
 
-  it("octogee-board-tools resolves to its own job", () => {
+  it("octogee-board-tools resolves to its own job and the extension specs", () => {
     expectJobs(
-      ["platform/infra/gateway/extensions/product/octogee-board-tools/board-client.ts"],
-      ["octogee-board-tools"],
+      ["product/infra/gateway/extensions/octogee-board-tools/board-client.ts"],
+      ["octogee-board-tools", "tests"],
     );
   });
 
-  it("octogee-project-tools resolves to its own job", () => {
+  it("octogee-project-tools resolves to its own job and the extension specs", () => {
     expectJobs(
-      ["platform/infra/gateway/extensions/product/octogee-project-tools/project-client.ts"],
-      ["octogee-project-tools"],
+      ["product/infra/gateway/extensions/octogee-project-tools/project-client.ts"],
+      ["octogee-project-tools", "tests"],
     );
   });
 

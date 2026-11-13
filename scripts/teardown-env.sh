@@ -1276,6 +1276,10 @@ echo ""
 YES_FLAG=""
 [[ "$ENV" == "test" ]] && YES_FLAG=" --yes"
 
+# shellcheck source=scripts/lib/env-extensions.sh
+source "$SCRIPT_DIR/lib/env-extensions.sh"
+load_env_extensions "$SCRIPT_DIR"
+echo ""
 echo "  ╔═══════════════════════════════════════════════════════════════╗"
 echo "  ║           CANONICAL INSTALL SEQUENCE (run in order)           ║"
 echo "  ╚═══════════════════════════════════════════════════════════════╝"
@@ -1337,20 +1341,11 @@ echo "  # roots/releases are never reconstructed or overwritten."
 echo "  until kubectl get deploy -n $K8S_NAMESPACE --context $K8S_CONTEXT -l app=octogee-gateway,gateway-class=shared -o name | grep -q .; do sleep 15; done"
 echo "  kubectl wait --for=condition=Available deploy -l app=octogee-gateway,gateway-class=shared -n $K8S_NAMESPACE --context $K8S_CONTEXT --timeout=30m"
 echo ""
-echo "  # 6b. Seed the operator dials (sizing profiles, shared pool autoscaling, Signup Offer)"
-echo "  #     into the platform state store the release just migrated. with-platform-state"
-echo "  #     reads the deployed backend and opens the database tunnel. Shared pool membership"
-echo "  #     is not seeded: the fleet controller mints shared-N slots from the platform release."
-echo "  npm run --prefix scripts with-platform-state -- --env=$ENV -- npx tsx product/ops/seed-orchestrator-config.ts --env=$ENV$TARGET_ARG"
-echo ""
+run_env_hooks ${ENV_REBUILD_STEPS_AFTER_ROLLOUT[@]+"${ENV_REBUILD_STEPS_AFTER_ROLLOUT[@]}"}
 echo "  # 7. Deploy the platform and site through CI (Firestore rules and indexes, Functions, site, hosting)"
 echo "  npm run ci:deploy -- --environment=$ENV --sha=\"\$PLATFORM_SOURCE_SHA\" --actor=operator:<you>"
 echo ""
-if [[ "$ENV" == "test" ]]; then
-  echo "  # 7b. Recreate the live-test fixture (Ship TEST's end-to-end job signs in as it)"
-  echo "  ./scripts/node_modules/.bin/tsx scripts/product/ops/ensure-live-fixture-account.ts"
-  echo ""
-fi
+run_env_hooks ${ENV_REBUILD_STEPS_AFTER_DEPLOY[@]+"${ENV_REBUILD_STEPS_AFTER_DEPLOY[@]}"}
 echo "  # 8. Verify"
 echo "  ./scripts/verify-env.sh --env=$ENV$TARGET_ARG$(if [[ "$ENV" == "test" ]]; then echo " --fix"; fi)"
 echo ""

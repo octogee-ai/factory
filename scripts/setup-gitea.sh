@@ -439,8 +439,7 @@ if [[ -n "$GIT_API_TOKEN" ]]; then
   echo "  Next (canonical sequence — see teardown-env.sh --env=$ENV$TARGET_ARG for the full 9 steps):"
   echo "    5. ./scripts/setup-secrets.sh --env=$ENV$TARGET_ARG --phase=launch"
   echo "    6. firebase deploy --project $GCP_PROJECT"
-  echo "    7. npm run --prefix scripts with-platform-state -- --env=$ENV -- npx tsx product/ops/seed-orchestrator-config.ts --env=$ENV$TARGET_ARG"
-  echo "    8. ./scripts/verify-env.sh --env=$ENV$TARGET_ARG"
+  echo "    7. ./scripts/verify-env.sh --env=$ENV$TARGET_ARG"
 else
   warn "Gitea bootstrap is incomplete"
   echo ""

@@ -11,7 +11,7 @@ import {
 } from "../ops/verify-committed-dist.mjs";
 
 const GIT_BIN = "/usr/bin/git";
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const REPO_ROOT = path.dirname(fs.realpathSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../core")));
 const fixtures: string[] = [];
 
 function git(root: string, args: string[]): string {

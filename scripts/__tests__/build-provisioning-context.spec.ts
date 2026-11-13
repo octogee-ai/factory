@@ -1,17 +1,16 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as path from "path";
 import { buildProvisioningContext } from "@octogee/core/provisionSteps";
+import { staticUserEntitlements } from "../../shared/types/user-entitlements.js";
 import { CUSTOMERS_DIR } from "../lib/config.js";
-import { octogeeUserEntitlements } from "@octogee/product-shared/types/octogee-entitlements";
-import { installUserEntitlements } from "../../shared/types/user-entitlements.js";
-
-beforeAll(() => installUserEntitlements(octogeeUserEntitlements));
+import { installUserEntitlementsForTest, planUserEntitlements } from "./helpers/user-entitlements.js";
 
 describe("buildProvisioningContext", () => {
   beforeEach(() => {
     vi.useFakeTimers();
 
 vi.setSystemTime(new Date("2026-03-14T08:30:00Z"));
+    installUserEntitlementsForTest(planUserEntitlements);
   });
 
   afterEach(() => {
@@ -24,8 +23,8 @@ vi.setSystemTime(new Date("2026-03-14T08:30:00Z"));
     expect(ctx).toEqual({
       uid: "uid-1",
       slug: "acme",
-      contextTemplateKey: "trial",
-      provisionedProductFields: { tier: "trial" },
+      contextTemplateKey: "house",
+      provisionedProductFields: { plan: "house" },
       ownerName: "acme",
       customerDir: path.join(CUSTOMERS_DIR, "acme"),
       today: "2026-03-14",
@@ -42,25 +41,24 @@ vi.setSystemTime(new Date("2026-03-14T08:30:00Z"));
     });
   });
 
-  it("takes the seed template and the provisioned product fields from the stamped tier when the account has one", () => {
+  it("takes the seed template and the provisioned product fields from the plan inputs the installed entitlements pick", () => {
     const ctx = buildProvisioningContext("uid-1", {
       username: "acme",
-      tier: "pro",
-      subscription: { tier: "free" },
+      plan: "pro",
+      tier: "free",
     });
 
-    expect(ctx.contextTemplateKey).toBe("default");
-    expect(ctx.provisionedProductFields).toEqual({ tier: "pro" });
+    expect(ctx.contextTemplateKey).toBe("pro");
+    expect(ctx.provisionedProductFields).toEqual({ plan: "pro" });
   });
 
-  it("falls through to the subscription when the account has no stamped tier", () => {
-    const ctx = buildProvisioningContext("uid-1", {
-      username: "acme",
-      subscription: { tier: "free" },
-    });
+  it("seeds the default template with no product fields under the default entitlements", () => {
+    installUserEntitlementsForTest(staticUserEntitlements);
 
-    expect(ctx.contextTemplateKey).toBe("free");
-    expect(ctx.provisionedProductFields).toEqual({ tier: "free" });
+    const ctx = buildProvisioningContext("uid-1", { username: "acme", plan: "pro" });
+
+    expect(ctx.contextTemplateKey).toBe("default");
+    expect(ctx.provisionedProductFields).toEqual({});
   });
 
   it("carries no tier of its own on the context or in the template variables", () => {

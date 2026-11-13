@@ -144,7 +144,8 @@ function testJob(name: JobKey): CheckJob {
 
 const LINTED_SOURCE = /\.[cm]?[jt]sx?$/;
 const TOKEN_SCANNED_SOURCE = /\.(?:[cm]?[jt]sx?|astro|css|html)$/;
-const FULL_LINT_INPUTS = ["eslint.config.mjs", "platform/scripts/ds-tokens.mjs", "design-system/tailwind-preset.mjs"];
+const FULL_LINT_INPUTS = ["eslint.config.mjs", "design-system/tailwind-preset.mjs"];
+const QUALITY_HOOK = /^[^/]+\/scripts\/ci\/quality\.d\/([^/]+)\.sh$/;
 const INFRASTRUCTURE_CONFIG = /(^|\/)Dockerfile[^/]*$|\.(?:tf|ya?ml)$|^(?:platform\/(?:helm|terraform|infra)|\.github)\//;
 const RUST_AUDIT_INPUTS = ["artifact-worker/renderer/", "platform/scripts/ci/", "ci/"];
 
@@ -159,19 +160,27 @@ function qualityJobs(paths: string[], full: boolean): CheckJob[] {
   const job = (name: string, command: string): CheckJob =>
     ({ name, directory: ".", nodeVersion: DEFAULT_NODE_VERSION, installs: name === "eslint" || name === "knip" ? ["."] : [], commands: [command] });
   const jobs: CheckJob[] = [];
-  if (full || paths.some(path => FULL_LINT_INPUTS.includes(path))) jobs.push(job("eslint", qualityCommand("eslint")));
-  else if (paths.some(path => TOKEN_SCANNED_SOURCE.test(path))) jobs.push(job("eslint", qualityCommand("eslint", paths.filter(path => LINTED_SOURCE.test(path)))));
-  if (full || paths.includes("knip.json")) jobs.push(job("knip", qualityCommand("knip")));
+  const hooked = new Set(paths.map(path => QUALITY_HOOK.exec(path)?.[1]));
+  const pushRepoWide = (name: string, triggered: boolean): boolean => {
+    const runs = full || triggered || hooked.has(name);
+    if (runs) jobs.push(job(name, qualityCommand(name)));
+    return runs;
+  };
+  if (!pushRepoWide("eslint", paths.some(path => FULL_LINT_INPUTS.includes(path))) && paths.some(path => TOKEN_SCANNED_SOURCE.test(path))) {
+    jobs.push(job("eslint", qualityCommand("eslint", paths.filter(path => LINTED_SOURCE.test(path)))));
+  }
+  pushRepoWide("knip", paths.includes("knip.json"));
   jobs.push(job("gitleaks", qualityCommand("gitleaks")));
   const lockfiles = paths.filter(path => path.endsWith("package-lock.json"));
-  if (full || paths.includes("osv-scanner.toml")) jobs.push(job("osv-scanner", qualityCommand("osv-scanner")));
-  else if (lockfiles.length) jobs.push(job("osv-scanner", qualityCommand("osv-scanner", lockfiles)));
-  if (full || paths.some(path => INFRASTRUCTURE_CONFIG.test(path))) jobs.push(job("trivy", qualityCommand("trivy")));
-  if (full || paths.some(path => RUST_AUDIT_INPUTS.some(prefix => path.startsWith(prefix)))) jobs.push(job("cargo-audit", qualityCommand("cargo-audit")));
+  if (!pushRepoWide("osv-scanner", paths.includes("osv-scanner.toml")) && lockfiles.length) jobs.push(job("osv-scanner", qualityCommand("osv-scanner", lockfiles)));
+  pushRepoWide("trivy", paths.some(path => INFRASTRUCTURE_CONFIG.test(path)));
+  pushRepoWide("cargo-audit", paths.some(path => RUST_AUDIT_INPUTS.some(prefix => path.startsWith(prefix))));
   return jobs;
 }
 
 export const OVERLAY_COMMAND = "node platform/scripts/ops/overlay.mjs platform product .overlay";
+export const PRODUCT_TYPECHECK_CONFIG = "tsconfig.product.json";
+const PRODUCT_TYPECHECK = `npx tsc --noEmit -p ${PRODUCT_TYPECHECK_CONFIG}`;
 const OVERLAY_DEPENDENCY_SYNC = "platform/scripts/ops/sync-local-file-deps.mjs";
 
 export function overlayPackages(productRoot: string): Set<string> {
@@ -181,7 +190,7 @@ export function overlayPackages(productRoot: string): Set<string> {
     .map(entry => entry.name));
 }
 
-function productOverlay(job: CheckJob, products: ReadonlySet<string>): CheckJob[] {
+function productOverlay(job: CheckJob, products: ReadonlySet<string>, productTypecheckConfigs: ReadonlySet<string>): CheckJob[] {
   const overlaid = (directory: string) => {
     const name = directory.startsWith("platform/") ? directory.slice("platform/".length) : "";
     return products.has(name) ? `.overlay/${name}` : directory;
@@ -193,19 +202,23 @@ function productOverlay(job: CheckJob, products: ReadonlySet<string>): CheckJob[
   const packLibraries = `node ${posix.relative(directory, OVERLAY_DEPENDENCY_SYNC)} ${consumers.join(" ")}`;
   const overlay = { ...job, directory, setup: [OVERLAY_COMMAND], installs, commands: [packLibraries, ...job.commands] };
   if (job.name.endsWith("-emulator")) return [overlay];
-  return [job, { ...overlay, name: `${job.name}${PRODUCT_SUFFIX}` }];
+  const platformTypecheck = UNIT_PACKAGES.find(pkg => pkg.dir === job.directory)?.typecheck;
+  const productTypecheck = productTypecheckConfigs.has(job.directory.slice("platform/".length));
+  const commands = [packLibraries, ...(productTypecheck ? job.commands.map(command => (command === platformTypecheck ? PRODUCT_TYPECHECK : command)) : job.commands)];
+  return [job, { ...overlay, name: `${job.name}${PRODUCT_SUFFIX}`, commands }];
 }
 
 export interface PlanTree {
   deleted?: ReadonlySet<string>;
   products?: ReadonlySet<string>;
+  productTypecheckConfigs?: ReadonlySet<string>;
 }
 
-export function checkPlan(paths: string[], group: "tests" | "quality" | "all" = "all", desktopPackage = false, full = false, { deleted = new Set(), products = new Set() }: PlanTree = {}): CheckJob[] {
+export function checkPlan(paths: string[], group: "tests" | "quality" | "all" = "all", desktopPackage = false, full = false, { deleted = new Set(), products = new Set(), productTypecheckConfigs = new Set() }: PlanTree = {}): CheckJob[] {
   const scope = full ? { jobs: [...ALL_JOBS], everything: true } : resolveScope(paths, deleted);
   const result = group === "quality" ? [] : scope.jobs.filter(name => desktopPackage || name !== JOBS.desktopPackage).map(testJob).flatMap(job => (job.name === JOBS.app ? appShards(job) : [job]));
   if (group !== "quality" && desktopPackage && !result.some(job => job.name === JOBS.desktopPackage)) result.push(testJob(JOBS.desktopPackage));
-  const tests = result.flatMap(job => productOverlay(job, products));
+  const tests = result.flatMap(job => productOverlay(job, products, productTypecheckConfigs));
   if (group === "tests") return tests;
   return [...tests, ...qualityJobs(paths, scope.everything)];
 }

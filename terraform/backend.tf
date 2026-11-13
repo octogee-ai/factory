@@ -4,7 +4,7 @@
 # Each environment uses a separate prefix (prod/ or test/) for full isolation.
 #
 # Usage:
-#   cd terraform/environments/prod
+#   cd terraform/environments/control-plane
 #   terraform init -backend-config=../../backend.tf
 #
 # The prefix is set in each environment's main.tf via backend config.

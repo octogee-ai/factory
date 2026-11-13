@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { withFleetStore } from '../ci/fleet-store.mjs';
-import { deployRelease, fleetStoreStages, releaseOptions } from '../ci/release-plan.mjs';
+import { deployRelease, fleetStoreStages, installReleaseTools, releaseOptions } from '../ci/release-plan.mjs';
 
 const options = releaseOptions(['--environment=test', `--sha=${'a'.repeat(40)}`, '--actor=operator:test']);
 function dependencies() {
@@ -13,6 +13,15 @@ function deferred() {
   return { promise, resolve, reject };
 }
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+it('packs the overlay libraries into the installed scripts package before the root install', () => {
+  const run = vi.fn();
+  installReleaseTools(run);
+  expect(run.mock.calls).toEqual([
+    ['npm', ['ci', '--prefix', 'platform/scripts', '--no-audit', '--no-fund']],
+    ['node', ['platform/scripts/ops/sync-local-file-deps.mjs', '--consumer', 'platform/scripts']],
+    ['npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund']],
+  ]);
+});
 it('rejects an unbuilt or substituted SHA before any deployment', async () => {
   const deps = dependencies();
   deps.manifest.mockResolvedValue({ sourceSha: 'b'.repeat(40) });

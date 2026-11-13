@@ -1,4 +1,4 @@
-import "../product/lib/octogee-entitlements.js";
+import "../src/main.js";
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const runtimeLogger = createServiceLogger("byosub-syncback-runner");
 

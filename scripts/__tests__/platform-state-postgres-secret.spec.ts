@@ -1,13 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { runAgainstFakes, testCentral } from "./fixtures/secret-script-fakes.js";
 
 const helper = path.resolve(import.meta.dirname, "../lib/platform-state-postgres-secret.sh");
-const repoRoot = path.resolve(import.meta.dirname, "../..");
-const testCentral = JSON.parse(readFileSync(path.join(repoRoot, "core/src/deployment-targets.json"), "utf8")).targets["test-central"];
-const testKubeContext = `gke_${testCentral.clusterProjectId}_${testCentral.region}_${testCentral.clusterName}`;
 
 interface Scenario {
   readonly exists?: boolean;
@@ -147,74 +145,6 @@ describe("platform state database secret", () => {
   });
 });
 
-interface FakeRun {
-  readonly root?: string;
-  readonly env?: Record<string, string>;
-  readonly curlBody?: string;
-}
-
-function runAgainstFakes(script: string, args: readonly string[], gcloudBody: string, kubectlBody: string, run: FakeRun = {}) {
-  const dir = mkdtempSync(path.join(tmpdir(), "platform-state-wiring-"));
-  const trace = path.join(dir, "trace");
-  writeFileSync(path.join(dir, "gcloud"), `#!/bin/bash\nprintf '%s\\n' "$*" >> "$TRACE"\n${gcloudBody}\n`);
-  writeFileSync(path.join(dir, "kubectl"), `#!/bin/bash\nprintf '%s\\n' "$*" >> "$TRACE"\n${kubectlBody}\n`);
-  for (const name of ["gcloud", "kubectl"]) chmodSync(path.join(dir, name), 0o755);
-  if (run.curlBody !== undefined) {
-    writeFileSync(path.join(dir, "curl"), `#!/bin/bash\n${run.curlBody}\n`);
-    chmodSync(path.join(dir, "curl"), 0o755);
-  }
-  const root = run.root ?? repoRoot;
-  const result = spawnSync("bash", [path.join(root, script), ...args], {
-    cwd: root,
-    encoding: "utf8",
-    env: { ...process.env, ...run.env, PATH: `${dir}:${process.env.PATH}`, TRACE: trace, KUBE_CONTEXT: testKubeContext },
-  });
-  const calls = existsSync(trace) ? readFileSync(trace, "utf8") : "";
-  rmSync(dir, { recursive: true, force: true });
-  return { result, calls, output: result.stdout + result.stderr };
-}
-
-function repositoryWithoutEnvFiles(): string {
-  const root = mkdtempSync(path.join(tmpdir(), "setup-secrets-repo-"));
-  for (const entry of readdirSync(repoRoot)) {
-    if (entry === ".git" || entry.startsWith(".env")) continue;
-    symlinkSync(path.join(repoRoot, entry), path.join(root, entry));
-  }
-  return root;
-}
-
-const managedSecretNames = [
-  "ANTHROPIC_API_KEY", "BRAVE_API_KEY", "FIREBASE_AUTH_GOOGLE_CLIENT_ID", "GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET",
-  "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_PICKER_API_KEY", "GOOGLE_PICKER_APP_ID", "GOOGLE_PICKER_CLIENT_ID",
-  "OPENAI_API_KEY", "OPENROUTER_API_KEY", "POSTHOG_PERSONAL_API_KEY", "POSTHOG_PROJECT_TOKEN", "RESEND_API_KEY",
-  "STRIPE_PRICE_IDS", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET",
-];
-const stripePriceIds = JSON.stringify(Object.fromEntries([
-  "personal_monthly", "personal_pro_monthly", "personal_pro_max_monthly",
-  "builder_hobby_monthly", "builder_pro_monthly", "builder_team_monthly",
-  "credit_10", "credit_25", "credit_50", "credit_100",
-].map((name, index) => [name, `price_${index}`])));
-
-function runLaunchSetupSecrets() {
-  const root = repositoryWithoutEnvFiles();
-  try {
-    return runAgainstFakes("scripts/setup-secrets.sh", ["--env=test", "--deployment-target=test-central", "--phase=launch", "--yes"], `case "$*" in
-  "sql instances describe"*) printf '10.0.0.9\\n' ;;
-  "secrets list"*) printf '%s\\n' ${managedSecretNames.join(" ")} ;;
-  "secrets versions access"*ed25519*|"secrets versions access"*PRIVATE_KEY*) exit 1 ;;
-  "secrets versions access"*STRIPE_SECRET_KEY*) printf 'sk_test_fixture' ;;
-  "secrets versions access"*STRIPE_WEBHOOK_SECRET*) printf 'whsec_fixture' ;;
-  "secrets versions access"*STRIPE_PRICE_IDS*) printf '%s' "$STRIPE_PRICE_IDS_FIXTURE" ;;
-  "secrets versions access"*) for arg in "$@"; do [[ "$arg" == --secret=* ]] && printf 'fixture-%s' "\${arg#--secret=}"; done; exit 0 ;;
-esac`, `case "$*" in
-  "config current-context") printf '%s\\n' "$KUBE_CONTEXT" ;;
-  *"create secret"*) printf 'materialized-secret' ;;
-  *"apply -f -"*) cat >/dev/null ;;
-esac`, { root, env: { STRIPE_PRICE_IDS_FIXTURE: stripePriceIds }, curlBody: "cat >/dev/null\nprintf 200" });
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-}
 
 function runSetupSecrets(...args: readonly string[]) {
   return runAgainstFakes("scripts/setup-secrets.sh", args, `case "$*" in
@@ -244,13 +174,6 @@ describe("setup-secrets platform state wiring", () => {
   });
 });
 
-describe("setup-secrets product extension", () => {
-  it("creates the billing secret through the loaded product extension", () => {
-    const { calls, output } = runLaunchSetupSecrets();
-    expect(output).toContain("Secret extensions loaded: product");
-    expect(calls, output).toContain(`create secret generic stripe-secrets -n ${testCentral.namespace}`);
-  });
-});
 
 describe("verify-secrets platform state requirement", () => {
   const missingEverything = "[[ \"$*\" != *\" get secret \"* && \"$*\" != get\\ secret* ]] || exit 1";

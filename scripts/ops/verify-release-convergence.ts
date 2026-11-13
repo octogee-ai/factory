@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import "../product/lib/octogee-entitlements.js";
+import "../src/main.js";
 
 import { execFile as execFileCallback } from "node:child_process";
 import { readFile } from "node:fs/promises";

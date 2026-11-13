@@ -77,7 +77,9 @@ and concise evidence in the PR, not historical benchmark diaries here.
 
 Run both maintained packers **sequentially** from a clean Octogee checkout into
 a fresh directory. `OPENCLAW_SKIP_BUILD=1` is only for exact source already
-built in this cycle. Both packers use the same OpenClaw artifact tree.
+built in this cycle. Both packers use the same OpenClaw artifact tree. The root
+packer checks every `infra/gateway/verify-*-plugin-contract.mjs` in the tree it
+runs from, so a deployment that adds plugins runs it from its overlay tree.
 
 ```bash
 ARTIFACT_DIR=$(mktemp -d -t openclaw-current-artifacts-XXXXXX)

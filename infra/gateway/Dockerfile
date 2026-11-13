@@ -1,6 +1,7 @@
 ARG OPENCLAW_BASE_IMAGE=octogee-gateway-base
 ARG RUNTIME_BASE_IMAGE=${OPENCLAW_BASE_IMAGE}
 ARG GATEWAY_SYSTEM_IMAGE=${OPENCLAW_BASE_IMAGE}
+
 FROM ${GATEWAY_SYSTEM_IMAGE} AS gateway-dependencies
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -9,7 +10,6 @@ USER root
 
 COPY --chown=node:node core/package.json /octogee/core/package.json
 COPY --chown=node:node shared/package.json shared/package-lock.json /octogee/shared/
-COPY --from=product --chown=node:node shared/package.json /product/shared/package.json
 COPY --chown=node:node scripts/.npmrc scripts/package.json scripts/package-lock.json /octogee/scripts/
 
 WORKDIR /octogee/scripts
@@ -29,12 +29,19 @@ COPY core/package.json /octogee/core/package.json
 COPY core/dist /octogee/core/dist
 COPY shared/package.json /octogee/shared/package.json
 COPY shared/dist /octogee/shared/dist
-COPY --from=product shared/package.json /product/shared/package.json
-COPY --from=product shared/dist /product/shared/dist
 COPY infra/gateway/pack-local-deps.sh /tmp/pack-local-deps.sh
 RUN bash /tmp/pack-local-deps.sh /octogee/core /packages/@octogee/core \
-    && bash /tmp/pack-local-deps.sh /octogee/shared /packages/@octogee/shared \
-    && bash /tmp/pack-local-deps.sh /product/shared /packages/@octogee/product-shared
+    && bash /tmp/pack-local-deps.sh /octogee/shared /packages/@octogee/shared
+
+# A product build replaces this stage with `--build-context product=<product dir>`: its
+# extensions and tier templates add to the platform's, its scripts/src/main.ts replaces the
+# platform composition root, and the libraries its overlay dependencies stage under
+# scripts/node_modules join the platform's. Without one, the platform stands in as its own product.
+FROM scratch AS product
+COPY infra/gateway/extensions/platform/ /infra/gateway/extensions/
+COPY scripts/src/ /scripts/src/
+COPY --from=gateway-local-packages /packages/ /scripts/node_modules/
+COPY templates/tiers/ /templates/tiers/
 
 FROM ${OPENCLAW_BASE_IMAGE} AS gateway-build
 
@@ -45,6 +52,7 @@ WORKDIR /octogee/scripts
 
 COPY --from=gateway-dependencies /octogee /octogee
 COPY --from=gateway-local-packages --chown=node:node /packages /octogee/scripts/node_modules
+COPY --chown=node:node --from=product scripts/node_modules/ /octogee/scripts/node_modules/
 COPY --from=gateway-local-packages --chown=node:node /octogee/core/dist /octogee/core/dist
 COPY --chown=node:node shared/ /octogee/shared/
 
@@ -54,7 +62,8 @@ COPY --chown=node:node scripts/secret-resolver.mjs /octogee/scripts/
 COPY --chown=node:node scripts/publish-gateway-token.mjs /octogee/scripts/
 COPY --chown=node:node scripts/tsconfig.json /octogee/scripts/
 COPY --chown=node:node scripts/lib/ /octogee/scripts/lib/
-COPY --chown=node:node scripts/product/lib/octogee-entitlements.ts /octogee/scripts/product/lib/
+COPY --chown=node:node scripts/src/ /octogee/scripts/src/
+COPY --chown=node:node --from=product scripts/src/ /octogee/scripts/src/
 COPY --chown=node:node scripts/ops/verify-native-modules.mjs /octogee/scripts/ops/
 COPY --chown=node:node scripts/ops/migrate-user-stores.ts /octogee/scripts/ops/
 RUN /octogee/scripts/node_modules/.bin/esbuild /octogee/scripts/secret-resolver.mjs \
@@ -84,7 +93,7 @@ RUN /octogee/scripts/node_modules/.bin/tsc -p tsconfig.json --noEmit \
 # bundled in, only node builtins and openclaw/plugin-sdk/* stay external, and no
 # node_modules tree is left for OpenClaw's plugin-generation capture to copy.
 COPY --chown=node:node infra/gateway/extensions/platform/ /octogee/extensions/
-COPY --chown=node:node infra/gateway/extensions/product/ /octogee/extensions/
+COPY --chown=node:node --from=product infra/gateway/extensions/ /octogee/extensions/
 COPY --chown=node:node infra/gateway/build-extensions.mjs \
       infra/gateway/extension-manifest.mjs \
       infra/gateway/verify-extension-bundles.mjs \
@@ -120,6 +129,7 @@ USER root
 COPY --link --from=gateway-production-dependencies --chown=1000:1000 /octogee/scripts/node_modules /octogee/scripts/node_modules
 COPY --link --from=gateway-production-dependencies --chown=1000:1000 /octogee/shared/node_modules /octogee/shared/node_modules
 COPY --from=gateway-local-packages --chown=node:node /packages /octogee/scripts/node_modules
+COPY --chown=node:node --from=product scripts/node_modules/ /octogee/scripts/node_modules/
 COPY --from=gateway-payload --chown=node:node /octogee/core /octogee/core
 COPY --from=gateway-payload --chown=node:node /octogee/scripts /octogee/scripts
 COPY --from=gateway-payload --chown=node:node /octogee/shared /octogee/shared
@@ -136,7 +146,7 @@ COPY --chown=node:node templates/claws/ /octogee/templates/claws/
 COPY --chown=node:node templates/github-workflow/ /octogee/templates/github-workflow/
 COPY --chown=node:node templates/shared/ /octogee/templates/shared/
 COPY --chown=node:node templates/tiers/ /octogee/templates/tiers/
-COPY --chown=node:node templates/product/tiers/ /octogee/templates/tiers/
+COPY --chown=node:node --from=product templates/ /octogee/templates/
 
 # ── Computer-use skills ────────────────────────────────────────────────────
 COPY infra/gateway/hobby-skills /opt/octogee/skills/computer-x11

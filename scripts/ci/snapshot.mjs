@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { overlayTree } from '../ops/overlay.mjs';
 
 const GIT = '/usr/bin/git';
 const git = (cwd, args) => execFileSync(GIT, args, { cwd, encoding: 'utf8' });
@@ -112,4 +113,20 @@ export function sourceCiScript(source, name) {
   const script = CI_SCRIPT_DIRECTORIES.map(directory => `${directory}/${name}`).find(file => existsSync(join(source, file)));
   if (!script) throw new Error(`${source} carries no ${name} in ${CI_SCRIPT_DIRECTORIES.join(' or ')}`);
   return script;
+}
+
+export function deploymentSource(root, sha) {
+  const copy = exportSource(root, sha);
+  const platform = join(copy.source, 'platform');
+  const product = join(copy.source, 'product');
+  if (!existsSync(product)) return copy;
+  try {
+    for (const name of Object.keys(overlayTree({ platform, product, out: join(dirname(copy.source), 'overlay') }))) {
+      cpSync(join(product, name), join(platform, name), { recursive: true, force: true, verbatimSymlinks: true });
+    }
+    return copy;
+  } catch (error) {
+    copy.remove();
+    throw error;
+  }
 }

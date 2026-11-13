@@ -1,5 +1,5 @@
 #!/usr/bin/env tsx
-import "../product/lib/octogee-entitlements.js";
+import "../src/main.js";
 import { execFile as execFileCallback } from "node:child_process";
 import { appendFile } from "node:fs/promises";
 import { promisify } from "node:util";

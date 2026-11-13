@@ -3,15 +3,15 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
-const { actual, command, exportSource, worktreeSource, resolveRelease } = vi.hoisted(() => ({
+const { actual, command, deploymentSource, worktreeSource, resolveRelease } = vi.hoisted(() => ({
   actual: {} as typeof import('node:child_process'),
-  command: vi.fn(), exportSource: vi.fn(), worktreeSource: vi.fn(), resolveRelease: vi.fn(),
+  command: vi.fn(), deploymentSource: vi.fn(), worktreeSource: vi.fn(), resolveRelease: vi.fn(),
 }));
 vi.mock('node:child_process', async original => {
   Object.assign(actual, await original<typeof import('node:child_process')>());
   return { ...actual, execFileSync: command };
 });
-vi.mock('../ci/snapshot.mjs', async original => ({ ...await original<object>(), exportSource, worktreeSource }));
+vi.mock('../ci/snapshot.mjs', async original => ({ ...await original<object>(), deploymentSource, worktreeSource }));
 vi.mock('../ci/release-source.mjs', () => ({ resolveRelease }));
 vi.mock('../ci/actions-dispatch.mjs', () => ({ dispatchWorkflow: vi.fn() }));
 
@@ -61,11 +61,11 @@ it.each([
   ['the pre-move layout', 'scripts/ci/release.mjs'],
 ])('deploys a SHA in %s through the release entrypoint its own tree carries', async (_layout, entrypoint) => {
   const copy = sourceTree(entrypoint);
-  exportSource.mockReturnValue(copy);
+  deploymentSource.mockReturnValue(copy);
   resolveRelease.mockResolvedValue({ manifest: { sourceSha: sha }, digest: 'sha256:fixture' });
   process.argv = [...argv.slice(0, 2), '--local', `--sha=${sha}`, '--environment=prod', '--actor=operator:test', '--ship-prod'];
   await import('../ci/deploy.mjs');
-  expect(exportSource).toHaveBeenCalledWith(fixture, sha);
+  expect(deploymentSource).toHaveBeenCalledWith(fixture, sha);
   expect(recorded()).toMatchObject({
     entrypoint, args: [`--sha=${sha}`, '--environment=prod', '--actor=operator:test', '--ship-prod'], manifest: { sourceSha: sha },
   });
@@ -74,7 +74,7 @@ it.each([
 
 it('refuses a deploy whose exported tree carries no release entrypoint', async () => {
   const copy = sourceTree('README.md');
-  exportSource.mockReturnValue(copy);
+  deploymentSource.mockReturnValue(copy);
   resolveRelease.mockResolvedValue({ manifest: { sourceSha: sha }, digest: 'sha256:fixture' });
   process.argv = [...argv.slice(0, 2), '--local', `--sha=${sha}`, '--environment=test', '--actor=operator:test'];
   await expect(import('../ci/deploy.mjs')).rejects.toThrow(`${copy.source} carries no release.mjs in platform/scripts/ci or scripts/ci`);

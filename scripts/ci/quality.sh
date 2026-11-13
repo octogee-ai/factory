@@ -11,9 +11,11 @@ if [ "${1:-}" = -- ]; then
     if [ -f "$file" ]; then files+=("$file"); fi
   done
 fi
+for hook in */scripts/ci/quality.d/"$check".sh; do
+  if [ -f "$hook" ]; then bash "$hook"; fi
+done
 case "$check" in
   eslint)
-    node platform/scripts/ds-tokens.mjs
     if [ "$scoped" = false ]; then npm run lint -- --format=stylish --max-warnings=0
     elif [ "${#files[@]}" -gt 0 ]; then npx eslint --format=stylish --max-warnings=0 --no-warn-ignored -- "${files[@]}"
     else echo 'No changed lint sources remain'

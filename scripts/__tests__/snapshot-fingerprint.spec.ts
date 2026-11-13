@@ -1,68 +1,22 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   desiredUsers,
   snapshotConfigFingerprint,
 } from "../lib/snapshot-fingerprint.js";
 import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
-import {
-  installUserEntitlements,
-  staticUserEntitlements,
-  userEntitlements,
-} from "../../shared/types/user-entitlements.js";
-import { octogeeUserEntitlements } from "@octogee/product-shared/types/octogee-entitlements";
+import { staticUserEntitlements } from "../../shared/types/user-entitlements.js";
+import { userSnapshot as snap } from "./fixtures/user-snapshot.js";
+import { installUserEntitlementsForTest, planUserEntitlements } from "./helpers/user-entitlements.js";
 
-beforeAll(() => installUserEntitlements(octogeeUserEntitlements));
-
-const PAID = { subscription: { tier: "personal_pro", status: "active" } };
-const OFFER_CLAIMED_AT_SECONDS = 1_783_500_000;
-const OFFER_ENDS_AT_SECONDS = 1_784_104_800;
-const DURING_OFFER = new Date((OFFER_CLAIMED_AT_SECONDS + 86_400) * 1000);
-const AFTER_OFFER = new Date((OFFER_ENDS_AT_SECONDS + 86_400) * 1000);
-const SIGNUP_OFFER = {
-  trialGrant: {
-    schemaVersion: 3,
-    offerId: "builder-signup",
-    offerVersion: 1,
-    personalTier: "personal",
-    builderTier: "hobby",
-    configHash: "config-a",
-    claimedAt: { _seconds: OFFER_CLAIMED_AT_SECONDS },
-    endsAt: { _seconds: OFFER_ENDS_AT_SECONDS },
-  },
-};
-
-function snap(over: Partial<FleetBrokerUserSnapshot> = {}): FleetBrokerUserSnapshot {
-  return {
-    uid: "u1",
-    slug: "alice",
-    contextTemplateKey: "default",
-    planInputs: {},
-    gatewayId: "default",
-    status: "complete",
-    agentIds: ["octogee-alice-coach"],
-    repoUrl: "https://gitea/alice",
-    mattermostUserId: "mm-alice",
-    customerMmUserId: "mm-alice",
-    channels: [
-      { scope: "workspace", kind: "general", channelId: "wsgen" },
-      { scope: "project", kind: "general", channelId: "projgen", projectId: "camp" },
-    ],
-    projects: [],
-    projectCheckoutScope: "workspace-and-projects",
-    ownerName: "Alice",
-    email: "alice@example.com",
-    displayName: "Alice",
-    lastName: "A",
-    photoURL: "",
-    persona: null,
-    coachToken: "default-agent-pat",
-    defaultAgentMmUserId: "mm-coach",
-    coachIdentity: { name: "Octo", emoji: "🐙" },
-    ...over,
-  };
-}
+const PAID = { plan: "pro" };
+const PLAN_ENDS_AT = Date.parse("2026-07-01T00:00:00Z");
+const BEFORE_PLAN_ENDS = new Date(PLAN_ENDS_AT - 86_400_000);
+const AFTER_PLAN_ENDS = new Date(PLAN_ENDS_AT + 86_400_000);
+const TIME_BOXED = { plan: "pro", planEndsAt: PLAN_ENDS_AT };
 
 describe("snapshotConfigFingerprint", () => {
+  beforeEach(() => installUserEntitlementsForTest(planUserEntitlements));
+
   it("is stable for the same config-affecting content", () => {
     expect(snapshotConfigFingerprint(snap())).toBe(snapshotConfigFingerprint(snap()));
   });
@@ -145,64 +99,49 @@ describe("snapshotConfigFingerprint", () => {
   it("changes when the plan the inputs resolve to changes (an upgrade must reconverge model picks)", () => {
     const base = snapshotConfigFingerprint(snap());
     expect(snapshotConfigFingerprint(snap({ planInputs: PAID }))).not.toBe(base);
-    expect(
-      snapshotConfigFingerprint(snap({ planInputs: { builderSubscription: { tier: "pro", status: "active" } } })),
-    ).not.toBe(base);
-    expect(snapshotConfigFingerprint(snap({ planInputs: SIGNUP_OFFER }), DURING_OFFER))
-      .not.toBe(snapshotConfigFingerprint(snap(), DURING_OFFER));
+    expect(snapshotConfigFingerprint(snap({ planInputs: { plan: "team" } })))
+      .not.toBe(snapshotConfigFingerprint(snap({ planInputs: PAID })));
+    expect(snapshotConfigFingerprint(snap({ planInputs: TIME_BOXED }), BEFORE_PLAN_ENDS))
+      .not.toBe(snapshotConfigFingerprint(snap(), BEFORE_PLAN_ENDS));
   });
 
-  it("changes when a plan ends — the status flip resolves to a different plan", () => {
-    expect(
-      snapshotConfigFingerprint(snap({ planInputs: { subscription: { tier: "personal_pro", status: "canceled" } } })),
-    ).not.toBe(snapshotConfigFingerprint(snap({ planInputs: PAID })));
+  it("changes when a plan ends — the inputs resolve to a different plan", () => {
+    expect(snapshotConfigFingerprint(snap({ planInputs: TIME_BOXED }), AFTER_PLAN_ENDS))
+      .not.toBe(snapshotConfigFingerprint(snap({ planInputs: PAID }), AFTER_PLAN_ENDS));
   });
 
   it("ignores billing renewal noise — inputs that resolve to the same plan fingerprint the same", () => {
     const base = snapshotConfigFingerprint(snap({ planInputs: PAID }));
-    expect(
-      snapshotConfigFingerprint(
-        snap({ planInputs: { subscription: { ...PAID.subscription, currentPeriodEnd: 1234 } } }),
-      ),
-    ).toBe(base);
-    expect(
-      snapshotConfigFingerprint(
-        snap({
-          planInputs: {
-            subscription: { ...PAID.subscription, currentPeriodEnd: 5678, latestInvoiceId: "in_2" },
-          },
-        }),
-      ),
-    ).toBe(base);
+    expect(snapshotConfigFingerprint(snap({ planInputs: { ...PAID, renewedAt: 1234 } }))).toBe(base);
+    expect(snapshotConfigFingerprint(snap({ planInputs: { ...PAID, renewedAt: 5678, latestInvoiceId: "in_2" } })))
+      .toBe(base);
   });
 
   it("re-ensures a mounted user when a time-boxed plan lapses with its inputs unchanged", () => {
-    const offer = snap({ planInputs: SIGNUP_OFFER });
-    expect(snapshotConfigFingerprint(offer, AFTER_OFFER)).not.toBe(snapshotConfigFingerprint(offer, DURING_OFFER));
+    const timeBoxed = snap({ planInputs: TIME_BOXED });
+    expect(snapshotConfigFingerprint(timeBoxed, AFTER_PLAN_ENDS))
+      .not.toBe(snapshotConfigFingerprint(timeBoxed, BEFORE_PLAN_ENDS));
   });
 
   it("is stable over time while the plan the inputs resolve to stays the same", () => {
-    const offer = snap({ planInputs: SIGNUP_OFFER });
-    const laterDuringOffer = new Date(DURING_OFFER.getTime() + 2 * 86_400_000);
-    const laterAfterOffer = new Date(AFTER_OFFER.getTime() + 30 * 86_400_000);
-    expect(snapshotConfigFingerprint(offer, laterDuringOffer)).toBe(snapshotConfigFingerprint(offer, DURING_OFFER));
-    expect(snapshotConfigFingerprint(offer, laterAfterOffer)).toBe(snapshotConfigFingerprint(offer, AFTER_OFFER));
-    expect(snapshotConfigFingerprint(snap({ planInputs: PAID }), laterAfterOffer))
-      .toBe(snapshotConfigFingerprint(snap({ planInputs: PAID }), DURING_OFFER));
+    const timeBoxed = snap({ planInputs: TIME_BOXED });
+    const earlierBeforeEnd = new Date(BEFORE_PLAN_ENDS.getTime() - 2 * 86_400_000);
+    const laterAfterEnd = new Date(AFTER_PLAN_ENDS.getTime() + 30 * 86_400_000);
+    expect(snapshotConfigFingerprint(timeBoxed, earlierBeforeEnd))
+      .toBe(snapshotConfigFingerprint(timeBoxed, BEFORE_PLAN_ENDS));
+    expect(snapshotConfigFingerprint(timeBoxed, laterAfterEnd))
+      .toBe(snapshotConfigFingerprint(timeBoxed, AFTER_PLAN_ENDS));
+    expect(snapshotConfigFingerprint(snap({ planInputs: PAID }), laterAfterEnd))
+      .toBe(snapshotConfigFingerprint(snap({ planInputs: PAID }), BEFORE_PLAN_ENDS));
   });
 
   it("asks the entitlement resolver what the inputs mean and never reads inside the bag", () => {
-    const product = userEntitlements();
-    installUserEntitlements(staticUserEntitlements);
-    try {
-      expect(snapshotConfigFingerprint(snap({ planInputs: PAID }))).toBe(snapshotConfigFingerprint(snap()));
-    } finally {
-      installUserEntitlements(product);
-    }
+    installUserEntitlementsForTest(staticUserEntitlements);
+    expect(snapshotConfigFingerprint(snap({ planInputs: PAID }))).toBe(snapshotConfigFingerprint(snap()));
   });
 
   it("ignores a plan field that sits beside the bag", () => {
-    const beside = { ...snap(), ...PAID, selectedTier: "personal_pro", tier: "personal_pro" };
+    const beside = { ...snap(), ...PAID };
     expect(snapshotConfigFingerprint(beside as FleetBrokerUserSnapshot)).toBe(snapshotConfigFingerprint(snap()));
   });
 

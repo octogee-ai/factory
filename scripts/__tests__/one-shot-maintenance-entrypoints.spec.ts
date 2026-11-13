@@ -1,20 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { formatListUsersLine } from "../ops/list-users.js";
-import {
-  NOTIFICATION_SMOKE_DISPLAY_NAME,
-  NOTIFICATION_SMOKE_EMAIL,
-  NOTIFICATION_SMOKE_PASSWORD,
-} from "../product/ops/seed-test-notification-user.js";
 import { parseSeedTypingPhrasesArgs } from "../ops/seed-typing-phrases.js";
 import { TEST_TARGET } from "./fixtures/deployment.js";
 
-describe("seed smoke-notification utilities", () => {
-  it("seeds the fixed notification smoke identity", () => {
-    expect(NOTIFICATION_SMOKE_EMAIL).toBe("notif-smoke@test.octogee.com");
-    expect(NOTIFICATION_SMOKE_DISPLAY_NAME).toBe("Notif Smoke");
-    expect(NOTIFICATION_SMOKE_PASSWORD).toContain("NotifTest");
-  });
-
+describe("seed typing phrases", () => {
   it("parses seed typing phrase force mode and target project", () => {
     expect(parseSeedTypingPhrasesArgs([])).toEqual({ force: false, project: TEST_TARGET.firebaseProjectId });
     expect(parseSeedTypingPhrasesArgs(["--force", "--project=octogee"])).toEqual({

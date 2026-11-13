@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-
 import { describe, it, expect, vi } from "vitest";
 import {
   activeAgentProjectIds,
@@ -166,21 +164,6 @@ describe("buildUserAgent", () => {
       expect((agent.tools as { toolsBySender: Record<string, unknown> }).toolsBySender)
         .toEqual({});
     }
-  });
-
-  it("keeps productivity policy synchronized, excluding setup-only connection requests and default-agent-only owner automations", () => {
-    const manifest = JSON.parse(readFileSync(
-      new URL(
-        "../../infra/gateway/extensions/product/octogee-connector-tools/openclaw.plugin.json",
-        import.meta.url,
-      ),
-      "utf8",
-    )) as { contracts: { tools: string[] } };
-
-    expect(PRODUCTIVITY_TOOL_NAMES).toHaveLength(29);
-    expect([...PRODUCTIVITY_TOOL_NAMES].sort()).toEqual(manifest.contracts.tools
-      .filter((tool) => tool !== "octogee_connection_request" && tool !== "octogee_owner_automations").sort());
-    expect(PROJECT_AGENT_DENIED_TOOLS).toContain("octogee_owner_automations");
   });
 });
 

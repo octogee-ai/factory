@@ -1,4 +1,4 @@
-import "../product/lib/octogee-entitlements.js";
+import "../src/main.js";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { applicationDefault, getApps, initializeApp } from "firebase-admin/app";

@@ -1,15 +1,12 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   deriveDesiredModelCredentialState,
   legacyByotSyncUserDataFromModelCredentialState,
 } from "../lib/model-credential-sync.js";
 import { syncModelCredentialsForUser } from "../lib/model-credential-sync-runtime.js";
-import { octogeeUserEntitlements } from "@octogee/product-shared/types/octogee-entitlements";
-import { installUserEntitlements } from "../../shared/types/user-entitlements.js";
-
-beforeAll(() => installUserEntitlements(octogeeUserEntitlements));
+import { houseOnlyUserEntitlements, installUserEntitlementsForTest } from "./helpers/user-entitlements.js";
 
 const COMPLETE_USER = {
   username: "tester-70",
@@ -108,6 +105,7 @@ describe("deriveDesiredModelCredentialState", () => {
 
 describe("syncModelCredentialsForUser", () => {
   it("suppresses user OAuth state instead of materializing its runtime credential", async () => {
+    installUserEntitlementsForTest(houseOnlyUserEntitlements);
     const applyModelCredentialState = vi.fn(() => true);
     const restoreOauthStoreForSlug = vi.fn(async () => ({ restored: true, present: true }));
     const applyDefaultAgentModelPatch = vi.fn(async () => true);

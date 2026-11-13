@@ -32,7 +32,7 @@ describe("scripts vitest configs", () => {
     const alias = cfg.resolve?.alias as Record<string, string>;
 
     expect(alias["@shared"]).toBe(path.resolve(__dirname, "../../shared"));
-    expect(cfg.test?.include).toEqual(["__tests__/**/*.spec.ts", "product/__tests__/**/*.spec.ts"]);
+    expect(cfg.test?.include).toEqual(["__tests__/**/*.spec.ts"]);
     expect(cfg.test?.exclude).toContain("**/*.emulator.spec.ts");
   });
 

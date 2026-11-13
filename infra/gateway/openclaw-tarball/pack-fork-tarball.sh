@@ -31,6 +31,8 @@
 #   FORK_DIR  fork checkout    (default: ~/workspace/openclaw/openclaw)
 #   OUT_DIR   tarball dest dir (default: /tmp/openclaw-fork)
 # Set OPENCLAW_SKIP_BUILD=1 when the source was built in the same cycle.
+# Checks the fork against every infra/gateway/verify-*-plugin-contract.mjs in
+# this tree; run it from an overlay tree to include the product's contracts.
 # Prints the tarball path on success. ALWAYS run the Step 7 install-verify after.
 set -euo pipefail
 
@@ -51,9 +53,9 @@ if [ "${OPENCLAW_SKIP_BUILD:-0}" != "1" ]; then
   pnpm build >&2
 fi
 
-node "$PACKER_DIR/../product/verify-voice-plugin-contract.mjs" "$FORK_DIR" "$(git rev-parse HEAD)" >&2
-node "$PACKER_DIR/../product/verify-activity-plugin-contract.mjs" "$FORK_DIR" "$(git rev-parse HEAD)" >&2
-node "$PACKER_DIR/../verify-broker-plugin-contract.mjs" "$FORK_DIR" "$(git rev-parse HEAD)" >&2
+for contract in "$PACKER_DIR"/../verify-*-plugin-contract.mjs; do
+  node "$contract" "$FORK_DIR" "$(git rev-parse HEAD)" >&2
+done
 node "$PACKER_DIR/../verify-broker-plugin-runtime.mjs" "$FORK_DIR" "$(git rev-parse HEAD)" >&2
 
 mkdir -p "$OUT_DIR"

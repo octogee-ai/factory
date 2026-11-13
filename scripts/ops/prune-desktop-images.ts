@@ -1,5 +1,5 @@
 #!/usr/bin/env tsx
-import "../product/lib/octogee-entitlements.js";
+import "../src/main.js";
 import { parseArgs } from "node:util";
 import { applicationDefault, initializeApp } from "firebase-admin/app";
 import { operatorPlatformStateStore } from "../lib/platform-state-store.js";

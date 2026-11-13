@@ -99,7 +99,7 @@ export const UNIT_PACKAGES: readonly UnitPackage[] = [
   { name: JOBS.scripts, dir: "platform/scripts", typecheck: "npx tsc --noEmit", matchGatewayImageNpm: true },
   {
     name: JOBS.octogeeVoiceTools,
-    dir: "platform/infra/gateway/extensions/product/octogee-voice-tools",
+    dir: "product/infra/gateway/extensions/octogee-voice-tools",
     typecheck: 'echo "Voice SDK types run during native packaging; this job runs behavioral tests"',
   },
   {
@@ -109,7 +109,7 @@ export const UNIT_PACKAGES: readonly UnitPackage[] = [
   },
   {
     name: JOBS.octogeeActivityTools,
-    dir: "platform/infra/gateway/extensions/product/octogee-activity-tools",
+    dir: "product/infra/gateway/extensions/octogee-activity-tools",
     typecheck: "npm run typecheck --silent",
   },
   {
@@ -119,32 +119,32 @@ export const UNIT_PACKAGES: readonly UnitPackage[] = [
   },
   {
     name: JOBS.octogeeChatTools,
-    dir: "platform/infra/gateway/extensions/product/octogee-chat-tools",
+    dir: "product/infra/gateway/extensions/octogee-chat-tools",
     typecheck: 'echo "octogee-chat-tools — no tsconfig; vitest is the gate"',
   },
   {
     name: JOBS.octogeeConnectorTools,
-    dir: "platform/infra/gateway/extensions/product/octogee-connector-tools",
+    dir: "product/infra/gateway/extensions/octogee-connector-tools",
     typecheck: 'echo "octogee-connector-tools — no tsconfig; vitest is the gate"',
   },
   {
     name: JOBS.octogeeProjectTools,
-    dir: "platform/infra/gateway/extensions/product/octogee-project-tools",
+    dir: "product/infra/gateway/extensions/octogee-project-tools",
     typecheck: 'echo "octogee-project-tools — no tsconfig; vitest is the gate"',
   },
   {
     name: JOBS.octogeeBoardTools,
-    dir: "platform/infra/gateway/extensions/product/octogee-board-tools",
+    dir: "product/infra/gateway/extensions/octogee-board-tools",
     typecheck: 'echo "octogee-board-tools — no tsconfig; vitest is the gate"',
   },
   {
     name: JOBS.octogeeWebTools,
-    dir: "platform/infra/gateway/extensions/product/octogee-web-tools",
+    dir: "product/infra/gateway/extensions/octogee-web-tools",
     typecheck: 'echo "octogee-web-tools — no tsconfig; vitest is the gate"',
   },
   {
     name: JOBS.octogeeOpsTools,
-    dir: "platform/infra/gateway/extensions/product/octogee-ops-tools",
+    dir: "product/infra/gateway/extensions/octogee-ops-tools",
     typecheck: 'echo "octogee-ops-tools — no tsconfig; vitest is the gate"',
   },
   { name: JOBS.functions, dir: "functions", typecheck: TYPECHECK, nodeVersion: 22 },
@@ -198,7 +198,7 @@ export const OWNERSHIP: readonly Ownership[] = [
   { dir: "desktop/", jobs: [JOBS.desktop, JOBS.desktopPackage] },
   { dir: "platform/scripts/", jobs: [JOBS.scripts, JOBS.userLifecycleEmulator] },
   {
-    dir: "platform/infra/gateway/extensions/product/octogee-voice-tools/",
+    dir: "platform/infra/gateway/extensions/octogee-voice-tools/",
     jobs: [JOBS.octogeeVoiceTools, JOBS.tests],
   },
   {
@@ -206,7 +206,7 @@ export const OWNERSHIP: readonly Ownership[] = [
     jobs: [JOBS.octogeeBrokerTools],
   },
   {
-    dir: "platform/infra/gateway/extensions/product/octogee-activity-tools/",
+    dir: "platform/infra/gateway/extensions/octogee-activity-tools/",
     jobs: [JOBS.octogeeActivityTools],
   },
   {
@@ -214,27 +214,27 @@ export const OWNERSHIP: readonly Ownership[] = [
     jobs: [JOBS.octogeeAccessTools],
   },
   {
-    dir: "platform/infra/gateway/extensions/product/octogee-chat-tools/",
+    dir: "platform/infra/gateway/extensions/octogee-chat-tools/",
     jobs: [JOBS.octogeeChatTools],
   },
   {
-    dir: "platform/infra/gateway/extensions/product/octogee-connector-tools/",
+    dir: "platform/infra/gateway/extensions/octogee-connector-tools/",
     jobs: [JOBS.octogeeConnectorTools, JOBS.tests],
   },
   {
-    dir: "platform/infra/gateway/extensions/product/octogee-project-tools/",
+    dir: "platform/infra/gateway/extensions/octogee-project-tools/",
     jobs: [JOBS.octogeeProjectTools],
   },
   {
-    dir: "platform/infra/gateway/extensions/product/octogee-board-tools/",
+    dir: "platform/infra/gateway/extensions/octogee-board-tools/",
     jobs: [JOBS.octogeeBoardTools],
   },
   {
-    dir: "platform/infra/gateway/extensions/product/octogee-web-tools/",
+    dir: "platform/infra/gateway/extensions/octogee-web-tools/",
     jobs: [JOBS.octogeeWebTools],
   },
   {
-    dir: "platform/infra/gateway/extensions/product/octogee-ops-tools/",
+    dir: "platform/infra/gateway/extensions/octogee-ops-tools/",
     jobs: [JOBS.octogeeOpsTools, JOBS.tests],
   },
   { dir: "functions/", jobs: [JOBS.functions, JOBS.functionsEmulator] },
@@ -471,7 +471,12 @@ export const EDGES: readonly ScopeEdge[] = [
       JOBS.tests,
     ],
     reason:
-      "@octogee/product-shared is installed by product-core, functions, gateway-edge, glm-controller, octogee-api and scripts, aliased to source by app and tests, and imported by acceptance",
+      "@octogee/product-shared is installed by product-core, functions, gateway-edge, glm-controller and octogee-api, staged into the product scripts overlay, aliased to source by app and tests, and imported by acceptance",
+  },
+  {
+    when: "platform/infra/gateway/extensions/",
+    jobs: [JOBS.tests],
+    reason: "tests specs read every gateway extension's entry, manifest and package for the template hooks, tool guidance and image inventory",
   },
   {
     when: "artifact-worker/",

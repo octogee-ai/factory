@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -19,7 +20,7 @@ async function fixture() {
   return { root, lock, groups };
 }
 function prepare(root: string, lock: string, groups: string) {
-  return execFileSync(process.execPath, [path.resolve("../infra/gateway/isolated-toolchain/preinstall.mjs"), root], {
+  return execFileSync(process.execPath, [realpathSync(path.resolve("../infra/gateway/isolated-toolchain/preinstall.mjs")), root], {
     env: { ...process.env, BUILDER_TOOLCHAIN_LOCK_SHA256: lock, BUILDER_TOOL_GROUPS_SHA256: groups }, encoding: "utf8", stdio: "pipe",
   });
 }

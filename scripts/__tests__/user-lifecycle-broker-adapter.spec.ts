@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
 import {
   buildBrokeredLifecycleAdapter,
@@ -38,6 +38,7 @@ import { _resetBrokerProfileLogStateForTests, createReconcileConvergenceHooks, f
 import { saveAppliedFingerprints } from "../lib/applied-fingerprint-store.js";
 import { openClawRuntimeUpdateGuard } from "../lib/openclaw-runtime-update-guard.js";
 import { clearUserClaim, stubUserClaim, withUserClaim } from "./helpers/user-claim.js";
+import { houseOnlyUserEntitlements, installUserEntitlementsForTest } from "./helpers/user-entitlements.js";
 import { mattermostAccountSecretRef } from "../lib/mattermost-account-secrets.js";
 import { recordIsolatedNativeInitialState } from "../lib/isolated-native-initial-state.js";
 import { activationManifestTarPath, captureTargetWorkspaceIdentities, restoreTargetWorkspaceIdentities, captureSourceWorkspaceIdentities, writeActivationManifest, readActivationManifest as realReadActivationManifest } from "@octogee/core/migration-activation-manifest";
@@ -46,10 +47,6 @@ import { gatewayScopedJobId, signFleetRequest } from "../lib/fleet-signature.js"
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 import type { Request, Response } from "express";
 import { disableSystemConfigWatch, isSystemConfigWatchDisabled } from "../lib/system-config-watch-state.js";
-import { octogeeUserEntitlements } from "@octogee/product-shared/types/octogee-entitlements";
-import { installUserEntitlements } from "../../shared/types/user-entitlements.js";
-
-beforeAll(() => installUserEntitlements(octogeeUserEntitlements));
 
 describe("migration manifest export runtime wait", () => {
   afterEach(() => vi.useRealTimers());
@@ -3662,6 +3659,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
   });
 
   it("seeds a new house-only project agent with the compiled agent model, never the platform default", async () => {
+    installUserEntitlementsForTest(houseOnlyUserEntitlements);
     vi.stubEnv("GATEWAY_CLASS", "builder");
     stubUserClaim("alice");
     const snapshot = aliceSnapshot({
@@ -4867,6 +4865,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
   });
 
   it("preserves unrelated agents while explicitly confirming the full agent list replacement", async () => {
+    installUserEntitlementsForTest(houseOnlyUserEntitlements);
     const adapter = buildBrokeredLifecycleAdapter({
       client: mkClient(),
       rpc: mkGatewayRpc(),
@@ -5049,6 +5048,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
   });
 
   it("puts a house-only agent's final model and tools in the initial mount patch", async () => {
+    installUserEntitlementsForTest(houseOnlyUserEntitlements);
     const snapshot: FleetBrokerUserSnapshot = {
       uid: "uid-alice",
       slug: "alice",

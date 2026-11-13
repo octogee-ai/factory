@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { releaseOptions, deployRelease, fleetStoreStages } from './release-plan.mjs';
+import { releaseOptions, deployRelease, fleetStoreStages, installReleaseTools } from './release-plan.mjs';
 import { withBuildLock } from './build-lock.mjs';
 import { request } from './gcs.mjs';
 import { fleetStoreDependencies, withFleetStore } from './fleet-store.mjs';
@@ -23,8 +23,7 @@ const stage = (label, file, args, extra = {}) => new Promise((resolve, reject) =
   child.once('close', (code, signal) => code === 0 ? resolve() : reject(new Error(`${label} deployment exited with ${code ?? signal}`)));
 });
 try {
-  run('npm', ['ci', '--prefix', 'platform/scripts', '--no-audit', '--no-fund']);
-  run('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund']);
+  installReleaseTools(run);
   const { parse } = await import('yaml');
   const values = parse(readFileSync(`platform/helm/octogee/values.${options.environment}.yaml`, 'utf8'));
   const siteAfterPlatform = values?.global?.platformState?.requireCutoverImport === true;
