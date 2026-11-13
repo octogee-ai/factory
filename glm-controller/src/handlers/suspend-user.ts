@@ -87,6 +87,10 @@ async function checkRestoreFence(
   }
 }
 
+function suspendSignIn(steps: SuspensionStepRunner, product: ProductUserSuspension | undefined, uid: string): Promise<void> {
+  return product ? steps.run("suspend-auth", () => product.suspendSignIn(uid)) : steps.skip("suspend-auth");
+}
+
 function pendingMigrationRetry(deletionId: string, pending: boolean, failures: string[], previousFailures: number): OperationResult | null {
   if (pending) return { steps: [], success: false, error: "user migration is still settling", output: { deletionCleanupRetry: { deletionId } } };
   if (failures.length > previousFailures) return { steps: [], success: false, error: failures.join("; "), output: { deletionCleanupRetry: { deletionId } } };
@@ -140,8 +144,7 @@ export function createSuspendUserHandler(
     const productJob = { uid, deletionId, productContext: job.productContext };
 
     const product = deps.product;
-    if (product) await run("suspend-auth", () => product.suspendSignIn(uid));
-    else await skip("suspend-auth");
+    await suspendSignIn(steps, product, uid);
     let migrationPending = false;
     const failuresBeforeCancellation = failures.length;
     await run("cancel-customer-migrations", async () => {
