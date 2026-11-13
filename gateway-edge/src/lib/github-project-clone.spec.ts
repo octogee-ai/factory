@@ -125,6 +125,28 @@ describe("GitHub project clone broker", () => {
     }
   });
 
+  it("does not install a first checkout while another project mutation holds the lease", async () => {
+    const { destination, input } = seedProjectPlaceholder();
+    fs.rmSync(destination, { recursive: true });
+    const lease = acquireWorkspaceMutationLeaseSync({ workspaceDir: destination, gitDir: workspaceMutationLeaseGitDir(destination) });
+    expect(lease).not.toBeNull();
+    try {
+      await expect(cloneGithubProjectCheckout(input)).rejects.toThrow("workspace mutation lease unavailable");
+      expect(fs.existsSync(destination)).toBe(false);
+    } finally { lease?.release(); }
+  });
+
+  it("preserves a checkout installed by another operation during the clone", async () => {
+    const { destination, input } = seedProjectPlaceholder();
+    vi.mocked(spawn).mockImplementation((command, args, options) => {
+      if (args?.includes("config")) fs.mkdirSync(path.join(destination, ".git"), { recursive: true });
+      return realSpawn(command, args!, options);
+    });
+    await expect(cloneGithubProjectCheckout(input)).resolves.toBe("exists");
+    expect(fs.readFileSync(path.join(destination, "SOUL.md"), "utf8")).toBe("preserve this identity\n");
+    expect(fs.readdirSync(path.dirname(destination))).toEqual(["octo"]);
+  });
+
   it("keeps the clone credential in an environment variable for a scoped Git helper", () => {
     expect(githubCloneCredentialEnv("gho_secret")).toEqual({
       OCTOGEE_GITHUB_TOKEN: "gho_secret",
@@ -139,5 +161,14 @@ describe("GitHub project clone broker", () => {
       repository: { owner: "octogee-ai", repo: "octogee" },
       accessToken: "gho_secret",
     })).rejects.toThrow("invalid GitHub project clone request");
+  });
+
+  it("rejects a symlinked customers root before attempting a clone", async () => {
+    const { root, input } = seedProjectPlaceholder();
+    const alias = path.join(root, "linked-customers");
+    fs.symlinkSync(input.usersRoot, alias, "dir");
+    await expect(cloneGithubProjectCheckout({ ...input, usersRoot: alias }))
+      .rejects.toThrow("GitHub project clone parent is not a directory");
+    expect(spawn).not.toHaveBeenCalled();
   });
 });

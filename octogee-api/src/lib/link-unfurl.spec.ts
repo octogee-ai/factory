@@ -130,6 +130,14 @@ describe('parseLinkMetadata', () => {
     expect(meta.title).toBe('Just Title');
     expect(meta.favicon).toBe('https://x.com/favicon.ico');
   });
+
+  it('decodes metadata entities once in both titles and URLs', () => {
+    const html = '<meta property="og:title" content="&amp;lt; &quot;Title&quot;">'
+      + '<meta property="og:image" content="/card?q=&amp;lt;&amp;size=2">';
+    const meta = parseLinkMetadata(html, 'https://example.com/');
+    expect(meta.title).toBe('&lt; "Title"');
+    expect(meta.image).toBe('https://example.com/card?q=&lt;&size=2');
+  });
 });
 
 describe('fetchIconDataUri', () => {

@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Lock
 from urllib.parse import unquote, urlsplit
+from zoneinfo import available_timezones
 
 OUTPUT = os.environ.get("OCTO_OUTPUT_NAME", "OCTOGEE")
 COMPOSITOR = os.environ.get("OCTO_COMPOSITOR", "hyprland")
@@ -46,6 +47,14 @@ ASSET_TYPES = {
     ".xpm": "image/x-xpixmap",
     ".webp": "image/webp",
 }
+DESK_ASSETS = {
+    "": "index.html",
+    "index.html": "index.html",
+    "desk.js": "desk.js",
+    "desk-clock.js": "desk-clock.js",
+    "desk.css": "desk.css",
+    "character.svg": "character.svg",
+}
 
 
 def config_dir():
@@ -66,10 +75,6 @@ def application_dirs():
     system = os.environ.get("OCTO_APPLICATION_DIRS", "/usr/share/applications").split(":")
     data = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local/share")
     return [d for d in system if d] + [os.path.join(data, "applications")]
-
-
-def zoneinfo_dir():
-    return os.environ.get("OCTO_ZONEINFO_DIR", "/usr/share/zoneinfo")
 
 
 def icon_dirs():
@@ -149,7 +154,9 @@ def resize(width, height):
             if out.returncode != 0:
                 raise RuntimeError(out.stderr.decode(errors="replace"))
         actual = run(["xrandr", "--query"])
-        if actual.returncode != 0 or not re.search(rf"^VNC-0 connected {width}x{height}\+0\+0", actual.stdout.decode(errors="replace"), re.MULTILINE):
+        geometry = re.search(r"^VNC-0 connected (\d+)x(\d+)\+0\+0(?:[ \t]|$)",
+                             actual.stdout.decode(errors="replace"), re.MULTILINE)
+        if actual.returncode != 0 or not geometry or tuple(map(int, geometry.groups())) != (width, height):
             raise RuntimeError("X11 did not apply requested display size")
         for obsolete in (m for m in modes if m.startswith("octogee-") and m != mode):
             for command in (["xrandr", "--delmode", "VNC-0", obsolete], ["xrandr", "--rmmode", obsolete]):
@@ -313,12 +320,16 @@ def app_icon(entry_id):
 
 
 def launch(entry_id):
-    if not isinstance(entry_id, str) or not ENTRY_ID.match(entry_id):
+    if not isinstance(entry_id, str) or not ENTRY_ID.fullmatch(entry_id):
         raise ValueError("expected a desktop entry id")
-    if not any(app["id"] == entry_id for app in desktop_entries()):
+    desktop_id = next((app["id"] for app in desktop_entries() if app["id"] == entry_id), None)
+    if desktop_id is None:
         raise ValueError("no such desktop entry: %s" % entry_id)
+    argv = ["gtk-launch", "--", desktop_id + ".desktop"]
+    if COMPOSITOR != "openbox":
+        argv = ["uwsm-app", "--", *argv]
     subprocess.Popen(
-        (["gtk-launch", entry_id + ".desktop"] if COMPOSITOR == "openbox" else ["uwsm-app", "--", "gtk-launch", entry_id + ".desktop"]),
+        argv,
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
     )
     return {"launched": entry_id}
@@ -458,30 +469,25 @@ def write_egress_mode_file(path, content):
 
 
 def set_time_zone(zone):
-    if not isinstance(zone, str) or len(zone) > TIME_ZONE_MAX or not TIME_ZONE.match(zone):
+    if not isinstance(zone, str) or len(zone) > TIME_ZONE_MAX or not TIME_ZONE.fullmatch(zone):
         raise ValueError("timeZone must be an IANA zone name such as America/Chicago")
-    base = zoneinfo_dir()
-    path = os.path.normpath(os.path.join(base, zone))
-    if not path.startswith(base + os.sep) or not os.path.isfile(path):
+    installed_zone = next((name for name in available_timezones() if name == zone), None)
+    if installed_zone is None:
         raise ValueError("unknown time zone: %s" % zone)
-    out = run(["sudo", "-n", "timedatectl", "set-timezone", zone], timeout=30)
+    out = run(["sudo", "-n", "--", "timedatectl", "--", "set-timezone", installed_zone], timeout=30)
     if out.returncode != 0:
         raise RuntimeError(out.stderr.decode(errors="replace").strip() or "timedatectl set-timezone failed")
     return {"timeZone": zone}
 
 
 def desk_asset(name):
-    if name in ("", "index.html"):
-        name = "index.html"
-    if "/" in name or name in (".", "..") or name.startswith("."):
+    filename = DESK_ASSETS.get(name)
+    if filename is None:
         return None
-    ext = os.path.splitext(name)[1]
-    if ext not in ASSET_TYPES:
-        return None
-    path = os.path.join(desk_dir(), name)
+    path = os.path.join(desk_dir(), filename)
     try:
         with open(path, "rb") as handle:
-            return handle.read(), ASSET_TYPES[ext]
+            return handle.read(), ASSET_TYPES[os.path.splitext(filename)[1]]
     except OSError:
         return None
 

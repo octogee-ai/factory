@@ -142,7 +142,12 @@ function harness(
       kubectlCalls.push({ args, stdin: opts?.stdin });
       if (args[0] === "create") return { stdout: opts!.stdin!, stderr: "", code: 0 };
       if (args[0] === "get" && args[1] === "svc") return { stdout: bridge, stderr: "", code: 0 };
-      if (args[0] === "get" && args[1] === "secret") return { stdout: Buffer.from(`${args[2]}-value`).toString("base64"), stderr: "", code: 0 };
+      if (args[0] === "get" && args[1] === "secret") {
+        const data = Object.fromEntries(["token", "public-key", "agent-store-dsn"].map((key) => [
+          key, Buffer.from(`${args[2]}-${key}-value`).toString("base64"),
+        ]));
+        return { stdout: JSON.stringify({ data }), stderr: "", code: 0 };
+      }
       if (args[0] === "apply" && extra.applyFails) return { stdout: "", stderr: "configmaps is forbidden", code: 1 };
       if (args[0] === "apply") await extra.onApply?.(JSON.parse(JSON.parse(opts!.stdin!).data["routes.json"]));
       return { stdout: "", stderr: "", code: 0 };
@@ -532,7 +537,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     const bundle = h.docs["glmGateways/b-x/vm/runtime"] as Record<string, unknown>;
     expect(bundle.gatewayId).toBe("b-x");
     expect(bundle.builderIdentity).toEqual({ ownerUid: "UidA", builderSlug: "mama" });
-    expect((bundle.containers as Array<{ name: string; env: Record<string, string> }>)[0].env.OPENCLAW_GATEWAY_TOKEN).toBe("gateway-auth-token-b-x-value");
+    expect((bundle.containers as Array<{ name: string; env: Record<string, string> }>)[0].env.OPENCLAW_GATEWAY_TOKEN).toBe("gateway-auth-token-b-x-token-value");
     expect(bundle.hostAliases).toEqual({
       "octogee-api.octogee-test.svc.cluster.local": "172.20.7.7",
       "mattermost.octogee-test.svc.cluster.local": "172.20.7.7",

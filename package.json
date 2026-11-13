@@ -1,0 +1,21 @@
+{
+  "name": "@octogee/cloud",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "lint": "eslint . --max-warnings=0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.14.0",
+    "eslint-plugin-security": "^4.2.1",
+    "eslint-plugin-sonarjs": "^4.2.2",
+    "globals": "^17.14.0",
+    "typescript-eslint": "^8.72.1"
+  },
+  "overrides": {
+    "minimatch": "^11.0.1"
+  }
+}

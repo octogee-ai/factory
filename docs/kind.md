@@ -23,7 +23,7 @@ The cluster runs:
 
 - Docker, with at least 8 CPUs and 12 GB of memory for its VM
 - kind, kubectl and Helm (tested with kind 0.33, kubectl 1.36 and Helm 4.3)
-- Node.js 22 or later
+- Node.js 24
 - openssl, ssh-keygen and git
 - Go, to install the `octogee-fleet` command line
 - a model provider key, so agents can reply: an [OpenRouter](https://openrouter.ai/keys)
@@ -98,9 +98,15 @@ The script:
 Run it again at any time. Each step checks what exists, and secrets are kept
 between runs.
 
-The script keeps its state in `~/.local/state/octogee-kind/octogee`. Set
-`OCTOGEE_KIND_STATE` to keep it somewhere else. The state holds the kubeconfig,
-the generated secrets and the image digests.
+The script keeps its state in `~/.local/state/octogee-kind/<name>`, or under
+`$XDG_STATE_HOME` if you set it. `<name>` is the cluster name: `octogee` unless
+you pass `--name`. To keep the state elsewhere, set `OCTOGEE_KIND_STATE` to a
+parent folder; the state then goes in `$OCTOGEE_KIND_STATE/<name>`. It holds
+the kubeconfig, the generated secrets and the image digests.
+
+Keep to one install per host. Every cluster name shares the local registry on
+port 5001, and every install's fleet configuration expects the Admin API on
+port 18080.
 
 | Flag | Effect |
 | --- | --- |
@@ -112,7 +118,10 @@ the generated secrets and the image digests.
 | `--context-dir=<dir>` | Build from another platform tree. |
 | `--openclaw-dir=<dir>` | Take the OpenClaw build from local files instead of downloading it. The files keep their release names. |
 
-To use kubectl against the cluster, always name its kubeconfig and context:
+To use kubectl against the cluster, always name its kubeconfig and context.
+`STATE` is the state directory. `up` ends by printing the line that sets it,
+and `scripts/ops/kind-install.sh status` prints it again. With the default name
+and location:
 
 ```bash
 STATE=~/.local/state/octogee-kind/octogee
@@ -139,7 +148,8 @@ that lasts ten minutes. The script writes a configuration for the command line
 to `$STATE/fleet-config.json`.
 
 A new terminal has neither `STATE` nor `OCTOGEE_FLEET_CONFIG`, so set both in
-every terminal you open for the cluster:
+every terminal you open for the cluster. `status` prints both lines with your
+path; with the defaults they are:
 
 ```bash
 export STATE=~/.local/state/octogee-kind/octogee
@@ -191,6 +201,10 @@ When `user inspect` shows provisioning `complete` and the user mounted on
   in both;
 - a Gitea account `ws-lin` and an organization `lin`, with a `workspace`
   repository and an empty `system_config` repository.
+
+A user on a shared gateway works with their agent through Mattermost and Gitea.
+The OpenClaw Control UI is for users on an isolated gateway, and kind runs only
+shared gateways.
 
 ## Sign in to Mattermost and Gitea
 
@@ -265,7 +279,8 @@ no key and none is stored, the script warns that agents cannot reply.
 scripts/ops/kind-install.sh down
 ```
 
-This deletes the cluster, the local registry and the state directory. A build
+This deletes the cluster and the state directory. It also deletes the local
+registry, unless another kind cluster still pulls from it. A build
 without `--pull` creates the dedicated builder `octogee-cloud-kind`. It stays,
 with its cache; remove it with `docker buildx rm octogee-cloud-kind`.
 

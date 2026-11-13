@@ -52,4 +52,12 @@ describe("applied fingerprint store", () => {
     // No temp files left behind.
     expect(fs.readdirSync(dir)).toEqual(["applied-fingerprints.json"]);
   });
+
+  it("leaves a pre-existing temporary sibling alone when saving", () => {
+    const sibling = path.join(dir, ".applied-fingerprints.json.tmp");
+    fs.writeFileSync(sibling, "existing data");
+    saveAppliedFingerprints(file(), new Map([["alice", "fp-1"]]));
+    expect(fs.readFileSync(sibling, "utf8")).toBe("existing data");
+    expect(loadAppliedFingerprints(file()).get("alice")).toBe("fp-1");
+  });
 });

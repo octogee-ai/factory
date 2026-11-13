@@ -1,19 +1,18 @@
-import type { Firestore } from "firebase-admin/firestore";
 import type { UserAccountReader } from "@octogee/core/user-account";
 import { SYSTEM_CONFIG_REPO, WORKSPACE_REPO } from "@octogee/core/gitea-naming";
 import type { PlatformStateStore } from "@octogee/core/platform-state";
 import type { UserCleanupContext } from "../../handlers/deprovision-user.js";
+import type { ProductUserLifecycle } from "./user-lifecycle-product.js";
 import {
   MODEL_CREDENTIAL_STATIC_PROVIDER_IDS,
   byosubSecretNameForUser,
   MODEL_CREDENTIAL_SUBSCRIPTION_PROVIDER_IDS,
-  resolveUserByosubCredentialRefs,
 } from "@octogee/shared/types/model-credentials";
 
 export interface ContextDeps {
   store: PlatformStateStore;
   accounts: UserAccountReader;
-  db: Pick<Firestore, "collection" | "doc">;
+  product: Pick<ProductUserLifecycle, "cleanup"> | null;
 }
 
 function asString(v: unknown): string | null {
@@ -56,27 +55,17 @@ async function resolveProjects(
   };
 }
 
-async function resolveCredentialSecretNames(
-  db: ContextDeps["db"],
-  uid: string,
-  slug: string,
-): Promise<string[]> {
-  const integrationSnap = await db.doc(`users/${uid}/integrations/byosub`).get();
-  const byosub = resolveUserByosubCredentialRefs(uid, integrationSnap.data());
-  if (byosub.skipped.length > 0) {
-    throw new Error(`credential cleanup context invalid: ${byosub.skipped.join("; ")}`);
-  }
-  return Array.from(new Set([
+function platformCredentialSecretNames(uid: string, slug: string): string[] {
+  return [
     ...(slug ? MODEL_CREDENTIAL_STATIC_PROVIDER_IDS.map(
       (provider) => `byok-${slug}-${provider}`,
     ) : []),
-    ...byosub.refs.map((ref) => ref.secretName),
     ...MODEL_CREDENTIAL_SUBSCRIPTION_PROVIDER_IDS.map((provider) => {
       const secretName = byosubSecretNameForUser(uid, provider);
       if (!secretName) throw new Error(`credential cleanup context invalid uid: ${uid}`);
       return secretName;
     }),
-  ])).sort();
+  ];
 }
 
 async function resolveProjectAgentCleanup(
@@ -96,26 +85,6 @@ async function resolveProjectAgentCleanup(
       .map((secret) => `users/${uid}/secrets/${secret.secretId}`)
       .sort(),
   };
-}
-
-async function resolveChatArtifactIds(
-  db: ContextDeps["db"],
-  uid: string,
-  slug: string,
-): Promise<string[]> {
-  const jobs = db.collection("chatArtifactJobs");
-  const snapshots = await Promise.all([
-    jobs.where("ownerUid", "==", uid).get(),
-    ...(slug ? [jobs.where("workspaceSlug", "==", slug).get()] : []),
-  ]);
-  const ids = snapshots.flatMap((snapshot) => snapshot.docs).map((doc) => {
-    const artifactId = asString((doc.data() as Record<string, unknown>).artifactId);
-    if (!artifactId || !/^[a-f0-9]{64}$/.test(artifactId)) {
-      throw new Error(`chat artifact cleanup context invalid: ${doc.ref.path}`);
-    }
-    return artifactId;
-  });
-  return Array.from(new Set(ids)).sort();
 }
 
 async function resolveAgentImportIds(store: ContextDeps["store"], uid: string): Promise<string[]> {
@@ -142,9 +111,8 @@ export async function loadUserCleanupContext(
     mmCoachUserId,
     adminChannelId,
     projects,
-    credentialSecretNames,
+    productCleanup,
     projectAgentCleanup,
-    chatArtifactIds,
     agentImportIds,
   ] =
     await Promise.all([
@@ -153,9 +121,8 @@ export async function loadUserCleanupContext(
       resolveDefaultAgentMmUserId(deps.store, uid),
       resolveAdminChannelId(deps.store, slug),
       resolveProjects(deps.store, slug),
-      resolveCredentialSecretNames(deps.db, uid, slug),
+      deps.product?.cleanup(uid, slug) ?? { credentialSecretNames: [], chatArtifactIds: [] },
       resolveProjectAgentCleanup(deps.store, uid),
-      resolveChatArtifactIds(deps.db, uid, slug),
       resolveAgentImportIds(deps.store, uid),
     ]);
 
@@ -170,9 +137,12 @@ export async function loadUserCleanupContext(
     mmCoachUserId,
     adminChannelId,
     currentGatewayId: user.gateway?.gatewayId ?? null,
-    credentialSecretNames,
+    credentialSecretNames: Array.from(new Set([
+      ...platformCredentialSecretNames(uid, slug),
+      ...productCleanup.credentialSecretNames,
+    ])).sort(),
     ...projectAgentCleanup,
-    chatArtifactIds,
+    chatArtifactIds: Array.from(new Set(productCleanup.chatArtifactIds)).sort(),
     agentImportIds,
   };
 }

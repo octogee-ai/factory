@@ -1,19 +1,37 @@
 import { logger } from "../middleware/logging.js";
+import { containsAsciiControlCharacter } from "./text-validation.js";
 
 export const GITEA_URL =
   process.env.GITEA_URL ||
   `http://octogee-gitea-http.${process.env.K8S_NAMESPACE || "octogee"}.svc.cluster.local:3000`;
 
-const GITEA_HOST = (() => {
-  try { return new URL(GITEA_URL).host; } catch { return ""; }
-})();
-
-export function assertGiteaUrl(url: string): void {
-  let host: string;
-  try { host = new URL(url).host; } catch { throw new Error(`Invalid Gitea URL: ${url}`); }
-  if (!GITEA_HOST || host !== GITEA_HOST) {
-    throw new Error(`Refusing off-Gitea fetch: ${host} !== ${GITEA_HOST}`);
+function giteaEndpoint(path: string, query = ""): string {
+  const url = new URL(GITEA_URL);
+  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password || url.search || url.hash) {
+    throw new Error("Invalid GITEA_URL configuration");
   }
+  url.pathname = `${url.pathname.replace(/\/$/, "")}/api/v1/${path}`;
+  url.search = query;
+  return url.href;
+}
+
+function giteaName(name: string): string {
+  if (!/^[A-Za-z0-9_.-]+$/.test(name) || name === "." || name === "..") {
+    throw new Error("Invalid Gitea name");
+  }
+  return encodeURIComponent(name);
+}
+
+function encodeGiteaPathSegment(segment: string): string {
+  if (segment.includes("\\") || containsAsciiControlCharacter(segment) || segment.split("/").some((part) => part === "." || part === "..")) {
+    throw new Error("Invalid Gitea API path");
+  }
+  return encodeURIComponent(segment);
+}
+
+function giteaContentPath(org: string, repo: string, filePath?: string): string {
+  const base = `repos/${giteaName(org)}/${giteaName(repo)}/contents`;
+  return filePath === undefined ? base : `${base}/${filePath.split("/").map(encodeGiteaPathSegment).join("/")}`;
 }
 
 export function getToken(): string {
@@ -47,10 +65,15 @@ async function giteaFetch({
   if (sudo !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(sudo)) {
     throw new Error(`Refusing Gitea Sudo with unsafe identity: ${JSON.stringify(sudo)}`);
   }
-  const url = `${GITEA_URL}/api/v1/repos/${org}/${path}`;
-  assertGiteaUrl(url);
+  const queryStart = path.indexOf("?");
+  const endpoint = queryStart === -1 ? path : path.slice(0, queryStart);
+  const query = queryStart === -1 ? "" : path.slice(queryStart);
+  const [repo, ...parts] = endpoint.split("/");
+  const segments = [giteaName(org), giteaName(repo), ...parts.map((part) => encodeGiteaPathSegment(decodeURIComponent(part)))];
+  const url = giteaEndpoint(`repos/${segments.join("/")}`, query);
   const resp = await fetch(url, {
     method,
+    redirect: "error",
     headers: {
       Authorization: `token ${token}`,
       Accept: "application/json",
@@ -131,11 +154,11 @@ export async function giteaApiAsUserAllowNotFound(
 }
 
 export async function giteaDeleteRepo(org: string, repo: string): Promise<void> {
-  await giteaApiAllowNotFound(org, encodeURIComponent(repo), "DELETE");
+  await giteaApiAllowNotFound(org, repo, "DELETE");
 }
 
 export async function giteaGetRepo(org: string, repo: string): Promise<unknown | null> {
-  return giteaApiAllowNotFound(org, encodeURIComponent(repo));
+  return giteaApiAllowNotFound(org, repo);
 }
 
 export async function giteaDeleteVerifiedRepo(org: string, repo: string): Promise<void> {
@@ -167,14 +190,15 @@ function assertExpectedRepo(value: unknown, org: string, repo: string): void {
 
 async function giteaAdminFetch(
   method: string,
-  url: string,
+  path: string,
   body: unknown | undefined,
   allow404: boolean,
   quietErrorStatuses: readonly number[] = [],
 ): Promise<unknown | null> {
-  assertGiteaUrl(url);
+  const url = giteaEndpoint(path);
   const resp = await fetch(url, {
     method,
+    redirect: "error",
     headers: {
       Authorization: `token ${getToken()}`,
       Accept: "application/json",
@@ -203,9 +227,10 @@ export async function createProjectGiteaRepo(
   description: string,
   privateRepo: boolean,
 ): Promise<boolean> {
-  const url = `${GITEA_URL}/api/v1/orgs/${org}/repos`;
+  const repoPath = `repos/${giteaName(org)}/${giteaName(repoName)}`;
+  const path = `orgs/${giteaName(org)}/repos`;
   try {
-    await giteaAdminFetch("POST", url, {
+    await giteaAdminFetch("POST", path, {
       name: repoName,
       description,
       private: privateRepo,
@@ -217,7 +242,7 @@ export async function createProjectGiteaRepo(
     if ((err as Error & { status?: number })?.status === 409) {
       const existing = await giteaAdminFetch(
         "GET",
-        `${GITEA_URL}/api/v1/repos/${org}/${encodeURIComponent(repoName)}`,
+        repoPath,
         undefined,
         true,
       );
@@ -242,10 +267,10 @@ export async function giteaWriteFile(
   content: string,
   commitMessage: string,
 ): Promise<void> {
-  const url = `${GITEA_URL}/api/v1/repos/${org}/${repoName}/contents/${filePath}`;
-  const existing = await giteaAdminFetch("GET", url, undefined, true);
+  const path = giteaContentPath(org, repoName, filePath);
+  const existing = await giteaAdminFetch("GET", path, undefined, true);
   if (existing !== null) return;
-  await giteaAdminFetch("POST", url, {
+  await giteaAdminFetch("POST", path, {
     message: commitMessage,
     content: Buffer.from(content, "utf-8").toString("base64"),
     branch: "main",
@@ -258,15 +283,14 @@ export async function giteaWriteFiles(
   files: ReadonlyArray<{ path: string; content: string }>,
   commitMessage: string,
 ): Promise<void> {
-  const contentsUrl = `${GITEA_URL}/api/v1/repos/${org}/${repoName}/contents`;
   const absent: Array<{ path: string; content: string }> = [];
   for (const file of files) {
-    const existing = await giteaAdminFetch("GET", `${contentsUrl}/${file.path}`, undefined, true);
+    const existing = await giteaAdminFetch("GET", giteaContentPath(org, repoName, file.path), undefined, true);
     if (existing === null) absent.push(file);
     else logger.info("Repository seed preserved an existing file", { org, repoName, path: file.path });
   }
   if (absent.length === 0) return;
-  await giteaCreateFiles(contentsUrl, absent, commitMessage);
+  await giteaCreateFiles(giteaContentPath(org, repoName), absent, commitMessage);
 }
 
 export async function giteaWriteFilesIfAllAbsent(
@@ -276,20 +300,19 @@ export async function giteaWriteFilesIfAllAbsent(
   commitMessage: string,
 ): Promise<void> {
   if (files.length === 0) return;
-  const contentsUrl = `${GITEA_URL}/api/v1/repos/${org}/${repoName}/contents`;
   for (const file of files) {
-    const existing = await giteaAdminFetch("GET", `${contentsUrl}/${file.path}`, undefined, true);
+    const existing = await giteaAdminFetch("GET", giteaContentPath(org, repoName, file.path), undefined, true);
     if (existing !== null) return;
   }
-  await giteaCreateFiles(contentsUrl, files, commitMessage);
+  await giteaCreateFiles(giteaContentPath(org, repoName), files, commitMessage);
 }
 
 async function giteaCreateFiles(
-  contentsUrl: string,
+  contentsPath: string,
   files: ReadonlyArray<{ path: string; content: string }>,
   commitMessage: string,
 ): Promise<void> {
-  await giteaAdminFetch("POST", contentsUrl, {
+  await giteaAdminFetch("POST", contentsPath, {
     message: commitMessage,
     branch: "main",
     files: files.map((file) => ({

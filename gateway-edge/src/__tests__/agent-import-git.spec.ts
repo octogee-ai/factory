@@ -947,6 +947,26 @@ describe("scanAgentImportSecrets", () => {
     })).rejects.toMatchObject({ code: "secret_findings", findings: undefined });
   });
 
+  it("rejects a scanner report that grows after its initial size check", async () => {
+    const source = repo("agent-import-scan-growing", { "MEMORY.md": "memory\n" });
+    const realFstat = fs.fstatSync;
+    const stat = vi.spyOn(fs, "fstatSync");
+    try {
+      await expect(scanAgentImportSecrets(source, {
+        run: vi.fn((_command, args) => {
+          const reportPath = args[args.indexOf("--report-path") + 1];
+          fs.writeFileSync(reportPath, "[]");
+          stat.mockImplementationOnce(((fd: number) => {
+            const initial = realFstat(fd);
+            fs.truncateSync(reportPath, (4 * 1024 * 1024) + 1);
+            return initial;
+          }) as typeof fs.fstatSync);
+          return { status: 1, stdout: "", stderr: "" };
+        }),
+      })).rejects.toMatchObject({ code: "secret_findings" });
+    } finally { stat.mockRestore(); }
+  });
+
   it("fails closed when status one has no reported findings", async () => {
     const source = repo("agent-import-scan-empty", { "MEMORY.md": "memory\n" });
     await expect(scanAgentImportSecrets(source, {

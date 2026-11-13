@@ -2,23 +2,29 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+
+const TEST_ROOT = await vi.hoisted(async () => {
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  return mkdtempSync(join(tmpdir(), "octogee-git-metadata-"));
+});
 
 vi.mock("../lib/config.js", () => ({
   log: () => {},
   dlog: () => {},
   GIT_API_URL: "https://gitea.test/api/v1",
   GIT_SSH_HOST: "gitea.test",
-  OPENCLAW_DIR: "/tmp/octogee-git-metadata-adversarial",
-  CUSTOMERS_DIR: "/tmp/octogee-git-metadata-adversarial/customers",
-  CUSTOMER_KEYS_DIR: "/tmp/octogee-git-metadata-adversarial/keys",
-  AGENTS_DIR: "/tmp/octogee-git-metadata-adversarial/agents",
+  OPENCLAW_DIR: TEST_ROOT,
+  CUSTOMERS_DIR: path.join(TEST_ROOT, "customers"),
+  CUSTOMER_KEYS_DIR: path.join(TEST_ROOT, "keys"),
+  AGENTS_DIR: path.join(TEST_ROOT, "agents"),
 }));
 
 const { userRepositoryHasCanonicalRemote, externalizeUserGitDir, gitExec } =
   await import("../lib/git.js");
 
-const TEST_ROOT = "/tmp/octogee-git-metadata-adversarial";
 const CUSTOMERS_DIR = path.join(TEST_ROOT, "customers");
 const METADATA_ROOT = path.join(TEST_ROOT, "git-metadata");
 const TRUST_RECEIPT_SUFFIX = ".octogee-trusted-v3";
@@ -237,16 +243,16 @@ function metadataCases(): RepoCase[] {
 describe("user Git metadata refresh", () => {
   const temporaryRoots: string[] = [];
 
-  beforeEach(() => {
-    fs.rmSync(TEST_ROOT, { recursive: true, force: true });
-  });
-
   afterEach(() => {
-    fs.rmSync(TEST_ROOT, { recursive: true, force: true });
+    for (const name of fs.readdirSync(TEST_ROOT)) {
+      fs.rmSync(path.join(TEST_ROOT, name), { recursive: true, force: true });
+    }
     for (const root of temporaryRoots.splice(0)) {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  afterAll(() => fs.rmSync(TEST_ROOT, { recursive: true, force: true }));
 
   it.each(metadataCases())(
     "rebuilds $name metadata only from canonical main while preserving visible M/D/?? worktree state",

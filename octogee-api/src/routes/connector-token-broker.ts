@@ -1,3 +1,4 @@
+import { brokerRequestLimit } from "../middleware/broker-request-limit.js";
 import { Router, type Request, type Response } from "express";
 
 import {
@@ -463,7 +464,7 @@ export function createConnectorTokenBrokerRoutes(opts: {
   const { store } = opts;
   const readPublicCanvasFile = opts.readPublicCanvasFile ?? NO_PUBLIC_CANVAS;
 
-  router.post(["/access-token", "/github-project-clone-access"], async (req, res) => {
+  router.post(["/access-token", "/github-project-clone-access"], brokerRequestLimit(1800), async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
 

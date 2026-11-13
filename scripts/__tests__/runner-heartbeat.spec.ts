@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -42,6 +42,15 @@ describe("runner-heartbeat write/read", () => {
 
   it("returns [] when the dir does not exist yet", () => {
     expect(readHeartbeats(join(tmpdir(), "rhb-does-not-exist-xyz"))).toEqual([]);
+  });
+
+  it("publishes a heartbeat without touching a pre-existing temporary sibling", () => {
+    const dir = tmpDir();
+    const sibling = join(dir, "provisioner.json.tmp");
+    writeFileSync(sibling, "existing data");
+    writeHeartbeat(dir, hb());
+    expect(readFileSync(sibling, "utf8")).toBe("existing data");
+    expect(readHeartbeats(dir)).toEqual([hb()]);
   });
 
   it("skips non-json and unparseable files without throwing", () => {

@@ -173,4 +173,25 @@ ${KUBECTL}`);
     expect(result.stderr).toContain(message);
     expect(host.calls()).toEqual([]);
   });
+
+  const downBeside = (node: string, pullsFromRegistry: boolean) => {
+    host.stub("kind", `[[ "$1 $2 $3" == "get nodes --all-clusters" ]] && echo ${node}; exit 0`);
+    host.stub("docker", `[[ "$1 $2" == "exec ${node}" ]] && exit ${pullsFromRegistry ? 0 : 1}; exit 0`);
+    return run(["down"]);
+  };
+  const registryRemoved = () => host.calls().includes("docker KUBECONFIG=unset rm -f octogee-kind-registry");
+
+  it("keeps the shared registry while another cluster from this script still pulls from it", () => {
+    const result = downBeside("llmbroker-control-plane", true);
+    expect(result.status, result.stderr).toBe(0);
+    expect(registryRemoved()).toBe(false);
+    expect(host.calls()).toContain(`kind KUBECONFIG=unset delete cluster --name octogee --kubeconfig ${state}/octogee/kubeconfig`);
+    expect(result.stdout).toContain("Keeping registry octogee-kind-registry");
+  });
+
+  it("deletes the shared registry once no remaining kind cluster pulls from it", () => {
+    const result = downBeside("unrelated-control-plane", false);
+    expect(result.status, result.stderr).toBe(0);
+    expect(registryRemoved()).toBe(true);
+  });
 });

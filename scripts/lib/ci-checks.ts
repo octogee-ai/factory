@@ -150,6 +150,8 @@ const QUALITY_HOOK = /^[^/]+\/scripts\/ci\/quality\.d\/([^/]+)\.sh$/;
 const INFRASTRUCTURE_CONFIG = /(^|\/)Dockerfile[^/]*$|\.(?:tf|ya?ml)$|^(?:platform\/(?:helm|terraform|infra)|\.github)\//;
 const RUST_AUDIT_INPUTS = ["artifact-worker/renderer/", "platform/scripts/ci/", "ci/"];
 
+const QUALITY_INSTALLS: Record<string, string[]> = { eslint: [".", "platform"], knip: ["."] };
+
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 function qualityCommand(name: string, files?: string[]): string {
   const command = ["bash", "platform/scripts/ci/quality.sh", name];
@@ -159,7 +161,7 @@ function qualityCommand(name: string, files?: string[]): string {
 
 function qualityJobs(paths: string[], full: boolean): CheckJob[] {
   const job = (name: string, command: string): CheckJob =>
-    ({ name, directory: ".", nodeVersion: DEFAULT_NODE_VERSION, installs: name === "eslint" || name === "knip" ? ["."] : [], commands: [command] });
+    ({ name, directory: ".", nodeVersion: DEFAULT_NODE_VERSION, installs: QUALITY_INSTALLS[name] ?? [], commands: [command] });
   const jobs: CheckJob[] = [];
   const hooked = new Set(paths.map(path => QUALITY_HOOK.exec(path)?.[1]));
   const pushRepoWide = (name: string, triggered: boolean): boolean => {

@@ -1,6 +1,4 @@
-import type { Firestore } from "firebase-admin/firestore";
 import type { OpaqueMap, PlatformStateStore } from "@octogee/core/platform-state";
-import type { UserErasureCollectionPolicy } from "./user-firestore-erasure.js";
 
 export type ProductContext = OpaqueMap;
 
@@ -18,6 +16,8 @@ export interface SuspensionStepRunner {
 export type SuspensionPhase = (job: UserLifecycleJob, steps: SuspensionStepRunner) => Promise<void>;
 
 export interface ProductUserSuspension {
+  suspendSignIn(uid: string): Promise<void>;
+  afterVisibilityDeactivation: SuspensionPhase;
   afterGatewayRetirement: SuspensionPhase;
   afterModelBrokerRevocation: SuspensionPhase;
 }
@@ -33,22 +33,50 @@ export interface ErasureVerification {
   pending(job: UserLifecycleJob): { error: string; output: Record<string, unknown>; retryAfterMs: number };
 }
 
+export interface UserDataScope {
+  uid: string;
+  slug: string;
+  email: string | null;
+  chatArtifactIds: readonly string[];
+  agentImportIds: readonly string[];
+  currentOperationId: string;
+}
+
+export interface ProductUserData {
+  eraseStorage(scope: UserDataScope): Promise<void>;
+  eraseVmHome(slug: string): Promise<{ deleted: number }>;
+  eraseRecords(scope: UserDataScope): Promise<void>;
+  deleteSignIn(uid: string): Promise<void>;
+  remaining(scope: UserDataScope): Promise<string[]>;
+  undrainedArtifactIds(artifactIds: readonly string[]): Promise<string[]>;
+}
+
 export interface ProductUserErasure {
   steps: readonly ErasureStep[];
   verification: ErasureVerification;
 }
 
+export interface ProductUserCleanup {
+  credentialSecretNames: readonly string[];
+  chatArtifactIds: readonly string[];
+}
+
+export interface ProductUserArchive {
+  fields: Record<string, unknown>;
+  usageRollup: Record<string, unknown>;
+}
+
 export interface ProductUserLifecycle {
   discover(uid: string): Promise<ProductContext>;
+  cleanup(uid: string, slug: string): Promise<ProductUserCleanup>;
   suspension: ProductUserSuspension;
   erasure: ProductUserErasure;
+  data: ProductUserData;
   verificationContext(productContext: ProductContext): ProductContext | null;
-  archiveFields(user: Record<string, unknown> | undefined): Record<string, unknown>;
-  firestoreCollections: Readonly<Record<string, UserErasureCollectionPolicy>>;
+  archive(uid: string, account: Record<string, unknown> | undefined): Promise<ProductUserArchive>;
 }
 
 export type ProductUserLifecycleFactory = (deps: {
-  db: Firestore;
   store: PlatformStateStore;
   log: (message: string) => void;
 }) => ProductUserLifecycle;

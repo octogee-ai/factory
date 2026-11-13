@@ -680,7 +680,8 @@ export async function writeActivationManifest(
   const relPath = activationManifestTarPath(manifest.slug);
   const fullPath = path.join(rootDir, relPath);
   await fs.mkdir(path.dirname(fullPath), { recursive: true, mode: 0o700 });
-  const temporary = `${fullPath}.${randomUUID()}.tmp`;
+  const staging = await fs.mkdtemp(path.join(path.dirname(fullPath), ".activation-"));
+  const temporary = path.join(staging, "manifest");
   try {
     const file = await fs.open(temporary, "wx", 0o600);
     try { await file.writeFile(contents, "utf-8"); await file.sync(); }
@@ -688,7 +689,7 @@ export async function writeActivationManifest(
     await fs.rename(temporary, fullPath);
     const directory = await fs.open(path.dirname(fullPath), "r");
     try { await directory.sync(); } finally { await directory.close(); }
-  } finally { await fs.rm(temporary, { force: true }); }
+  } finally { await fs.rm(staging, { recursive: true, force: true }); }
   return { cwd: rootDir, path: relPath };
 }
 

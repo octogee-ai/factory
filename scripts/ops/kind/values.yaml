@@ -119,6 +119,7 @@ glm-controller:
     nodeSelector: {}
     computeClass: ""
     runtimeClassName: ""
+    podAntiAffinity: preferred
     pdb:
       enabled: false
     env:

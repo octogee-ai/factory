@@ -6,93 +6,14 @@ import { MalformedRecordError } from "@octogee/core/platform-state";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { loadUserCleanupContext, type ContextDeps } from "../lib/user-ops/cleanup-context";
 
-interface DocSnap {
-  exists: boolean;
-  data: () => Record<string, unknown> | undefined;
-  id?: string;
-}
-
-interface DocRef {
-  get: () => Promise<DocSnap>;
-}
-
-interface CollectionRef {
-  doc: (id: string) => DocRef;
-  get: () => Promise<{ docs: Array<DocSnap & { id: string; data: () => unknown }> }>;
-  where: (field: string, op: "==", value: unknown) => {
-    get: () => Promise<{ docs: Array<DocSnap & { id: string; data: () => unknown }> }>;
-  };
-}
-
-interface DbStub {
-  collection: (path: string) => CollectionRef;
-  doc: (path: string) => DocRef;
-}
-
-function buildDb(initialDocs: Record<string, Record<string, unknown> | undefined>): DbStub {
-  return {
-    collection(path: string): CollectionRef {
-      return {
-        doc(id: string): DocRef {
-          const fullPath = `${path}/${id}`;
-          return {
-            get: async () => {
-              const data = initialDocs[fullPath];
-              return {
-                exists: data !== undefined,
-                data: () => data,
-                id,
-              };
-            },
-          };
-        },
-        get: async () => {
-          
-          const prefix = `${path}/`;
-          const matches = Object.entries(initialDocs)
-            .filter(([k, v]) => v !== undefined && k.startsWith(prefix) && !k.slice(prefix.length).includes("/"))
-            .map(([k, v]) => ({
-              id: k.slice(prefix.length),
-              exists: true,
-              data: () => v,
-            }));
-          return { docs: matches as Array<DocSnap & { id: string; data: () => unknown }> };
-        },
-        where: (field: string, _op: "==", value: unknown) => ({
-          get: async () => {
-            const prefix = `${path}/`;
-            const matches = Object.entries(initialDocs)
-              .filter(([key, data]) =>
-                data !== undefined &&
-                key.startsWith(prefix) &&
-                !key.slice(prefix.length).includes("/") &&
-                data[field] === value)
-              .map(([key, data]) => ({
-                id: key.slice(prefix.length),
-                exists: true,
-                data: () => data,
-              }));
-            return { docs: matches as Array<DocSnap & { id: string; data: () => unknown }> };
-          },
-        }),
-      };
-    },
-    doc(path: string): DocRef {
-      return {
-        get: async () => {
-          const data = initialDocs[path];
-          return { exists: data !== undefined, data: () => data };
-        },
-      };
-    },
-  };
-}
-
 function agentImportDoc(uid: string, importId: string): Record<string, unknown> {
   return { uid, importId, status: "complete", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
 }
 
-function contextDeps(initialDocs: Record<string, Record<string, unknown> | undefined>): ContextDeps {
+function contextDeps(
+  initialDocs: Record<string, Record<string, unknown> | undefined>,
+  product: ContextDeps["product"] = null,
+): ContextDeps {
   const account = (uid: string) => {
     const data = initialDocs[`users/${uid}`];
     return data === undefined ? null : userAccountFromData(uid, data);
@@ -105,7 +26,7 @@ function contextDeps(initialDocs: Record<string, Record<string, unknown> | undef
   return {
     store: createDocumentFixtureStore(initialDocs),
     accounts,
-    db: buildDb(initialDocs) as unknown as ContextDeps["db"],
+    product,
   };
 }
 
@@ -310,36 +231,7 @@ const deps = contextDeps({
     });
   });
 
-  it("captures every persisted model credential secret name before deletion", async () => {
-    const deps = contextDeps({
-      "users/uid-alice": { username: "alice" },
-      "users/uid-alice/system/config": {
-        modelCredential: { secretName: "untrusted-firestore-secret-name" },
-      },
-      "users/uid-alice/integrations/byosub": {
-        providers: {
-          openai: { provider: "openai", connected: true, status: "connected" },
-          anthropic: { provider: "anthropic", connected: true, status: "connected" },
-        },
-      },
-    });
-    const ctx = await loadUserCleanupContext(
-      deps,
-      "uid-alice",
-    );
-    expect(ctx?.credentialSecretNames).toEqual([
-      "byok-alice-anthropic",
-      "byok-alice-grok",
-      "byok-alice-minimax",
-      "byok-alice-openai",
-      "byok-alice-openai-compatible",
-      "byok-alice-openrouter",
-      "byosub-uid-alice-anthropic",
-      "byosub-uid-alice-openai",
-    ]);
-  });
-
-  it("captures deterministic BYOS secret names even when a callback has not persisted its integration", async () => {
+  it("captures the platform's model credential secret names without a product", async () => {
     const deps = contextDeps({ "users/uid-alice": { username: "alice" } });
 
     const ctx = await loadUserCleanupContext(
@@ -385,30 +277,33 @@ const deps = contextDeps({
     ]);
   });
 
-  it("captures artifact object IDs owned by the user or their workspace", async () => {
-    const deps = contextDeps({
-      "users/uid-alice": { username: "alice" },
-      "chatArtifactJobs/aaa": {
-        artifactId: "a".repeat(64),
-        ownerUid: "uid-alice",
-        workspaceSlug: "other",
-      },
-      "chatArtifactJobs/bbb": {
-        artifactId: "b".repeat(64),
-        ownerUid: "uid-collaborator",
-        workspaceSlug: "alice",
-      },
-      "chatArtifactJobs/ccc": {
-        artifactId: "c".repeat(64),
-        ownerUid: "uid-other",
-        workspaceSlug: "other",
-      },
+  it("adds the product's credential secrets and chat artifacts to the platform context", async () => {
+    const cleanup = async (uid: string, slug: string) => ({
+      credentialSecretNames: [`product-${uid}`, `byok-${slug}-openai`],
+      chatArtifactIds: ["b".repeat(64), "a".repeat(64), "b".repeat(64)],
     });
-    const ctx = await loadUserCleanupContext(
-      deps,
-      "uid-alice",
-    );
+    const deps = contextDeps({ "users/uid-alice": { username: "alice" } }, { cleanup });
+
+    const ctx = await loadUserCleanupContext(deps, "uid-alice");
+
+    expect(ctx?.credentialSecretNames).toEqual([
+      "byok-alice-anthropic",
+      "byok-alice-grok",
+      "byok-alice-minimax",
+      "byok-alice-openai",
+      "byok-alice-openai-compatible",
+      "byok-alice-openrouter",
+      "byosub-uid-alice-anthropic",
+      "byosub-uid-alice-openai",
+      "product-uid-alice",
+    ]);
     expect(ctx?.chatArtifactIds).toEqual(["a".repeat(64), "b".repeat(64)]);
+  });
+
+  it("captures no chat artifacts without a product", async () => {
+    const ctx = await loadUserCleanupContext(contextDeps({ "users/uid-alice": { username: "alice" } }), "uid-alice");
+
+    expect(ctx?.chatArtifactIds).toEqual([]);
   });
 
   it("captures every agent import staging prefix owned by the user", async () => {
@@ -426,16 +321,10 @@ const deps = contextDeps({
     expect(ctx?.agentImportIds).toEqual(["import-owned"]);
   });
 
-  it("fails context capture when a connected credential leaf is malformed", async () => {
-    const deps = contextDeps({
-      "users/uid-alice": { username: "alice" },
-      "users/uid-alice/integrations/byosub": {
-        providers: { openai: { connected: true, status: "connected" } },
-      },
-    });
-    await expect(loadUserCleanupContext(
-      deps,
-      "uid-alice",
-    )).rejects.toThrow(/malformed provider leaf/);
+  it("fails context capture when the product cannot read its cleanup context", async () => {
+    const cleanup = async () => { throw new Error("credential cleanup context invalid: malformed provider leaf"); };
+    const deps = contextDeps({ "users/uid-alice": { username: "alice" } }, { cleanup });
+
+    await expect(loadUserCleanupContext(deps, "uid-alice")).rejects.toThrow(/malformed provider leaf/);
   });
 });
