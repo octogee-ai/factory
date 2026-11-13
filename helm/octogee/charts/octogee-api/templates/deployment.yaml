@@ -107,6 +107,10 @@ spec:
             - name: GATEWAY_SERVICE_ACCOUNT
               value: {{ .Values.gatewayServiceAccount | quote }}
             {{- end }}
+            {{- with .Values.featureFlags.enabled }}
+            - name: ENABLED_FEATURE_FLAGS
+              value: {{ join "," . | quote }}
+            {{- end }}
             {{- include "octogee.blobStoreEnv" . | nindent 12 }}
             {{- with (include "octogee.platformStateEnv" .) }}{{ . | nindent 12 }}{{ end }}
             {{- include "octogee.runtimeSecretStoreEnv" . | nindent 12 }}

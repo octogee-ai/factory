@@ -45,7 +45,7 @@ import { operatorRailRegistry, type ModelBrokerRailRegistry } from "./lib/model-
 import { platformStateBrokerRecords, type BrokerRecords } from "./lib/broker-records.js";
 import { createFeatureRoutes } from "./routes/features.js";
 import type { ProductNotifications } from "./lib/user-notifications.js";
-import { DisabledFeatureFlagProvider, FeaturePolicy } from "./lib/feature-policy.js";
+import { FeaturePolicy, configuredFeatureFlagProvider } from "./lib/feature-policy.js";
 import { createIsolatedGatewayRoutes } from "../../gateway-edge/src/routes/user/gateways.js";
 import { createProjectCreateRoutes } from "../../gateway-edge/src/routes/projects/create.js";
 import { createProjectRepoSourceRoutes } from "../../gateway-edge/src/routes/projects/repo-source.js";
@@ -431,7 +431,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
     readGithubToken: readFreshGithubToken,
   });
   mountRouteTable(app, product?.routesBeforeMiddleware ?? []);
-  const featurePolicy = opts.featurePolicy ?? product?.featurePolicy ?? new FeaturePolicy(new DisabledFeatureFlagProvider(), { logger });
+  const featurePolicy = opts.featurePolicy ?? product?.featurePolicy ?? new FeaturePolicy(configuredFeatureFlagProvider(process.env), { logger });
   const productRouteDeps: ProductRouteDeps = { featurePolicy };
   const modelBrokerRails = opts.product?.modelBrokerRails ?? operatorRailRegistry();
   const brokerRecords = product?.brokerRecords ?? platformStateBrokerRecords(platformStateStore);
