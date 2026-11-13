@@ -245,6 +245,21 @@ describe("Mattermost /ui command", () => {
     expect(statuses[300]).toBe(429);
   });
 
+  it("keeps one user's flood of signed /ui commands from locking out other users behind the same router", async () => {
+    const { docs, store } = fixture(Date.now());
+    const { app } = commandApp(store);
+
+    for (let attempt = 0; attempt < 301; attempt += 1) {
+      const flood = await invoke(app, slashCommand(STRANGER_MM));
+      expect(flood.status).toBe(200);
+    }
+    const owner = await invoke(app, slashCommand(OWNER_MM));
+
+    expect(owner.status).toBe(200);
+    expect(owner.body.text).toContain("/openclaw/launch/");
+    expect(ticketPaths(docs)).toHaveLength(1);
+  });
+
   it("refuses a signed request whose token is not the team's /ui command, such as an outgoing webhook", async () => {
     const { docs, store } = fixture(Date.now());
 

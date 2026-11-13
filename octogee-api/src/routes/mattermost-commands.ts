@@ -15,7 +15,7 @@ import {
 const MAX_COMMAND_BYTES = 16 * 1024;
 const MATTERMOST_ID = /^[a-z0-9]{26}$/;
 const MAX_TOKEN_LENGTH = 128;
-const MAX_REQUESTS_PER_CLIENT_PER_MINUTE = 300;
+const MAX_REJECTED_REQUESTS_PER_CLIENT_PER_MINUTE = 300;
 const MAX_COMMANDS_PER_USER_PER_MINUTE = 6;
 
 export interface MattermostCommandRoutesDeps {
@@ -99,9 +99,10 @@ export function createMattermostCommandRoutes(deps: MattermostCommandRoutesDeps)
     res.locals.slashCommand = command;
     next();
   };
-  const perClient = rateLimit({
+  const rejectedPerClient = rateLimit({
     windowMs: 60_000,
-    limit: MAX_REQUESTS_PER_CLIENT_PER_MINUTE,
+    limit: MAX_REJECTED_REQUESTS_PER_CLIENT_PER_MINUTE,
+    skipSuccessfulRequests: true,
     standardHeaders: false,
     legacyHeaders: false,
     keyGenerator: (req) => ipKeyGenerator(req.ip ?? "unknown"),
@@ -120,7 +121,7 @@ export function createMattermostCommandRoutes(deps: MattermostCommandRoutesDeps)
   const router = Router();
   router.post(
     "/control-ui",
-    perClient,
+    rejectedPerClient,
     express.raw({ type: () => true, limit: MAX_COMMAND_BYTES }),
     verified,
     perUser,
