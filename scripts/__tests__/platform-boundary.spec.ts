@@ -29,7 +29,7 @@ const fixtureManifest: PlatformBoundaryManifest = {
 
 describe("platform boundary", () => {
   it("resolves relative, package and alias imports to repository sources", () => {
-    const from = resolve(repoRoot, "platform/octogee-api/src/index.ts");
+    const from = resolve(repoRoot, "platform/octogee-api/src/main.ts");
     expect(resolveImport("./app.js", from, repoRoot)).toBe(resolve(repoRoot, "platform/octogee-api/src/app.ts"));
     expect(resolveImport("@octogee/core/deployment-environment", from, repoRoot))
       .toBe(resolve(repoRoot, "platform/core/src/deployment-environment.ts"));
@@ -60,7 +60,7 @@ describe("platform boundary", () => {
   });
 
   it("keeps the product composition roots out of the platform entrypoints", () => {
-    for (const root of ["platform/octogee-api/src/index.ts", "platform/octogee-api/src/product.ts", "platform/gateway-edge/src/routes/product-cluster-routes.ts", "product/glm-controller/src/main.ts", "platform/gateway-edge/src/product-main.ts", "functions/src/index.ts"]) {
+    for (const root of ["product/octogee-api/src/index.ts", "product/octogee-api/src/product.ts", "product/octogee-api/src/main.ts", "platform/gateway-edge/src/routes/product-cluster-routes.ts", "product/glm-controller/src/main.ts", "platform/gateway-edge/src/product-main.ts", "functions/src/index.ts"]) {
       expect(manifest.platformEntrypoints).not.toContain(root);
       expect(report.reached).not.toContain(root);
     }

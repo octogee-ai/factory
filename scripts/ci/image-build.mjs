@@ -9,8 +9,8 @@ const API_OVERLAYS = { overlay: "octogee-api", "gateway-edge-overlay": "gateway-
 export const IMAGE_BUILDS = {
   "glm-controller": { dockerfile: "platform/glm-controller/Dockerfile", context: PLATFORM_CONTEXT, overlays: { overlay: "glm-controller" } },
   "artifact-worker": { dockerfile: "artifact-worker/Dockerfile", context: "." },
-  "octogee-api": { dockerfile: "platform/octogee-api/Dockerfile", context: PLATFORM_CONTEXT, overlays: API_OVERLAYS, contexts: { "obsidian-connect": "obsidian-connect" } },
-  "octogee-project-runner": { dockerfile: "platform/octogee-api/Dockerfile", context: PLATFORM_CONTEXT, target: "project-runner", overlays: API_OVERLAYS, contexts: { "obsidian-connect": "obsidian-connect" } },
+  "octogee-api": { dockerfile: "platform/octogee-api/Dockerfile", context: PLATFORM_CONTEXT, overlays: API_OVERLAYS, contexts: { "packed-package": "obsidian-connect" } },
+  "octogee-project-runner": { dockerfile: "platform/octogee-api/Dockerfile", context: PLATFORM_CONTEXT, target: "project-runner", overlays: API_OVERLAYS },
   "octogee-ops-agent-runtime": { dockerfile: "ops-agent/Dockerfile", context: "." },
 };
 

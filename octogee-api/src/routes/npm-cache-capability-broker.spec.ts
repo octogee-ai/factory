@@ -14,7 +14,7 @@ import {
   GATEWAY_CREDENTIAL_TOKEN_HEADER,
 } from "@octogee/core/internal-fetch";
 import { createGatewayCredentialAuth } from "../middleware/gateway-credential-auth.js";
-import { GATEWAY_CREDENTIAL_ROUTES } from "../index.js";
+import { GATEWAY_CREDENTIAL_ROUTES } from "../app.js";
 import { InMemoryNpmCacheCapabilityStore } from "../lib/npm-cache-capabilities.js";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { createFleetBrokerRoutes } from "./fleet-broker.js";

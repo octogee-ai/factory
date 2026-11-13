@@ -9,7 +9,7 @@ vi.mock("../../../gateway-edge/src/lib/platform-state.js", async (importOriginal
   };
 });
 import { GATEWAY_CREDENTIAL_TOKEN_AUDIENCE, GATEWAY_CREDENTIAL_TOKEN_HEADER } from "@octogee/core/internal-fetch";
-import { GATEWAY_CREDENTIAL_ROUTES } from "../index.js";
+import { GATEWAY_CREDENTIAL_ROUTES } from "../app.js";
 import { createGatewayCredentialAuth } from "../middleware/gateway-credential-auth.js";
 import { createTenantEnforcementMiddleware } from "../middleware/tenant-enforcement.js";
 import { gatewayVmPodName } from "@octogee/shared/types/glm";

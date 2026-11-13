@@ -12,7 +12,7 @@ vi.mock("../../../gateway-edge/src/lib/platform-state.js", async (importOriginal
     platformStateStore: createDocumentFixtureStore(new Map()),
   };
 });
-import { SIDECAR_BROKER_ROUTES } from "../index.js";
+import { SIDECAR_BROKER_ROUTES } from "../app.js";
 import { createGatewayCredentialAuth } from "../middleware/gateway-credential-auth.js";
 import { createTenantEnforcementMiddleware } from "../middleware/tenant-enforcement.js";
 import { SIDECAR_BROKER_TOKEN_AUDIENCE, SIDECAR_BROKER_TOKEN_HEADER } from "@octogee/core/internal-fetch";

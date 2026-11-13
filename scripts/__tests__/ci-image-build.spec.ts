@@ -38,7 +38,7 @@ describe("runner image builds", () => {
   it("builds platform images from the platform context and passes their product overlay when it exists", async () => {
     const platformOnly = mkdtempSync(resolve(tmpdir(), "image-plan-"));
     expect(imagePlan("glm-controller", { repository, sha }, platformOnly).contexts).toEqual({});
-    expect(imagePlan("octogee-api", { repository, sha }, platformOnly).contexts).toEqual({ "obsidian-connect": "obsidian-connect" });
+    expect(imagePlan("octogee-api", { repository, sha }, platformOnly).contexts).toEqual({ "packed-package": "obsidian-connect" });
     const withProduct = mkdtempSync(resolve(tmpdir(), "image-plan-product-"));
     mkdirSync(resolve(withProduct, "product/glm-controller"), { recursive: true });
     const plan = imagePlan("glm-controller", { repository, sha }, withProduct);
@@ -55,10 +55,10 @@ describe("runner image builds", () => {
     const root = mkdtempSync(resolve(tmpdir(), "image-plan-api-"));
     mkdirSync(resolve(root, "product/gateway-edge"), { recursive: true });
     expect(imagePlan("octogee-api", { repository, sha }, root).contexts)
-      .toEqual({ "obsidian-connect": "obsidian-connect", "gateway-edge-overlay": "product/gateway-edge" });
+      .toEqual({ "packed-package": "obsidian-connect", "gateway-edge-overlay": "product/gateway-edge" });
     mkdirSync(resolve(root, "product/octogee-api"), { recursive: true });
     expect(imagePlan("octogee-project-runner", { repository, sha }, root).contexts).toEqual({
-      "obsidian-connect": "obsidian-connect", overlay: "product/octogee-api", "gateway-edge-overlay": "product/gateway-edge",
+      overlay: "product/octogee-api", "gateway-edge-overlay": "product/gateway-edge",
     });
   });
 

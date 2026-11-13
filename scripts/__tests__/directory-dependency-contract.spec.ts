@@ -133,7 +133,7 @@ describe("directory dependency repository contract", () => {
       expectLastBefore(api, `COPY ${source}/dist`, apiRuntimeInstall);
     }
     expectLastBefore(api, "COPY octogee-api/.npmrc", apiRuntimeInstall);
-    expectBefore(api, "COPY octogee-api/runner/package.json", "RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund");
+    expectBefore(api, "COPY --from=overlay runner/package.json","RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund");
 
     const edge = dockerfile("gateway-edge/Dockerfile");
     for (const source of ["core", "shared", "test-helpers"]) {

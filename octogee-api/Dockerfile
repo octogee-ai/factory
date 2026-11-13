@@ -1,3 +1,12 @@
+FROM scratch AS overlay
+COPY octogee-api/src/main.ts /src/main.ts
+
+FROM scratch AS gateway-edge-overlay
+COPY gateway-edge/src/index.ts /src/index.ts
+
+FROM scratch AS packed-package
+COPY octogee-api/.npmrc /.npmrc
+
 FROM node:26.13.0-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS platform-npm
 ARG NPM_VERSION=12.2.1
 RUN apt-get update && apt-get install -y --no-install-recommends patch && rm -rf /var/lib/apt/lists/*
@@ -8,11 +17,21 @@ RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fun
     && test "$(npm --version)" = "$NPM_VERSION" \
     && test "$(npx --version)" = "$NPM_VERSION"
 
-# Build context: repo root.
+FROM platform-npm AS packer
+COPY --from=packed-package / /packed-package/
+RUN mkdir -p /packed \
+    && if [ -f /packed-package/package.json ]; then \
+        destination="/packed/$(node -p 'require("/packed-package/package.json").name.split("/").pop()')" \
+        && mkdir -p "$destination" \
+        && cd /packed-package \
+        && npm pack --ignore-scripts --pack-destination "$destination"; \
+    fi
+
+# Build context: platform/.
 #
 # octogee-api compiles gateway-edge/src/* in addition to its own src/ —
 # the cluster route handlers physically live in gateway-edge/src/routes/
-# and are imported via relative paths from octogee-api/src/index.ts.
+# and are imported via relative paths from octogee-api/src.
 # When gateway-edge is later slimmed to just its ~3 locality routes,
 # the bulk of the route code moves out of that tree and this
 # Dockerfile's COPY surface shrinks accordingly.
@@ -43,15 +62,9 @@ RUN npm ci --prefix /gateway-edge --ignore-scripts
 COPY scripts/ops/sync-local-file-deps.mjs /scripts/ops/sync-local-file-deps.mjs
 COPY octogee-api/tsconfig.json ./
 COPY octogee-api/src/ ./src/
+COPY --from=overlay / ./
 COPY gateway-edge/src/ /gateway-edge/src/
-
-COPY --from=obsidian-connect package.json npm-shrinkwrap.json README.md LICENSE /obsidian-connect/
-COPY --from=obsidian-connect bin/ /obsidian-connect/bin/
-COPY --from=obsidian-connect src/ /obsidian-connect/src/
-COPY --from=obsidian-connect test/ /obsidian-connect/test/
-RUN mkdir -p /obsidian-connect-dist \
-    && (cd /obsidian-connect \
-        && npm pack --ignore-scripts --pack-destination /obsidian-connect-dist)
+COPY --from=gateway-edge-overlay / /gateway-edge/
 
 RUN npm run build
 
@@ -64,7 +77,7 @@ RUN test -n "$OS_PACKAGE_REFRESH" && apt-get update && apt-get upgrade -y \
     && rm -rf /var/lib/apt/lists/* /usr/local/lib/node_modules/npm
 COPY --from=platform-npm /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 WORKDIR /runner
-COPY octogee-api/runner/package.json octogee-api/runner/package-lock.json ./
+COPY --from=overlay runner/package.json runner/package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
 COPY --from=builder /octogee-api/dist/octogee-api/src/project-runner.js ./dist/octogee-api/src/project-runner.js
 COPY --from=builder /octogee-api/dist/octogee-api/src/lib/project-runs/archive.js ./dist/octogee-api/src/lib/project-runs/archive.js
@@ -100,7 +113,7 @@ RUN npm rebuild better-sqlite3 --foreground-scripts \
 # gateway-edge's. No /gateway-edge install here (was previously dead
 # weight + a silent divergence trap if the two package.jsons drifted).
 COPY --from=builder /octogee-api/dist ./dist
-COPY --from=builder /obsidian-connect-dist/octogee-obsidian-connect-0.1.0.tgz ./obsidian-connect/octogee-obsidian-connect-0.1.0.tgz
+COPY --from=packer /packed/ ./
 
 # Bake the build SHA into the image so the boot banner can report it.
 # Passed by Cloud Build via --build-arg BUILD_SHA=$_IMAGE_TAG. Without
@@ -113,4 +126,4 @@ ENV BUILD_SHA=${BUILD_SHA}
 USER node
 EXPOSE 3001
 ENV PORT=3001
-CMD ["node", "dist/octogee-api/src/index.js"]
+CMD ["node", "dist/octogee-api/src/main.js"]

@@ -73,7 +73,7 @@ function crawlBundleExternals(entry: string): Map<string, string> {
   return externals;
 }
 
-const BOOT_ENTRY = path.join(API_ROOT, "src/index.ts");
+const BOOT_ENTRY = path.join(API_ROOT, "src/main.ts");
 
 describe("cluster bundle dependencies — installable from octogee-api's own package.json", () => {
   function missingFrom(entry: string): string[] {
