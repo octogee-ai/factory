@@ -1,5 +1,5 @@
 import * as fs from "node:fs";
-import * as path from "node:path";
+import { replaceFileAtomically } from "./atomic-file.js";
 
 // On-disk mirror of the reconcile's applied-fingerprint bookkeeping. Persistence keeps
 // a container restart with the emptyDir intact from forgetting what was applied; a
@@ -32,10 +32,5 @@ export function loadAppliedFingerprints(filePath: string): Map<string, string> {
 }
 
 export function saveAppliedFingerprints(filePath: string, applied: ReadonlyMap<string, string>): void {
-  const tmp = path.join(
-    path.dirname(filePath),
-    `.${path.basename(filePath)}.tmp`,
-  );
-  fs.writeFileSync(tmp, JSON.stringify(Object.fromEntries(applied)), "utf-8");
-  fs.renameSync(tmp, filePath);
+  replaceFileAtomically(filePath, JSON.stringify(Object.fromEntries(applied)));
 }

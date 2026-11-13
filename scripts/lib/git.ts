@@ -11,6 +11,7 @@ import {
 } from "./gitea-naming.js";
 import { brokeredGitHost } from "./gitea-admin-broker-client.js";
 import { cloneGithubProjectViaBroker } from "./github-project-clone-broker.js";
+import { replaceFileAtomically } from "./atomic-file.js";
 import { notesWelcomeSeed } from "@octogee/core/templates/project-seeds";
 
 import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
@@ -483,9 +484,7 @@ export function externalizeUserGitDir(
   if (!trustedSource || sourceReceiptValue(trustedSource) !== sourceReceiptValue(expectedSource)) {
     const refreshMarker = userGitRefreshMarker(target);
     fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-    const refreshMarkerTmp = `${refreshMarker}.octogee-${randomUUID()}`;
-    fs.writeFileSync(refreshMarkerTmp, `${USER_GIT_TRUST_RECEIPT_VERSION}\n`, { encoding: "utf8", mode: 0o400 });
-    fs.renameSync(refreshMarkerTmp, refreshMarker);
+    replaceFileAtomically(refreshMarker, `${USER_GIT_TRUST_RECEIPT_VERSION}\n`, 0o400);
     quarantineUserGitEntry(target, identity);
     quarantineUserGitEntry(userGitTrustReceipt(target), identity);
     quarantineUserGitEntry(localGit, identity);
@@ -503,18 +502,7 @@ function publishUserGitPointer(repoDir: string): void {
   if (!target) throw new Error(`[git] user Git pointer owner is missing for ${repoDir}`);
   const localGit = path.join(repoDir, ".git");
   const pointer = `gitdir: ${target}\n`;
-  const pointerTmp = `${localGit}.octogee-${randomUUID()}.tmp`;
-  const pointerFd = fs.openSync(pointerTmp, "wx", 0o444);
-  try {
-    try {
-      fs.writeFileSync(pointerFd, pointer, "utf8");
-    } finally {
-      fs.closeSync(pointerFd);
-    }
-    fs.renameSync(pointerTmp, localGit);
-  } finally {
-    fs.rmSync(pointerTmp, { force: true });
-  }
+  replaceFileAtomically(localGit, pointer, 0o444);
 }
 
 function trustedGitDir(cwd: string): string | null {
@@ -1754,12 +1742,16 @@ export async function initWorkspaceRepo(
   const org = workspaceGiteaOrg(slug);
   const repoName = workspaceRepoName();
 
-  fs.writeFileSync(path.join(defaultAgentDir, ".gitignore"), workspaceGitignore(), "utf-8");
+  replaceFileAtomically(path.join(defaultAgentDir, ".gitignore"), workspaceGitignore(), 0o644);
 
   const welcome = notesWelcomeSeed("this workspace");
   const welcomeDest = path.join(defaultAgentDir, welcome.relPath);
   fs.mkdirSync(path.dirname(welcomeDest), { recursive: true });
-  if (!fs.existsSync(welcomeDest)) fs.writeFileSync(welcomeDest, welcome.content, "utf-8");
+  try {
+    fs.writeFileSync(welcomeDest, welcome.content, { encoding: "utf8", flag: "wx", mode: 0o644 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
 
   try {
     await deps.ensureWorkspaceRepo(slug);
