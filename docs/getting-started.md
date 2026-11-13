@@ -14,8 +14,9 @@ two installers.
   on your own machine or on managed cloud services, and the rest of this guide
   covers it.
 - `scripts/ops/kind-install.sh` installs the full platform on a local kind
-  cluster, with the fleet controller, users and shared gateways. It copies the
-  platform images this repository publishes, or builds them from your checkout.
+  cluster, with the fleet controller, users, shared gateways and the LLM broker
+  that gives agents their model provider. It copies the platform images this
+  repository publishes, or builds them from your checkout.
   See [The full platform on kind](kind.md).
 
 ## What you need to sign up for
@@ -35,6 +36,15 @@ only Docker Engine.
 
 A key from Anthropic, OpenAI or OpenRouter works in place of Gemini. They bill
 by use.
+
+### To run the full platform on kind
+
+| Sign up for | Tier to choose | What it costs |
+| --- | --- | --- |
+| [OpenRouter](https://openrouter.ai/keys), for an API key | Pay as you go | What the agents' model calls cost |
+
+Agents on a shared gateway use an OpenRouter model by default. An Anthropic or
+OpenAI key also works for the models of that provider.
 
 ### To run it on Google Cloud
 

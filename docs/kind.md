@@ -16,6 +16,7 @@ The cluster runs:
 - the fleet controller, with its Admin API;
 - the gateway edge;
 - the platform API;
+- the LLM broker, which holds the model provider keys;
 - a shared gateway, once you add one.
 
 ## What you need
@@ -25,6 +26,8 @@ The cluster runs:
 - Node.js 22 or later
 - openssl, ssh-keygen and git
 - Go, to install the `octogee-fleet` command line
+- a model provider key, so agents can reply: an [OpenRouter](https://openrouter.ai/keys)
+  key for the default agent model, or an Anthropic or OpenAI key
 
 ## Install
 
@@ -36,6 +39,14 @@ git clone https://github.com/octogee-ai/octogee-cloud.git
 
 ```bash
 cd octogee-cloud
+```
+
+Export your model provider key in the same terminal. The script reads
+`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`; set any of them.
+`read -s` keeps the key out of your shell history:
+
+```bash
+read -rs OPENROUTER_API_KEY && export OPENROUTER_API_KEY
 ```
 
 ```bash
@@ -74,12 +85,13 @@ The script:
    and pushes them to the local registry;
 5. generates every secret: database passwords, the secret store root key, the
    S3 keys, the fleet signing keys, the operator key, and the Mattermost and
-   Gitea admin credentials;
+   Gitea admin credentials, and stores each provider key you exported in a
+   Secret of its own;
 6. installs PostgreSQL and SeaweedFS, then the Helm chart in `helm/octogee`;
 7. creates the Mattermost admin, its access token and the `octogee` team, and
    the Gitea admin, its token and the `octogee` organization;
-8. restarts the platform so it reads those tokens, and waits for the fleet
-   controller.
+8. restarts the platform so it reads those tokens and keys, and waits for the
+   fleet controller.
 
 Run it again at any time. Each step checks what exists, and secrets are kept
 between runs.
@@ -217,14 +229,22 @@ machine cannot resolve those names. Pages you open through a port-forward use
 `localhost`, but if a link takes you to an in-cluster address, open the same
 path on `localhost` with that service's port.
 
-## Agent replies need a model provider
+## Talk to the agent
+
+Open `lin-coach` in Mattermost and send a message. The agent answers there.
 
 On a shared gateway, an agent reaches its model provider through the LLM broker.
 The broker holds the provider keys and gives each agent a token of its own, so
-no provider key sits in a gateway pod. This repository does not build the
-broker's entry point, and the kind values turn the broker off. On kind, an agent
-therefore has no model provider and cannot reply yet. Chat, git, the fleet
-controller and the gateway work without it.
+no provider key sits in a gateway pod. It records every model call, with its
+tokens and cost, in the platform database.
+
+The script keeps each key you export in its own Secret: `octogee-openrouter`,
+`octogee-anthropic` or `octogee-openai`. It passes the key to kubectl through a
+file descriptor, so the key never appears in a command line, the Helm values or
+the state directory. A provider whose key you never exported has no Secret, and
+the broker refuses calls to it. To add or replace a key, export it and run `up`
+again; the script restarts the broker so it reads the new key. If you exported
+no key and none is stored, the script warns that agents cannot reply.
 
 ## Differences from a cloud cluster
 

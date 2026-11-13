@@ -117,6 +117,48 @@ describe("kind-install.sh", () => {
     expect(json("digests.json").platform).toBe("linux/amd64");
   });
 
+  it("runs the LLM broker from the octogee-api image", () => {
+    expect(run(["up", "--pull", `--sha=${PUBLISHED}`]).status).toBe(0);
+    expect(json("images.yaml").llmBroker).toEqual({
+      image: { repository: "localhost:5001/octogee/octogee-api", tag: "bbbbbbb", digest: ARM64 },
+    });
+  });
+
+  it("stores the operator's provider keys in Secrets without putting them on a command line", () => {
+    const stored = mkdtempSync(join(tmpdir(), "kind-install-keys-"));
+    host.stub("kubectl", `if [[ " $* " == *" create secret generic octogee-"* ]]; then
+  for arg in "$@"; do
+    case "$arg" in --from-file=api_key=*) cat "\${arg#--from-file=api_key=}" > "$STORED/$name" ;; esac
+    [[ "$previous" == generic ]] && name="$arg"
+    previous="$arg"
+  done
+  echo "kind: stub"
+  exit 0
+fi
+${KUBECTL}`);
+    const result = host.run(SCRIPT, ["up", "--pull", `--sha=${PUBLISHED}`], {
+      env: { OCTOGEE_KIND_STATE: state, INDEX, STORED: stored, OPENROUTER_API_KEY: "sk-or-kind-test", ANTHROPIC_API_KEY: "sk-ant-kind-test" },
+    });
+
+    expect(result.status).toBe(0);
+    expect(host.calls().join("\n")).not.toMatch(/sk-(or|ant)-kind-test/);
+    expect(readFileSync(join(stored, "octogee-openrouter"), "utf8")).toBe("sk-or-kind-test");
+    expect(readFileSync(join(stored, "octogee-anthropic"), "utf8")).toBe("sk-ant-kind-test");
+    expect(existsSync(join(stored, "octogee-openai"))).toBe(false);
+    expect(host.calls().some(call => call.endsWith("rollout restart deployment/llm-broker"))).toBe(true);
+    rmSync(stored, { recursive: true, force: true });
+  });
+
+  it("warns that agents cannot reply when no provider key is supplied or stored", () => {
+    host.stub("kubectl", `if [[ " $* " == *" get secret octogee-"* ]]; then exit 1; fi
+${KUBECTL}`);
+    const result = run(["up", "--pull", `--sha=${PUBLISHED}`]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("no model provider key");
+    expect(result.stderr).toContain("OPENROUTER_API_KEY");
+  });
+
   it.each([
     [["--pull", "--skip-build"], "Choose either --pull or --skip-build"],
     [[`--sha=${PUBLISHED}`], "--sha needs --pull"],
