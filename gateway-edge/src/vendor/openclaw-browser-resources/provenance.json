@@ -1,7 +1,7 @@
 {
   "source": "d7d29b20f700ba1aea25faa34d427d9e5203533c",
   "inputs": {
-    "sha256": "685fb8675f21756da84a4b29d94870351839a4c60ee4816c7e17e6d237c1c80a",
+    "sha256": "5ef7588f01e341b66d2496e5f39043af59c7ba3c6710b44541dd38b3a0b7b8e1",
     "files": [
       "gateway-edge/openclaw-browser-resources/build.mjs",
       "gateway-edge/openclaw-browser-resources/entry.ts",

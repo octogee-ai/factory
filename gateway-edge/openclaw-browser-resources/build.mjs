@@ -24,7 +24,6 @@ const { build } = await import(pathToFileURL(requireSource.resolve('esbuild')).h
 const adapters = { name: 'openclaw-browser-resources', setup(builder) {
   builder.onResolve({ filter: /^openclaw-/ }, ({ path: id }) => aliases[id] ? { path: path.join(source, aliases[id]) } : undefined);
   builder.onResolve({ filter: /(?:i18n\/index|i18n\/lib\/(?:lit-controller|translate|registry))\.ts$/ }, () => ({ path: path.join(here, 'i18n.ts') }));
-  builder.onResolve({ filter: /app\/assistant-media\.ts$/ }, () => ({ path: path.join(here, 'media.ts') }));
 } };
 const output = path.join(root, 'gateway-edge/src/vendor/openclaw-browser-resources');
 const result = await build({
