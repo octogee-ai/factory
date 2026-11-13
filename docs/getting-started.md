@@ -178,19 +178,27 @@ managed PostgreSQL and object storage.
 
 ## Work on the code
 
-You need Node.js 24 for this part. Nothing else here needs it.
+You need Node.js 24 for this part and for the kind install. `install.sh` does
+not need it.
 
 ```bash
 git clone https://github.com/octogee-ai/octogee-cloud.git
 ```
 
+There are no npm workspaces. Each package, such as `core`, `glm-controller` or
+`scripts`, has its own `package.json` and lockfile, so install the one you work
+on. For `scripts`:
+
 ```bash
-cd octogee-cloud && npm ci
+cd octogee-cloud/scripts && npm ci
 ```
 
 ```bash
-npx tsc --noEmit && npx vitest run && npm run gate
+npx tsc --noEmit && npm run gate
 ```
+
+`.github/workflows/checks.yml` has the typecheck and test commands each pull
+request runs, and [AGENTS.md](../AGENTS.md) describes every package.
 
 ## Remove it
 

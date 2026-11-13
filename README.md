@@ -20,8 +20,9 @@ on a local kind cluster, see [The full platform on kind](docs/kind.md).
 
 ## What you need to sign up for
 
-On your own machine, one model key. Gemini's free tier works. On Google Cloud,
-also a billing account and a domain. [See every account and tier](docs/getting-started.md#what-you-need-to-sign-up-for).
+For `install.sh` on your own machine, one model key; Gemini's free tier works.
+Agents on the full platform cannot use a Gemini key. On Google Cloud, also a
+billing account and a domain. [See every account and tier](docs/getting-started.md#what-you-need-to-sign-up-for).
 
 ## What is here
 
