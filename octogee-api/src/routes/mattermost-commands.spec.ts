@@ -79,6 +79,11 @@ function fixture(now: number) {
   return { docs, store: createDocumentFixtureStore(docs) };
 }
 
+function launchAttachmentText(body: { attachments?: Array<{ text?: string }> }): string {
+  expect(body.attachments).toHaveLength(1);
+  return body.attachments![0]!.text!;
+}
+
 function ticketPaths(docs: RecordingDocuments): string[] {
   return [...docs.keys()].filter((path) => path.startsWith(TICKETS));
 }
@@ -151,7 +156,7 @@ describe("Mattermost /ui command", () => {
     vi.stubEnv("API_PUBLIC_URL", API_ORIGIN);
   });
 
-  it("gives the owner of an isolated gateway an ephemeral one-time Control UI link for that gateway", async () => {
+  it("gives the owner of an isolated gateway an ephemeral one-time Control UI link, only inside a message attachment so Mattermost never previews it", async () => {
     const { docs, store } = fixture(Date.now());
     const { app, commandTokenMatches } = commandApp(store);
 
@@ -159,11 +164,13 @@ describe("Mattermost /ui command", () => {
 
     expect(response.status).toBe(200);
     expect(response.body.response_type).toBe("ephemeral");
-    const link = new URL(/^\[Open your Control UI\]\(([^)\s]+)\)\n/.exec(response.body.text)![1]!);
+    const attachmentText = launchAttachmentText(response.body);
+    const link = new URL(/^\[Open your Control UI\]\(([^)\s]+)\)\n/.exec(attachmentText)![1]!);
     expect(link.origin).toBe(API_ORIGIN);
     expect(link.pathname).toMatch(/^\/g\/walter\/openclaw\/launch\/[A-Za-z0-9_-]{43}$/);
-    expect(response.body.text).toContain("works once");
-    expect(Object.keys(response.body)).toEqual(["response_type", "text"]);
+    expect(attachmentText).toContain("works once");
+    expect(JSON.stringify({ ...response.body, attachments: response.body.attachments.map(({ text: _text, ...rest }: { text: string }) => rest) }))
+      .not.toContain("/launch/");
     expect(commandTokenMatches).toHaveBeenCalledWith({ teamId: TEAM, trigger: "ui", token: COMMAND_TOKEN });
     const tickets = ticketPaths(docs);
     expect(tickets).toHaveLength(1);
@@ -202,7 +209,7 @@ describe("Mattermost /ui command", () => {
   it("issues a link that redeems exactly once", async () => {
     const now = Date.now();
     const { store } = fixture(now);
-    const text: string = (await invoke(commandApp(store).app, slashCommand(OWNER_MM))).body.text;
+    const text = launchAttachmentText((await invoke(commandApp(store).app, slashCommand(OWNER_MM))).body);
     const ticket = /\/openclaw\/launch\/([A-Za-z0-9_-]+)\)/.exec(text)![1]!;
     const redeem = () => request(redeemApp(store, now)).post("/internal/openclaw-control/redeem")
       .send({ gatewayId: "walter", revisionId: "walter", sessionId: SESSION_ID, ticket });
@@ -256,7 +263,7 @@ describe("Mattermost /ui command", () => {
     const owner = await invoke(app, slashCommand(OWNER_MM));
 
     expect(owner.status).toBe(200);
-    expect(owner.body.text).toContain("/openclaw/launch/");
+    expect(launchAttachmentText(owner.body)).toContain("/openclaw/launch/");
     expect(ticketPaths(docs)).toHaveLength(1);
   });
 
@@ -272,7 +279,7 @@ describe("Mattermost /ui command", () => {
     const owner = await invoke(app, slashCommand(OWNER_MM));
 
     expect(owner.status).toBe(200);
-    expect(owner.body.text).toContain("/openclaw/launch/");
+    expect(launchAttachmentText(owner.body)).toContain("/openclaw/launch/");
     expect(ticketPaths(docs)).toHaveLength(1);
   });
 

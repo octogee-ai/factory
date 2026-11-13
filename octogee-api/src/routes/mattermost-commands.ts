@@ -59,12 +59,21 @@ function ephemeral(res: Response, text: string): void {
   res.json({ response_type: "ephemeral", text });
 }
 
-function replyText(launch: OwnerControlUiLaunch): string {
+function launchReply(res: Response, launchUrl: string): void {
   const minutes = Math.round(OPENCLAW_CONTROL_TICKET_TTL_MS / 60_000);
+  res.json({
+    response_type: "ephemeral",
+    text: "",
+    attachments: [{
+      fallback: "Your one-time Control UI link is ready.",
+      text: `[Open your Control UI](${launchUrl})\n` +
+        `This link works once and expires in ${minutes} minutes. Run /${CONTROL_UI_COMMAND_TRIGGER} again for a new one.`,
+    }],
+  });
+}
+
+function refusalText(launch: Exclude<OwnerControlUiLaunch, { kind: "launch" }>): string {
   switch (launch.kind) {
-    case "launch":
-      return `[Open your Control UI](${launch.launchUrl})\n` +
-        `This link works once and expires in ${minutes} minutes. Run /${CONTROL_UI_COMMAND_TRIGGER} again for a new one.`;
     case "shared-gateway":
       return "The Control UI is only for isolated gateways. Your agent runs on a shared gateway, so keep working with it here in Mattermost.";
     case "not-owner":
@@ -151,7 +160,8 @@ export function createMattermostCommandRoutes(deps: MattermostCommandRoutesDeps)
             ...(user ? { uid: user.uid } : { mattermostUserId: command.userId }),
           });
         }
-        ephemeral(res, replyText(launch));
+        if (launch.kind === "launch") launchReply(res, launch.launchUrl);
+        else ephemeral(res, refusalText(launch));
       } catch (error) {
         next(error);
       }
