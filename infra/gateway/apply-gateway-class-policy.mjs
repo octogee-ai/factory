@@ -1099,32 +1099,46 @@ function scrubAgentOauthProfiles(agentDir, agentId, env) {
 
 function projectAgentModelsJson(agentDir, providers) {
   const modelsPath = path.join(agentDir, "models.json");
-  let current = {};
-  if (fs.existsSync(modelsPath)) current = JSON.parse(fs.readFileSync(modelsPath, "utf8"));
   const desired = { providers };
-  if (JSON.stringify(current) === JSON.stringify(desired)) {
-    fs.chmodSync(agentDir, 0o700);
-    fs.chmodSync(modelsPath, 0o600);
-    return false;
+  const fd = openRegularFile(modelsPath);
+  if (fd !== null) {
+    try {
+      const current = JSON.parse(fs.readFileSync(fd, "utf8"));
+      if (JSON.stringify(current) === JSON.stringify(desired)) {
+        fs.chmodSync(agentDir, 0o700);
+        fs.fchmodSync(fd, 0o600);
+        return false;
+      }
+    } finally { fs.closeSync(fd); }
   }
   fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(modelsPath, `${JSON.stringify(desired, null, 2)}\n`, { mode: 0o600 });
+  atomicWrite(modelsPath, `${JSON.stringify(desired, null, 2)}\n`);
   fs.chmodSync(agentDir, 0o700);
-  fs.chmodSync(modelsPath, 0o600);
   return true;
 }
 
-function readSessionMap(sessionsPath) {
+function openRegularFile(file) {
   let fd;
   try {
-    fd = fs.openSync(sessionsPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
   } catch (error) {
     if (error.code === "ENOENT") return null;
     throw error;
   }
   try {
     const stat = fs.fstatSync(fd);
-    if (!stat.isFile() || stat.nlink !== 1) throw new Error(`apply-gateway-class-policy: ${sessionsPath} is not a regular session file`);
+    if (!stat.isFile() || stat.nlink !== 1) throw new Error(`apply-gateway-class-policy: ${file} is not a private regular file`);
+    return fd;
+  } catch (error) {
+    fs.closeSync(fd);
+    throw error;
+  }
+}
+
+function readSessionMap(sessionsPath) {
+  const fd = openRegularFile(sessionsPath);
+  if (fd === null) return null;
+  try {
     const sessions = JSON.parse(fs.readFileSync(fd, "utf8"));
     if (!objectValue(sessions)) throw new Error(`apply-gateway-class-policy: ${sessionsPath} is not a session map`);
     return sessions;
