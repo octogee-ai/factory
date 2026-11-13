@@ -74,6 +74,9 @@ rollStrategy: recreate
 
 nodeSelector: {}
 computeClass: ""
+# Sandbox runtime for the gateway pod. Empty runs it on the node's default runtime,
+# for a local cluster without gVisor.
+runtimeClassName: gvisor
 computerDesktop: auto
 
 # Pod-termination durable-flush budget. Kubernetes runs this hook before SIGTERM and

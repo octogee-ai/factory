@@ -27,6 +27,10 @@ spec:
     metadata:
       labels:
         app: glm-controller
+      {{- if or .Values.deploymentTargets .Values.gatewayValues }}
+      annotations:
+        checksum/configuration: {{ list .Values.deploymentTargets .Values.gatewayValues | toJson | sha256sum | trunc 16 | quote }}
+      {{- end }}
     spec:
       {{- with (.Values.global).nodeSelector }}
       nodeSelector:
@@ -83,6 +87,13 @@ spec:
             - name: FLEET_OPERATOR_EMAILS
               value: {{ join "," . | quote }}
             {{- end }}
+            {{- with .Values.fleetIdentity.operatorKeySecretName }}
+            - name: FLEET_OPERATOR_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . | quote }}
+                  key: public-key
+            {{- end }}
             - name: DEPLOYMENT_TARGET_ID
               value: {{ required "global.deploymentTargetId is required" (.Values.global).deploymentTargetId | quote }}
             - name: PUBLIC_APP_ORIGINS
@@ -96,6 +107,14 @@ spec:
             # HELM_CHART are no longer needed.
             - name: GATEWAY_CHART
               value: {{ .Values.gatewayChart | default "/charts/octogee-gateway" | quote }}
+            {{- if .Values.deploymentTargets }}
+            - name: OCTOGEE_DEPLOYMENT_TARGETS
+              value: /etc/octogee/configuration/deployment-targets.json
+            {{- end }}
+            {{- if .Values.gatewayValues }}
+            - name: GATEWAY_VALUES_FILE
+              value: /etc/octogee/configuration/gateway-values.yaml
+            {{- end }}
             - name: GOOGLE_CLOUD_PROJECT
               value: {{ required "global.deploymentProjectId is required" (.Values.global).deploymentProjectId | quote }}
             - name: GCP_PROJECT_ID
@@ -288,11 +307,26 @@ spec:
             failureThreshold: 5
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          {{- with $productPod.volumeMounts }}
+          {{- $configuration := or .Values.deploymentTargets .Values.gatewayValues }}
+          {{- if or $productPod.volumeMounts $configuration }}
           volumeMounts:
+            {{- with $productPod.volumeMounts }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- if $configuration }}
+            - name: configuration
+              mountPath: /etc/octogee/configuration
+              readOnly: true
+            {{- end }}
           {{- end }}
-      {{- with $productPod.volumes }}
+      {{- if or $productPod.volumes $configuration }}
       volumes:
+        {{- with $productPod.volumes }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if $configuration }}
+        - name: configuration
+          configMap:
+            name: glm-controller-configuration
+        {{- end }}
       {{- end }}

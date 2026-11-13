@@ -103,7 +103,9 @@ spec:
                 namespaceSelector: {}
                 topologyKey: topology.kubernetes.io/zone
       serviceAccountName: {{ include "octogee-gateway.serviceAccountName" . }}
-      runtimeClassName: gvisor
+      {{- with .Values.runtimeClassName }}
+      runtimeClassName: {{ . }}
+      {{- end }}
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true

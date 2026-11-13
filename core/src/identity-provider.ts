@@ -1,4 +1,5 @@
 import { OAuth2Client } from "google-auth-library";
+import { OPERATOR_KEY_ISSUER, operatorPublicKey, verifyOperatorToken } from "./operator-token.js";
 
 export interface VerifiedIdentity {
   readonly ownerId: string;
@@ -60,6 +61,26 @@ export function createGoogleIdentityProvider(options: {
       return { ownerId: email, email, operator: operators.has(email) };
     },
   };
+}
+
+export function createOperatorKeyIdentityProvider(options: {
+  readonly publicKey: string;
+  readonly now?: () => number;
+}): IdentityProvider {
+  const key = operatorPublicKey(options.publicKey);
+  const now = options.now ?? Date.now;
+  return {
+    issuers: [OPERATOR_KEY_ISSUER],
+    verifyBearer: async (token) => {
+      const subject = verifyOperatorToken(token, key, now());
+      return { ownerId: `operator:${subject}`, email: null, operator: true };
+    },
+  };
+}
+
+export function operatorKeyIdentityFromEnvironment(env: Record<string, string | undefined>): IdentityProvider | null {
+  const publicKey = env.FLEET_OPERATOR_PUBLIC_KEY?.trim() ?? "";
+  return publicKey === "" ? null : createOperatorKeyIdentityProvider({ publicKey });
 }
 
 export function googleIdentityFromEnvironment(env: Record<string, string | undefined>): IdentityProvider | null {

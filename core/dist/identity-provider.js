@@ -1,4 +1,5 @@
 import { OAuth2Client } from "google-auth-library";
+import { OPERATOR_KEY_ISSUER, operatorPublicKey, verifyOperatorToken } from "./operator-token.js";
 function unverifiedIssuer(token) {
     const payload = token.split(".")[1];
     if (payload === undefined)
@@ -43,6 +44,21 @@ export function createGoogleIdentityProvider(options) {
             return { ownerId: email, email, operator: operators.has(email) };
         },
     };
+}
+export function createOperatorKeyIdentityProvider(options) {
+    const key = operatorPublicKey(options.publicKey);
+    const now = options.now ?? Date.now;
+    return {
+        issuers: [OPERATOR_KEY_ISSUER],
+        verifyBearer: async (token) => {
+            const subject = verifyOperatorToken(token, key, now());
+            return { ownerId: `operator:${subject}`, email: null, operator: true };
+        },
+    };
+}
+export function operatorKeyIdentityFromEnvironment(env) {
+    const publicKey = env.FLEET_OPERATOR_PUBLIC_KEY?.trim() ?? "";
+    return publicKey === "" ? null : createOperatorKeyIdentityProvider({ publicKey });
 }
 export function googleIdentityFromEnvironment(env) {
     const audience = env.FLEET_GOOGLE_CLIENT_ID?.trim() ?? "";

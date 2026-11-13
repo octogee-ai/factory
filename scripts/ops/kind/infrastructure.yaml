@@ -1,0 +1,186 @@
+# In-cluster PostgreSQL and SeaweedFS for the platform on kind. Their
+# credentials come from the postgres-credentials and blob-store-s3 Secrets,
+# which kind-install.sh generates.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+data:
+  init.sh: |
+    #!/bin/bash
+    set -euo pipefail
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres \
+      -v mattermost_password="$MATTERMOST_PASSWORD" \
+      -v gitea_password="$GITEA_PASSWORD" \
+      -v platform_migration_password="$PLATFORM_MIGRATION_PASSWORD" \
+      -v platform_runtime_password="$PLATFORM_RUNTIME_PASSWORD" \
+      -v agent_admin_password="$AGENT_ADMIN_PASSWORD" <<'SQL'
+    CREATE ROLE mattermost LOGIN PASSWORD :'mattermost_password';
+    CREATE DATABASE mattermost OWNER mattermost;
+    CREATE ROLE gitea LOGIN PASSWORD :'gitea_password';
+    CREATE DATABASE gitea OWNER gitea;
+    CREATE ROLE platform_migration LOGIN PASSWORD :'platform_migration_password';
+    CREATE ROLE platform_runtime LOGIN PASSWORD :'platform_runtime_password';
+    CREATE DATABASE octogee_platform OWNER platform_migration;
+    CREATE ROLE agent_admin LOGIN CREATEROLE PASSWORD :'agent_admin_password';
+    CREATE DATABASE octogee_agents OWNER agent_admin;
+    \connect octogee_agents
+    CREATE EXTENSION IF NOT EXISTS unaccent WITH SCHEMA public;
+    CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;
+    CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
+    REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+    SQL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+spec:
+  selector:
+    app: postgres
+  ports:
+    - name: postgres
+      port: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: pgvector/pgvector:0.8.7-pg16@sha256:484e838076e04939d27d3e176e91c86eea96236126023be8d3059761122e579f
+          args: ["-c", "max_connections=300"]
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: postgres-credentials, key: postgres-password}}
+            - name: MATTERMOST_PASSWORD
+              valueFrom: {secretKeyRef: {name: postgres-credentials, key: mattermost-password}}
+            - name: GITEA_PASSWORD
+              valueFrom: {secretKeyRef: {name: postgres-credentials, key: gitea-password}}
+            - name: PLATFORM_MIGRATION_PASSWORD
+              valueFrom: {secretKeyRef: {name: postgres-credentials, key: platform-migration-password}}
+            - name: PLATFORM_RUNTIME_PASSWORD
+              valueFrom: {secretKeyRef: {name: postgres-credentials, key: platform-runtime-password}}
+            - name: AGENT_ADMIN_PASSWORD
+              valueFrom: {secretKeyRef: {name: postgres-credentials, key: agent-admin-password}}
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres"]
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+      volumes:
+        - name: init
+          configMap:
+            name: postgres-init
+            defaultMode: 0555
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: seaweedfs
+  labels:
+    app: seaweedfs
+spec:
+  selector:
+    app: seaweedfs
+  ports:
+    - name: s3
+      port: 8333
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: seaweedfs
+  labels:
+    app: seaweedfs
+spec:
+  serviceName: seaweedfs
+  replicas: 1
+  selector:
+    matchLabels:
+      app: seaweedfs
+  template:
+    metadata:
+      labels:
+        app: seaweedfs
+    spec:
+      containers:
+        - name: seaweedfs
+          image: chrislusf/seaweedfs:4.03@sha256:d24be3bc1d6e8e305c095c446cb9a00d40e3afdac82fb2a1cc96f2d42c4a8e80
+          args:
+            - server
+            - -dir=/data
+            - -ip.bind=0.0.0.0
+            - -master.volumeSizeLimitMB=128
+            - -volume.max=0
+            - -s3
+            - -s3.port=8333
+            - -s3.config=/etc/seaweedfs/s3.json
+          ports:
+            - containerPort: 8333
+          readinessProbe:
+            tcpSocket:
+              port: 8333
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: s3-config
+              mountPath: /etc/seaweedfs
+              readOnly: true
+      volumes:
+        - name: s3-config
+          secret:
+            secretName: blob-store-s3
+            items:
+              - key: s3.json
+                path: s3.json
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 5Gi

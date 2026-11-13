@@ -10,7 +10,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -mod=readonly -buildvcs=false -trimpath \
     -ldflags='-s -w -X github.com/mattermost/mattermost/server/public/model.BuildNumber=12.0.1-octogee.4ee2e9a -X github.com/mattermost/mattermost/server/public/model.BuildHash=4ee2e9abb831c7256ebd5943a44188e2c4c92fa4 -X github.com/mattermost/mattermost/server/public/model.BuildEnterpriseReady=false -X github.com/mattermost/mattermost/server/v8/cmd/mmctl/commands.gitCommit=4ee2e9abb831c7256ebd5943a44188e2c4c92fa4 -X github.com/mattermost/mattermost/server/v8/cmd/mmctl/commands.gitTreeState=clean -X github.com/mattermost/mattermost/server/v8/cmd/mmctl/commands.commitDate=2026-11-02T21:15:01Z' \
     -o /out/ ./cmd/mattermost ./cmd/mmctl
-FROM mattermost/mattermost-team-edition:12.0.1@sha256:8ca1050cb8a2ec1ec0be5aff90ee40aa03e134f48443f7526b7b2b18872cf31b AS vendor
+FROM --platform=linux/amd64 mattermost/mattermost-team-edition:12.0.1@sha256:8ca1050cb8a2ec1ec0be5aff90ee40aa03e134f48443f7526b7b2b18872cf31b AS vendor
 
 FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 RUN apt-get update && apt-get upgrade -y \

@@ -2,5 +2,9 @@
   "upstreamRef": "main",
   "sourceSha": "92373b3ca5fdcd653840df733dbf3d7759ee504c",
   "openclawObject": "openclaw-fork-86b84f63.tgz",
-  "mattermostObject": "openclaw-mattermost-d1e21c56.tgz"
+  "mattermostObject": "openclaw-mattermost-d1e21c56.tgz",
+  "openclawSha256": "86b84f63f46bc112537ef1be82e4838a08f9d644bf08acdd1bc20d1fdc92e08c",
+  "mattermostSha256": "d1e21c5636f6a4d4147a72d782a92f37576924326f6b97ccdc12231adab731e8",
+  "releaseRepository": "ceckert/openclaw",
+  "releaseTag": "octogee-92373b3c"
 }

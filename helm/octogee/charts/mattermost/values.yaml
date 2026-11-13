@@ -3,6 +3,10 @@ image:
   tag: ""
   digest: ""
 
+# Node architecture the image is built for. Empty schedules on any node, for a
+# multi-platform image.
+architecture: amd64
+
 db:
   host: postgres
   port: 5432

@@ -20,11 +20,14 @@ spec:
       labels:
         app: mattermost
     spec:
+      {{- $nodeSelector := merge (dict) ((.Values.global).nodeSelector | default (dict)) }}
+      {{- with .Values.architecture }}
+      {{- $_ := set $nodeSelector "kubernetes.io/arch" . }}
+      {{- end }}
+      {{- with $nodeSelector }}
       nodeSelector:
-        {{- with (.Values.global).nodeSelector }}
         {{- toYaml . | nindent 8 }}
-        {{- end }}
-        kubernetes.io/arch: amd64
+      {{- end }}
       serviceAccountName: {{ .Values.serviceAccountName }}
       automountServiceAccountToken: false
       securityContext:

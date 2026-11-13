@@ -29,6 +29,15 @@ kmsKeyName: ""
 # chart. Override only for tests / non-standard image layouts.
 gatewayChart: /charts/octogee-gateway
 
+# A deployment target registry for an installation outside the bundled
+# targets, in the shape of core/src/deployment-targets.json. Empty uses the
+# bundled registry.
+deploymentTargets: {}
+
+# Values for every gateway release, used instead of the target's
+# gatewayValuesFile inside the baked chart. Empty uses that file.
+gatewayValues: {}
+
 # Shared pool bounds. The fleet controller mints `shared-N` slots on demand between these,
 # from the platform release image below. Per-environment values set the floor:
 # TEST 1 (0 allowed), PROD 2.
@@ -64,6 +73,9 @@ env:
 fleetIdentity:
   googleClientId: ""
   operatorEmails: []
+  # Secret whose public-key entry holds the Ed25519 operator public key. The
+  # fleet command line signs short-lived tokens with the matching private key.
+  operatorKeySecretName: ""
 
 # Gitea gateway SSH key sweep: dry-run logs per-user managed-key counts,
 # enforce deletes keys whose owning gateway pod or VM is gone.

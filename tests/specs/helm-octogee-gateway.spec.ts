@@ -746,6 +746,12 @@ const out = helmTemplate();
     expect(shared).toMatch(/^ {6}runtimeClassName:\s*gvisor\s*$/m);
   });
 
+  it("runs a gateway on the node's default runtime when the installation has no sandbox runtime", () => {
+    const shared = findDoc(helmTemplate("octogee-gw-default", { runtimeClassName: "" }), "Deployment", "octogee-gateway-default") ?? "";
+
+    expect(shared).not.toMatch(/runtimeClassName/);
+  });
+
   it("renders Restricted-compliant runtime containers and bounded home initialization capabilities", () => {
     const output = helmTemplate("octogee-gw-user", {
       gatewayId: "builder",

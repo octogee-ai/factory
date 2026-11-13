@@ -14,4 +14,9 @@ export declare function createGoogleIdentityProvider(options: {
     readonly operatorEmails: readonly string[];
     readonly verify?: VerifyGoogleIdToken;
 }): IdentityProvider;
+export declare function createOperatorKeyIdentityProvider(options: {
+    readonly publicKey: string;
+    readonly now?: () => number;
+}): IdentityProvider;
+export declare function operatorKeyIdentityFromEnvironment(env: Record<string, string | undefined>): IdentityProvider | null;
 export declare function googleIdentityFromEnvironment(env: Record<string, string | undefined>): IdentityProvider | null;

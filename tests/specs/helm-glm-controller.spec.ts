@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from "vitest";
 import { spawnSync } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
-import { parseAllDocuments } from "yaml";
+import { parse, parseAllDocuments } from "yaml";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const CHART_PATH = path.join(REPO_ROOT, "helm/octogee/charts/glm-controller");
@@ -351,6 +351,49 @@ describe("glm-controller chart", () => {
     }), "Deployment", "glm-controller") ?? "";
     expect(dep).toMatch(/name:\s*FLEET_GOOGLE_CLIENT_ID\s*\n\s*value:\s*"client-id"/);
     expect(dep).toMatch(/name:\s*FLEET_OPERATOR_EMAILS\s*\n\s*value:\s*"ada@example\.com,grace@example\.com"/);
+  });
+
+  it("passes the operator public key from its Secret only when one is named", () => {
+    expect(findDoc(helmTemplate(), "Deployment", "glm-controller")).not.toContain("FLEET_OPERATOR_PUBLIC_KEY");
+    const dep = findDoc(helmTemplate({ "fleetIdentity.operatorKeySecretName": "fleet-operator-key" }), "Deployment", "glm-controller") ?? "";
+    expect(dep).toMatch(
+      /name:\s*FLEET_OPERATOR_PUBLIC_KEY\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*name:\s*"fleet-operator-key"\s*\n\s*key:\s*public-key/,
+    );
+  });
+
+  it("reads the bundled deployment targets and gateway values unless the installation supplies its own", () => {
+    const bundled = helmTemplate();
+    expect(findDoc(bundled, "ConfigMap", "glm-controller-configuration")).toBeNull();
+    const bundledDeployment = findDoc(bundled, "Deployment", "glm-controller") ?? "";
+    expect(bundledDeployment).not.toContain("OCTOGEE_DEPLOYMENT_TARGETS");
+    expect(bundledDeployment).not.toContain("GATEWAY_VALUES_FILE");
+
+    const rendered = helmTemplate({
+      "deploymentTargets.activeTargets.kind": "kind",
+      "gatewayValues.runtimeClassName": "runc",
+    });
+    const configuration = parseAllDocuments(rendered)
+      .map(document => document.toJSON())
+      .find(document => document?.kind === "ConfigMap" && document.metadata?.name === "glm-controller-configuration");
+    expect(JSON.parse(configuration.data["deployment-targets.json"])).toEqual({ activeTargets: { kind: "kind" } });
+    expect(parse(configuration.data["gateway-values.yaml"])).toEqual({ runtimeClassName: "runc" });
+    const dep = findDoc(rendered, "Deployment", "glm-controller") ?? "";
+    expect(dep).toMatch(/name:\s*OCTOGEE_DEPLOYMENT_TARGETS\s*\n\s*value:\s*\/etc\/octogee\/configuration\/deployment-targets\.json/);
+    expect(dep).toMatch(/name:\s*GATEWAY_VALUES_FILE\s*\n\s*value:\s*\/etc\/octogee\/configuration\/gateway-values\.yaml/);
+    expect(dep).toMatch(/name:\s*configuration\s*\n\s*mountPath:\s*\/etc\/octogee\/configuration\s*\n\s*readOnly:\s*true/);
+    expect(dep).toMatch(/name:\s*configuration\s*\n\s*configMap:\s*\n\s*name:\s*glm-controller-configuration/);
+  });
+
+  it("restarts the controller when the installation's deployment targets or gateway values change", () => {
+    const checksum = (values: Record<string, string>) =>
+      parse(findDoc(helmTemplate(values), "Deployment", "glm-controller") ?? "").spec.template.metadata.annotations?.["checksum/configuration"];
+    const targets = { "deploymentTargets.activeTargets.kind": "kind" };
+
+    expect(checksum({})).toBeUndefined();
+    expect(checksum(targets)).toMatch(/^[0-9a-f]{16}$/);
+    expect(checksum(targets)).toBe(checksum(targets));
+    expect(checksum({ "deploymentTargets.activeTargets.kind": "other" })).not.toBe(checksum(targets));
+    expect(checksum({ ...targets, "gatewayValues.runtimeClassName": "runc" })).not.toBe(checksum(targets));
   });
 
   it("leaves account retirement to the product chart", () => {

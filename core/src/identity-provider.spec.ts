@@ -1,10 +1,14 @@
+import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
   combineIdentityProviders,
   createGoogleIdentityProvider,
+  createOperatorKeyIdentityProvider,
   googleIdentityFromEnvironment,
+  operatorKeyIdentityFromEnvironment,
   type IdentityProvider,
 } from "./identity-provider.js";
+import { signOperatorToken } from "./operator-token.js";
 
 function bearerFrom(claims: unknown): string {
   return `header.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.signature`;
@@ -85,5 +89,58 @@ describe("Google sign-in settings", () => {
     [{ FLEET_OPERATOR_EMAILS: "ada@example.com" }, "without FLEET_GOOGLE_CLIENT_ID"],
   ])("refuses half a configuration %j", (env, message) => {
     expect(() => googleIdentityFromEnvironment(env)).toThrow(message);
+  });
+});
+
+describe("operator key sign-in", () => {
+  const pem = (key: { export(options: { type: "spki" | "pkcs8"; format: "pem" }): string | Buffer }, type: "spki" | "pkcs8") =>
+    key.export({ type, format: "pem" }).toString();
+  function keys() {
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    return { publicKey: pem(publicKey, "spki"), privateKey: pem(privateKey, "pkcs8") };
+  }
+  const now = 1_800_000_000_000;
+  const operator = keys();
+  const identity = createOperatorKeyIdentityProvider({ publicKey: operator.publicKey, now: () => now });
+  const sign = (overrides: Partial<Parameters<typeof signOperatorToken>[0]> = {}) =>
+    signOperatorToken({ privateKey: operator.privateKey, subject: "ada", now: () => now, ...overrides });
+
+  function tamper(token: string, claims: Record<string, unknown>): string {
+    const [header, payload, signature] = token.split(".");
+    const original = JSON.parse(Buffer.from(payload!, "base64url").toString("utf8")) as Record<string, unknown>;
+    return `${header}.${Buffer.from(JSON.stringify({ ...original, ...claims })).toString("base64url")}.${signature}`;
+  }
+
+  it("grants the operator role to a token signed by the operator key", async () => {
+    await expect(identity.verifyBearer(sign())).resolves.toEqual({ ownerId: "operator:ada", email: null, operator: true });
+  });
+
+  it("is reached through the combined providers by its issuer", async () => {
+    await expect(combineIdentityProviders([provider("https://accounts.google.com", "x"), identity]).verifyBearer(sign()))
+      .resolves.toMatchObject({ operator: true });
+  });
+
+  it.each([
+    ["signed by another key", () => sign({ privateKey: keys().privateKey }), "signature"],
+    ["with altered claims", () => tamper(sign(), { sub: "eve" }), "signature"],
+    ["that has expired", () => sign({ now: () => now - 3_600_000 }), "expired"],
+    ["that lives longer than an hour", () => sign({ lifetimeSeconds: 7200 }), "longer than an hour"],
+    ["that is not a JWT", () => "opaque", "not a JWT"],
+  ])("refuses a token %s", async (_name, token, message) => {
+    await expect(identity.verifyBearer(token())).rejects.toThrow(message);
+  });
+
+  it("refuses to sign a token that names no operator", () => {
+    expect(() => sign({ subject: "" })).toThrow("names no operator");
+  });
+
+  it("refuses a public key that is not Ed25519", () => {
+    const { publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+    expect(() => createOperatorKeyIdentityProvider({ publicKey: pem(publicKey, "spki") })).toThrow("Ed25519");
+  });
+
+  it("is configured by FLEET_OPERATOR_PUBLIC_KEY and absent without it", () => {
+    expect(operatorKeyIdentityFromEnvironment({})).toBeNull();
+    expect(operatorKeyIdentityFromEnvironment({ FLEET_OPERATOR_PUBLIC_KEY: operator.publicKey })?.issuers).toEqual(["octogee-operator-key"]);
   });
 });

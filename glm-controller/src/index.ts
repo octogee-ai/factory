@@ -261,7 +261,12 @@ import {
 } from "@octogee/core/gateway-live-release";
 import { getStorage } from "firebase-admin/storage";
 import { getAuth } from "firebase-admin/auth";
-import { combineIdentityProviders, googleIdentityFromEnvironment, type IdentityProvider } from "@octogee/core/identity-provider";
+import {
+  combineIdentityProviders,
+  googleIdentityFromEnvironment,
+  operatorKeyIdentityFromEnvironment,
+  type IdentityProvider,
+} from "@octogee/core/identity-provider";
 import { createMigrationClient } from "@octogee/core/fleet-migration-client";
 import {
   userMigrationV2GatewayRootFence,
@@ -2920,6 +2925,7 @@ export async function main(product: ControllerProduct): Promise<void> {
   const adminIdentity = combineIdentityProviders([
     product.adminIdentity,
     googleIdentityFromEnvironment(process.env),
+    operatorKeyIdentityFromEnvironment(process.env),
   ].filter((provider): provider is IdentityProvider => provider != null));
   const stoppers = startControllerBackgroundTasks({
     addProductAdminRoutes: product.addAdminRoutes,
