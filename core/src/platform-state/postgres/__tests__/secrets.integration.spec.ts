@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createPostgresModelBrokerUsageLedger } from "../../../model-broker-usage-ledger.js";
 import { AlreadyExistsError, FenceMismatchError, MissingRecordError } from "../../errors.js";
 import type { UserSecretInput, ModelBrokerGatewayToken, ModelBrokerToken } from "../../secrets.js";
 import { createHarness, dsn, type PlatformStateHarness } from "./fixtures/harness.js";
@@ -492,6 +493,40 @@ describe.skipIf(!dsn)("PostgreSQL secrets and access repositories", { timeout: 3
       expect(await harness.store.access.listRecordsForUid("u2")).toHaveLength(7);
       expect(await harness.store.access.gatewayTickets.get("t-one")).toBeNull();
       expect(await harness.store.access.gatewayTickets.get("t-two")).not.toBeNull();
+    });
+
+    it("lists and erases the user's model broker usage, spend and rate rows and leaves other users' rows", async () => {
+      const ledger = createPostgresModelBrokerUsageLedger(harness.pool, harness.schema);
+      const spendPeriods = [{ period: "window" as const, startMs: NOW }, { period: "week" as const, startMs: NOW }];
+      for (const uid of ["u1", "u10"]) {
+        await ledger.record({
+          eventId: `event-${uid}`,
+          ownerKey: uid,
+          createdAt: NOW,
+          expiresAt: NOW + 60_000,
+          event: { ownerUid: uid, gatewayId: "shared-1" },
+          totalTokens: 10,
+          costUsd: 0.01,
+          chargeUsd: 0.01,
+          spendPeriods,
+        });
+        await ledger.reserveRequest(uid, NOW);
+        await ledger.reserveRequest(`${uid}:embedding`, NOW);
+      }
+
+      expect((await harness.store.access.listRecordsForUid("u1")).sort()).toEqual([
+        "modelBrokerRateWindows/u1",
+        "modelBrokerRateWindows/u1:embedding",
+        "modelBrokerSpendPeriods/u1/week",
+        "modelBrokerSpendPeriods/u1/window",
+        "modelBrokerUsageEvents/event-u1",
+      ]);
+
+      await harness.store.access.eraseForUid("u1");
+
+      expect(await harness.store.access.listRecordsForUid("u1")).toEqual([]);
+      expect(await harness.store.access.listRecordsForUid("u10")).toHaveLength(5);
+      await expect(ledger.readSpend("u10", "window", NOW)).resolves.toMatchObject({ requestCount: 1 });
     });
   });
 
