@@ -1841,6 +1841,32 @@ describe("runtime policy and stamping", () => {
     expect(docs["glmGateways/b-x"].vmSpec).toEqual({ ...persisted, provisioningModel: "STANDARD", diskSizeGb: 80 });
   });
 
+  const podProfile = { isolation: "isolated", sizingTier: "xs", computer: { runtime: "cluster", homeSizeGiB: 10 }, fallbackStorageGb: null } as const;
+
+  it.each([
+    ["a configured VM runtime", spec],
+    ["no VM runtime", null],
+  ] as const)("stamps a new user whose tier's profile is a pod as a cluster gateway with no VM spec, with %s", async (_label, vmSpec) => {
+    const { store, docs } = recordingStore({ "config/orchestrator": { sizingProfiles: { ...FIXTURE_SIZING_PROFILES, pod: podProfile } } });
+
+    expect(await stampGatewayRuntime({ store, gatewayId: "b-pod", initial: initialRuntime("b-pod"), gatewayClass: "builder", sizingTier: "xs", vmSpec, log: vi.fn() })).toBe("cluster");
+
+    expect(docs["glmGateways/b-pod"]).toEqual({ ...initialRuntimeDoc("b-pod"), runtime: "cluster" });
+  });
+
+  it("keeps the stamped VM spec of a VM gateway whose tier now names a pod", async () => {
+    const stamped = { ...spec, machineType: "e2-medium", homeDiskSizeGb: 10 };
+    const { store, docs, writes } = recordingStore({
+      "glmGateways/b-x": { runtime: "gce-vm", vmSpec: stamped },
+      "config/orchestrator": { sizingProfiles: { pod: podProfile } },
+    });
+
+    expect(await stampGatewayRuntime({ store, gatewayId: "b-x", initial: initialRuntime("b-x"), gatewayClass: "builder", sizingTier: "xs", vmSpec: spec, log: vi.fn() })).toBe("gce-vm");
+
+    expect(docs["glmGateways/b-x"].vmSpec).toEqual(stamped);
+    expect(writes).toEqual([]);
+  });
+
   const deployedCluster = {
     docKind: "runtime", gatewayId: "b-x", lifecycle: "serving",
     helm: { releaseName: "octogee-gw-b-x", deploymentName: "octogee-gateway-b-x", lastAppliedAt: 100 },
