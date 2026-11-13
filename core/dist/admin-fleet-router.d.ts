@@ -426,6 +426,7 @@ export declare function createAdminFleetMutationRunner(store: PlatformStateStore
     forced?: boolean;
     action: (claim: OperationAuditActionClaim) => Promise<T>;
     classifyResult?: (result: T) => NormalFleetMutationResult;
+    dryRunRefusal?: () => Promise<T | null>;
     idempotencyScope?: string;
     aliasPlan?: OperationAuditAliasPlan[];
 }) => Promise<T>;
