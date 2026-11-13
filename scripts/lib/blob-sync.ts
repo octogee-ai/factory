@@ -31,6 +31,7 @@ export interface BlobStore {
     relativePath: string;
     gcsPath: string;
     destination: string;
+    size: number;
   }): Promise<void>;
   upload(input: {
     slug: string;
@@ -156,7 +157,8 @@ function unlinkIfExists(filePath: string): boolean {
 
 function statOrNull(filePath: string): fs.Stats | null {
   try {
-    return fs.statSync(filePath);
+    const stat = fs.lstatSync(filePath);
+    return stat.isFile() ? stat : null;
   } catch {
     return null;
   }
@@ -347,6 +349,7 @@ async function runDownloads(
           relativePath: blobPath,
           gcsPath: entry.gcsPath,
           destination: localPath,
+          size: entry.size,
         });
         count++;
       } catch (err) {
