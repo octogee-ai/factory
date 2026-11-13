@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 
-export const REPLACEABLE = "src/main.ts";
+export const COMPOSITION_ROOTS = ["src/main.ts", "src/llm-broker.ts"];
 const BUILD_OUTPUTS = new Set(["node_modules", "dist"]);
 const UNLINKED = new Set([".git", ...BUILD_OUTPUTS]);
 const STANDALONE_MANIFEST = "package.json";
@@ -56,9 +56,9 @@ function mergePackage(platformPackage, productPackage, outPackage) {
   const merged = sourceEntries(platformPackage);
   const platformFiles = merged.size;
   const overlay = sourceEntries(productPackage);
-  const shadowed = [...overlay.keys()].filter((file) => merged.has(file) && file !== REPLACEABLE);
+  const shadowed = [...overlay.keys()].filter((file) => merged.has(file) && !COMPOSITION_ROOTS.includes(file));
   if (shadowed.length) {
-    throw new Error(`${productPackage} shadows platform files: ${shadowed.join(", ")}; only ${REPLACEABLE} may be replaced`);
+    throw new Error(`${productPackage} shadows platform files: ${shadowed.join(", ")}; only ${COMPOSITION_ROOTS.join(" and ")} may be replaced`);
   }
   for (const [file, entry] of overlay) merged.set(file, entry);
   const current = fs.lstatSync(outPackage, { throwIfNoEntry: false });
@@ -66,7 +66,7 @@ function mergePackage(platformPackage, productPackage, outPackage) {
   fs.mkdirSync(outPackage, { recursive: true });
   for (const [file, entry] of merged) writeEntry(path.join(outPackage, file), entry);
   removeStale(outPackage, new Set(merged.keys()));
-  return { platformFiles, productFiles: overlay.size, replaced: overlay.has(REPLACEABLE) };
+  return { platformFiles, productFiles: overlay.size, replaced: COMPOSITION_ROOTS.filter((file) => overlay.has(file)) };
 }
 
 export function overlayTree({ platform, product, out }) {
@@ -101,6 +101,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process
   const [platform, product, out] = process.argv.slice(2);
   if (!platform || !product || !out) throw new Error("usage: overlay.mjs <platform-dir> <product-dir> <out-dir>");
   for (const [name, counts] of Object.entries(overlayTree({ platform, product, out }))) {
-    console.log(`[overlay] ${path.join(out, name)}: ${counts.platformFiles} platform files, ${counts.productFiles} product files${counts.replaced ? `, product ${REPLACEABLE}` : ""}`);
+    console.log(`[overlay] ${path.join(out, name)}: ${counts.platformFiles} platform files, ${counts.productFiles} product files${counts.replaced.length ? `, product ${counts.replaced.join(", ")}` : ""}`);
   }
 }
