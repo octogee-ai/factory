@@ -1,5 +1,6 @@
 # ── Octogee Umbrella Chart — Shared Defaults ────────────────────────────────
-# Override per-environment in values.prod.yaml / values.test.yaml
+# Images default to the ones Build main publishes; set each tag and digest from
+# a build's image manifest. Hosts are placeholders for your own domain.
 
 # ── Global values (shared across sub-charts) ────────────────────────────────
 global:
@@ -18,9 +19,9 @@ global:
     kubernetesApiHost: ""
     bridge:
       image:
-        repository: us-central1-docker.pkg.dev/octogee/octogee/vm-bridge
-        tag: "1.31.7-octogee-20261102"
-        digest: "sha256:a788f3e2965d5ef6e5bd2d36b09b705ba9aecd6c62e4e8d5ea634951152a1b9c"
+        repository: ""
+        tag: ""
+        digest: ""
     vmSpec: {}
   projectRunnerImage:
     repository: ""
@@ -90,22 +91,21 @@ cloud-sql-proxy:
 mattermost:
   enabled: true
   image:
-    repository: us-central1-docker.pkg.dev/octogee/octogee/mattermost
-    tag: "12.0.1-octogee-4ee2e9ab"
-    digest: "sha256:6fa50729743aaf50e839e33d33c709bdf3cbdbde718b0306cb9574f112fdf2a4"
+    repository: ghcr.io/octogee-ai/octogee-cloud/mattermost
+    tag: ""
+    digest: ""
   db:
     host: postgres
     port: 5432
     user: mattermost
-    name: mattermost_prod
+    name: mattermost
     passwordSecret: mattermost-cloud-sql
     passwordKey: password
   # Default SiteURL is the IAP-protected admin host (overridable per-env).
   # Browser-direct path uses MM_PUBLIC_URL + ALLOWCORSFROM, not SiteURL.
-  siteUrl: "https://mattermost.octogee.com"
+  siteUrl: "https://mattermost.example.com"
   # Space-separated origins allowed to call MM cross-origin (REST + WS).
-  # Required for browser-direct access from app.octogee.com → mattermost.octogee.com.
-  # Override per-env.
+  # Required for browser-direct access from an app origin to the Mattermost host.
   allowedCorsOrigins: ""
   serviceAccountName: octogee-gateway
   pvc:
@@ -185,17 +185,17 @@ gitea:
   gitea:
     admin:
       username: octogee-admin
-      email: ops@octogee.com
+      email: admin@example.com
       existingSecret: gitea-admin
     config:
       database:
         DB_TYPE: postgres
         HOST: postgres:5432
-        NAME: gitea_prod
+        NAME: gitea
         USER: gitea
       server:
-        DOMAIN: git.octogee.com
-        ROOT_URL: https://git.octogee.com
+        DOMAIN: git.example.com
+        ROOT_URL: https://git.example.com
       repository:
         DEFAULT_PRIVATE: "true"
       service:
@@ -232,19 +232,19 @@ gitea:
 # ── gateway-edge ────────────────────────────────────────────────────────
 gateway-edge:
   image:
-    repository: ""
-    tag: latest
-    digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    repository: ghcr.io/octogee-ai/octogee-cloud/gateway-edge
+    tag: ""
+    digest: ""
   replicas: 1
   port: 3001
   serviceAccountName: octogee-gateway
   env:
     GITEA_ORG: "octogee"
-    FIREBASE_PROJECT_ID: "octogee"
-    GCLOUD_PROJECT: "octogee"
-    APP_URL: "https://app.octogee.com"
-    API_PUBLIC_URL: "https://api.octogee.com"
-    SITE_URL: "https://octogee.com"
+    FIREBASE_PROJECT_ID: ""
+    GCLOUD_PROJECT: ""
+    APP_URL: "https://app.example.com"
+    API_PUBLIC_URL: "https://api.example.com"
+    SITE_URL: "https://example.com"
     K8S_NAMESPACE: "octogee"
   resources:
     requests:
@@ -322,9 +322,9 @@ projectRunner:
 llmBroker:
   enabled: true
   image:
-    repository: ""
-    tag: latest
-    digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    repository: ghcr.io/octogee-ai/octogee-cloud/octogee-api
+    tag: ""
+    digest: ""
   replicas: 2
   port: 3010
   serviceAccountName: llm-broker
@@ -412,7 +412,7 @@ npmCacheProxy:
       memory: 256Mi
 
 artifactWorker:
-  enabled: true
+  enabled: false
   nodeLocalDnsCidr: 169.254.20.10/32
   image:
     repository: ""
@@ -440,7 +440,7 @@ artifactWorker:
       ephemeral-storage: 1Gi
 
 opsAgent:
-  enabled: true
+  enabled: false
   nodeLocalDnsCidr: 169.254.20.10/32
   image:
     repository: ""
@@ -450,9 +450,9 @@ opsAgent:
   port: 3010
   serviceAccountName: octogee-ops-agent
   gcpServiceAccount: ""
-  loggingProjectId: octogee
-  loggingResourceName: projects/octogee/locations/global/buckets/ops-agent-prod/views/ops-agent
-  appUrl: https://app.octogee.com
+  loggingProjectId: ""
+  loggingResourceName: ""
+  appUrl: https://app.example.com
   openrouterSecret:
     name: octogee-openrouter
     key: api_key
@@ -487,4 +487,4 @@ glm-controller:
   kmsKeyName: ""
   # Gateway-pod consumer GSA for new per-gateway auth-token secrets (NOT the fleet controller's).
   gatewayServiceAccount: ""
-  workloadIdentityProject: "octogee"
+  workloadIdentityProject: ""
