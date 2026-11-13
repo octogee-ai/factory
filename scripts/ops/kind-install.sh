@@ -394,8 +394,14 @@ status() {
   k get pods
   cat <<EOF
 
-Admin API:   kubectl --kubeconfig=$KUBECONFIG_FILE --context=$KUBE_CONTEXT -n $NAMESPACE port-forward svc/glm-controller $ADMIN_PORT:8080
-Fleet CLI:   OCTOGEE_FLEET_CONFIG=$STATE/fleet-config.json octogee-fleet --env=kind gateway ls
+Set these in every terminal you use for the cluster:
+  export STATE=$STATE
+  export OCTOGEE_FLEET_CONFIG=\$STATE/fleet-config.json
+
+Keep the Admin API forwarded in a second terminal:
+  kubectl --kubeconfig=\$STATE/kubeconfig --context=$KUBE_CONTEXT -n $NAMESPACE port-forward svc/glm-controller $ADMIN_PORT:8080
+
+Then: octogee-fleet --env=kind gateway ls
 EOF
 }
 

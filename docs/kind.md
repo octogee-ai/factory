@@ -1,9 +1,10 @@
 # The full platform on kind
 
 This guide installs the whole platform on a local [kind](https://kind.sigs.k8s.io/)
-cluster. It needs no cloud account. One script builds the platform images from
-your checkout, starts the cluster and installs everything with Helm. For the
-smaller local foundation that `install.sh` sets up, see
+cluster. It needs no cloud account. One script starts the cluster, puts the
+platform images in a local registry and installs everything with Helm. It
+copies the images this repository publishes, or builds them from your checkout.
+For the smaller local foundation that `install.sh` sets up, see
 [Getting started](getting-started.md).
 
 The cluster runs:
@@ -23,13 +24,38 @@ The cluster runs:
 - kind, kubectl and Helm (tested with kind 0.33, kubectl 1.36 and Helm 4.3)
 - Node.js 22 or later
 - openssl, ssh-keygen and git
-
-The gateway image is large. The builder's cache grows to about 25 GB across the
-platform images, and later builds reuse it.
+- Go, to install the `octogee-fleet` command line
 
 ## Install
 
-From the repository root:
+Clone the repository and run the script from its root:
+
+```bash
+git clone https://github.com/octogee-ai/octogee-cloud.git
+```
+
+```bash
+cd octogee-cloud
+```
+
+```bash
+scripts/ops/kind-install.sh up --pull
+```
+
+`--pull` copies the images that the Build main workflow published for your
+checkout's commit, described under [Images from GitHub](#images-from-github).
+Build main finishes about 15 minutes after a commit reaches `main`. Until then,
+or on a commit that is not on `main`, name a `main` commit that has images. The
+Helm chart and the install steps still come from your checkout, so pick the
+commit nearest to it:
+
+```bash
+scripts/ops/kind-install.sh up --pull --sha=<full commit SHA>
+```
+
+To build the images from your checkout instead, leave out `--pull`. The gateway
+image is large. The builder's cache grows to about 25 GB across the platform
+images, and later builds reuse it.
 
 ```bash
 scripts/ops/kind-install.sh up
@@ -40,10 +66,12 @@ The script:
 1. starts a local image registry on `localhost:5001`;
 2. creates the kind cluster `octogee` with its own kubeconfig, so your current
    kubectl context does not change;
-3. downloads the pinned OpenClaw build and checks its sha256 against
-   `infra/gateway/openclaw-tarball/current.json`;
-4. builds the platform images for your machine's architecture with a
-   dedicated BuildKit builder, and pushes them to the local registry;
+3. with `--pull`, copies each published image for your machine's architecture
+   into the local registry, keeping its digest;
+4. without `--pull`, downloads the pinned OpenClaw build, checks its sha256
+   against `infra/gateway/openclaw-tarball/current.json`, builds the platform
+   images for your machine's architecture with a dedicated BuildKit builder,
+   and pushes them to the local registry;
 5. generates every secret: database passwords, the secret store root key, the
    S3 keys, the fleet signing keys, the operator key, and the Mattermost and
    Gitea admin credentials;
@@ -63,8 +91,10 @@ the generated secrets and the image digests.
 | Flag | Effect |
 | --- | --- |
 | `--name=<name>` | Name of the cluster and of its state directory. The default is `octogee`. |
-| `--skip-build` | Reuse the images from the last build. |
-| `--images=<a,b>` | Build only these platform images. |
+| `--pull` | Copy the images that Build main published for the checkout's commit instead of building them. |
+| `--sha=<sha>` | With `--pull`, copy the images published for this full commit SHA. |
+| `--skip-build` | Reinstall the images from the last build or copy, under that commit. |
+| `--images=<a,b>` | Build or copy only these platform images. |
 | `--context-dir=<dir>` | Build from another platform tree. |
 | `--openclaw-dir=<dir>` | Take the OpenClaw build from local files instead of downloading it. The files keep their release names. |
 
@@ -78,23 +108,42 @@ kubectl --kubeconfig="$STATE/kubeconfig" --context=kind-octogee -n octogee-local
 ## Operate the fleet
 
 The fleet command line, [octogee-fleet](https://github.com/octogee-ai/octogee-fleet),
-talks to the Admin API. On kind it signs in with the operator key that the
-script generated. The fleet controller trusts the matching public key
-(`FLEET_OPERATOR_PUBLIC_KEY`), and `scripts/ops/operator-token.mjs` signs a token
-that lasts ten minutes.
+talks to the Admin API. Install it with Go:
 
-Forward the Admin API:
+```bash
+go install github.com/octogee-ai/octogee-fleet@latest
+```
+
+Go downloads the newer Go version the command line needs if yours is older, and
+puts the program in `$(go env GOPATH)/bin`, usually `~/go/bin`. Add that folder
+to your `PATH` if your shell cannot find `octogee-fleet`.
+
+On kind the command line signs in with the operator key that the script
+generated. The fleet controller trusts the matching public key
+(`FLEET_OPERATOR_PUBLIC_KEY`), and `scripts/ops/operator-token.mjs` signs a token
+that lasts ten minutes. The script writes a configuration for the command line
+to `$STATE/fleet-config.json`.
+
+A new terminal has neither `STATE` nor `OCTOGEE_FLEET_CONFIG`, so set both in
+every terminal you open for the cluster:
+
+```bash
+export STATE=~/.local/state/octogee-kind/octogee
+export OCTOGEE_FLEET_CONFIG="$STATE/fleet-config.json"
+```
+
+The command line reaches the Admin API through a port-forward that must keep
+running. Open a second terminal, set the two variables there, and start it:
 
 ```bash
 kubectl --kubeconfig="$STATE/kubeconfig" --context=kind-octogee -n octogee-local \
   port-forward svc/glm-controller 18080:8080
 ```
 
-The script writes a configuration for the command line to
-`$STATE/fleet-config.json`. Point the command line at it:
+Leave it running. In your first terminal, check that the command line reaches
+the Admin API:
 
 ```bash
-export OCTOGEE_FLEET_CONFIG="$STATE/fleet-config.json"
 octogee-fleet --env=kind gateway ls
 ```
 
@@ -123,20 +172,59 @@ octogee-fleet --env=kind user inspect lin
 When `user inspect` shows provisioning `complete` and the user mounted on
 `shared-a`, the user has:
 
-- a Mattermost team named after them, with a `lin-general` channel and a
-  private `lin-coach` channel shared with their agent;
-- a Gitea organization named after them, with a `workspace` repository.
+- a Mattermost account `lin` and a team named after them, with the private
+  channels `lin-general` and `lin-coach`; their agent, the bot `lin-coach`, is
+  in both;
+- a Gitea account `ws-lin` and an organization `lin`, with a `workspace`
+  repository and an empty `system_config` repository.
 
-To sign in to Mattermost and Gitea as the user, issue their passwords:
+## Sign in to Mattermost and Gitea
+
+Issue the user's passwords. The command prints a chat password and a git
+password once and keeps no copy:
 
 ```bash
 octogee-fleet --env=kind user issue-passwords lin --apply
 ```
 
-## Agent replies need a model key
+The chat username is `lin`. The git username is `ws-lin`, with a `ws-` prefix.
+Run the command again if a password is lost; it replaces both.
 
-The shared gateway starts without a model provider key. The agent cannot reply
-until the gateway has a key of your own.
+Neither service has an ingress on kind. Forward each one in a terminal of its
+own, with `STATE` set, and leave it running:
+
+```bash
+kubectl --kubeconfig="$STATE/kubeconfig" --context=kind-octogee -n octogee-local \
+  port-forward svc/mattermost 8065:8065
+```
+
+```bash
+kubectl --kubeconfig="$STATE/kubeconfig" --context=kind-octogee -n octogee-local \
+  port-forward svc/octogee-gitea-http 3000:3000
+```
+
+Mattermost is then at <http://localhost:8065> and Gitea at
+<http://localhost:3000>. Gitea asks for a new password at the first sign-in.
+The user's workspace clones over the same port-forward:
+
+```bash
+git clone http://localhost:3000/lin/workspace.git
+```
+
+Both services keep their in-cluster addresses as their configured URLs, for
+example `http://octogee-gitea-http.octogee-local.svc.cluster.local:3000`. Your
+machine cannot resolve those names. Pages you open through a port-forward use
+`localhost`, but if a link takes you to an in-cluster address, open the same
+path on `localhost` with that service's port.
+
+## Agent replies need a model provider
+
+On a shared gateway, an agent reaches its model provider through the LLM broker.
+The broker holds the provider keys and gives each agent a token of its own, so
+no provider key sits in a gateway pod. This repository does not build the
+broker's entry point, and the kind values turn the broker off. On kind, an agent
+therefore has no model provider and cannot reply yet. Chat, git, the fleet
+controller and the gateway work without it.
 
 ## Differences from a cloud cluster
 
@@ -155,9 +243,9 @@ until the gateway has a key of your own.
 scripts/ops/kind-install.sh down
 ```
 
-This deletes the cluster, the local registry and the state directory. The
-dedicated builder `octogee-cloud-kind` stays, with its cache; remove it with
-`docker buildx rm octogee-cloud-kind`.
+This deletes the cluster, the local registry and the state directory. A build
+without `--pull` creates the dedicated builder `octogee-cloud-kind`. It stays,
+with its cache; remove it with `docker buildx rm octogee-cloud-kind`.
 
 ## Images from GitHub
 
@@ -165,7 +253,8 @@ The Build main workflow (`.github/workflows/build-main.yml`) builds the same
 images for `linux/amd64` and `linux/arm64` on every push to `main`. It pushes
 them to `ghcr.io/octogee-ai/octogee-cloud/<image>`, tagged with the full and
 short commit SHA, and keeps an image manifest of every digest as a workflow
-artifact named `image-manifest-<sha>`.
+artifact named `image-manifest-<sha>`. `kind-install.sh up --pull` installs
+these images.
 
 The workflow keeps its build cache in GitHub Actions cache scopes named
 `octogee-cloud-<image>-<platform>`. It never reads or writes a registry cache,
