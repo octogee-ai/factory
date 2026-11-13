@@ -5,6 +5,7 @@ import { parse } from "yaml";
 import { PROD_TARGET } from "./fixtures/deployment.js";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
+const STOCK_REPOSITORIES: Record<string, string> = { mattermost: "mattermost/mattermost-team-edition" };
 
 function source(path: string): string {
   return readFileSync(resolve(repoRoot, path), "utf8");
@@ -22,7 +23,7 @@ function deploymentSettings(path: string): string {
   ];
   for (const { name, image } of images) {
     if (!image?.repository) continue;
-    if (image.repository === `ghcr.io/octogee-ai/octogee-cloud/${name}`) {
+    if ([`ghcr.io/octogee-ai/octogee-cloud/${name}`, STOCK_REPOSITORIES[name]].includes(image.repository)) {
       delete image.repository;
       continue;
     }

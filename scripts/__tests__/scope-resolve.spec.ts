@@ -47,7 +47,7 @@ describe("resolveScope — ownership", () => {
     );
   });
   it("runs the recipe specs and the dependency policy for the platform deploy recipes", () => {
-    expectJobs(["platform/deploy/manifests/gateway.yaml"], ["scripts", "tests"]);
+    expectJobs(["platform/deploy/manifests/gateway.yaml"], ["platform-tests", "scripts", "tests"]);
     expectJobs(["platform/install.sh"], ["scripts"]);
   });
   it("runs the dependency policy for the platform workflows", () => {
@@ -351,7 +351,7 @@ describe("resolveScope — consumer scoping", () => {
   });
 
   it("files no test reads run no test jobs", () => {
-    expectJobs(["platform/infra/mattermost/Dockerfile", ".github/ISSUE_TEMPLATE/bug.yml", ".gitleaksignore"], []);
+    expectJobs([".github/ISSUE_TEMPLATE/bug.yml", ".gitleaksignore"], []);
     expectJobs(["platform/.github/ISSUE_TEMPLATE/bug.md", "platform/.gitattributes", "platform/.gitignore", "platform/.gitleaks.toml", "platform/LICENSE"], []);
   });
 });

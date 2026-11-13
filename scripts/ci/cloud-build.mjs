@@ -5,12 +5,11 @@ import { pathToFileURL } from "node:url";
 import { IMAGE_BUILDS, PLATFORM_CONTEXT, imagePlan } from "./image-build.mjs";
 import { gatewayBakePlan } from "./gateway-bake.mjs";
 
-export const PLATFORM_IMAGES = ["glm-controller", "octogee-api", "gateway-edge", "octogee-gateway", "mattermost"];
+export const PLATFORM_IMAGES = ["glm-controller", "octogee-api", "gateway-edge", "octogee-gateway"];
 export const PLATFORMS = ["linux/amd64", "linux/arm64"];
 export const SOURCE_REPOSITORY = "https://github.com/octogee-ai/octogee-cloud";
 export const CACHE_PREFIX = "octogee-cloud";
 
-const MATTERMOST = { dockerfile: "infra/mattermost/Dockerfile", args: {} };
 const GATEWAY_BASE = "octogee-gateway-base";
 const GATEWAY_SYSTEM = "octogee-gateway-system";
 const unpublished = [GATEWAY_BASE, GATEWAY_SYSTEM];
@@ -70,7 +69,6 @@ const planOptions = ({
 
 function sourceFor(name, gateway, { registry, sha, root }) {
   if (gateway[name]) return gateway[name];
-  if (name === "mattermost") return { ...MATTERMOST, labels: { "org.opencontainers.image.revision": sha } };
   return singleTarget(name, registry, sha, root);
 }
 

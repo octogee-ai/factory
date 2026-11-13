@@ -364,8 +364,10 @@ setting stays on the cluster, and later runs of `up` keep it. Without
 - The kind node carries the `topology.kubernetes.io/zone` and
   `topology.kubernetes.io/region` labels that the gateway's topology spread
   needs.
-- Mattermost runs on the node's architecture. Its prepackaged plugins are built
-  for amd64 only, so on an arm64 machine they do not start.
+- Mattermost runs the stock Team Edition image, which is published for amd64
+  only. The chart pins that platform's manifest, and kind's values let it
+  schedule on any node, so on an arm64 machine it runs under the container
+  runtime's amd64 emulation, which Docker Desktop provides.
 - The gateway fleet's network policies are off.
 
 ## Remove everything
