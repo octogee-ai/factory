@@ -213,11 +213,20 @@ jobs:
       - name: Check the Gateway browser, media, and Python tools
         run: |
           kubeconfig="$RUNNER_TEMP/kind-state/octogee/kubeconfig"
+          # shellcheck disable=SC2016
           kubectl --kubeconfig="$kubeconfig" -n octogee-local exec deployment/octogee-gateway-shared-a -c gateway -- bash -euo pipefail -c '
             chromium --version
             ffmpeg -v error -f lavfi -i sine=duration=0.1 -f wav pipe:1 | ffprobe -v error -show_entries stream=codec_name -of csv=p=0 pipe:0 | grep -qx pcm_s16le
             convert -size 2x2 xc:white png:- | identify -format "%m" - | grep -qx PNG
             python3 -c "import bs4, matplotlib, pandas, yaml"
+            test "$(dpkg-query -W -f="\${Version}" libxml2 | sed "s/.*+//")" = octogee1
+            test "$(dpkg-query -W -f="\${Version}" openssh-client | sed "s/.*+//")" = octogee1
+            printf "%s\\n" "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"2\" height=\"2\"><rect width=\"2\" height=\"2\"/></svg>" | convert svg:- png:- | identify -format "%m" - | grep -qx PNG
+            ssh -V
+            work=$(mktemp -d)
+            ssh-keygen -q -t ed25519 -N "" -f "$work/id"
+            ssh-keygen -l -f "$work/id.pub" | grep -q ED25519
+            rm -rf "$work"
           '
       - name: Show cluster status on failure
         if: failure()
