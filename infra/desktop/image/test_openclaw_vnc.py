@@ -32,7 +32,14 @@ class OpenClawVncTests(unittest.TestCase):
             for argument in [f'-reflect\n127.0.0.1:{port}', '-listen\n127.0.0.1', '-rfbport\n5901', '-passwdfile\n' + str(state / 'password')]:
                 self.assertIn(argument, result.stdout)
             self.assertNotIn(password, result.stdout + result.stderr)
+            previous = root / 'previous-password'
+            previous.write_text('unchanged\n')
+            (state / 'password').unlink()
+            (state / 'password').symlink_to(previous)
             subprocess.run(['python3', str(SCRIPT)], env=env, check=True, capture_output=True)
+            self.assertEqual(previous.read_text(), 'unchanged\n')
+            self.assertFalse((state / 'password').is_symlink())
+            self.assertEqual((state / 'password').stat().st_mode & 0o777, 0o600)
             self.assertNotEqual((state / 'password').read_text().strip(), password)
 
 if __name__ == '__main__':
