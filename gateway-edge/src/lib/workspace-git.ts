@@ -75,7 +75,9 @@ async function verifyGitDir(usersRoot: string, parts: readonly string[]): Promis
       if (!dir.startsWith(prefix)) return null;
       if (!(await fs.lstat(dir)).isDirectory()) return null;
     }
-    const metadata = await fs.lstat(path.join(dir, ".git"));
+    const metadataPath = path.resolve(dir, ".git");
+    if (!metadataPath.startsWith(prefix)) return null;
+    const metadata = await fs.lstat(metadataPath);
     return metadata.isDirectory() || metadata.isFile() ? dir : null;
   } catch {
     return null;
