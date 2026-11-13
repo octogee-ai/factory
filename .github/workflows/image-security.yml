@@ -1,0 +1,98 @@
+name: Image security
+
+on:
+  schedule:
+    - cron: '43 8 * * 1'
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      build-sha:
+        type: string
+        default: ''
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.manifest.outputs.sha }}
+      run-id: ${{ steps.manifest.outputs.run-id }}
+    steps:
+      - name: Select the Build main manifest
+        id: manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_SHA: ${{ inputs.build-sha }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$BUILD_SHA" ]]; then
+            sha="$BUILD_SHA"
+            run_id="$GITHUB_RUN_ID"
+          else
+            builds="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow build-main.yml \
+              --branch main --event push --limit 100 --json databaseId,headSha \
+              --jq '.[] | [.databaseId, .headSha] | @tsv')"
+            run_id='' sha=''
+            while IFS=$'\t' read -r candidate candidate_sha; do
+              [[ -n "$candidate" ]] || continue
+              available="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$candidate/artifacts?name=image-manifest-$candidate_sha" \
+                --jq 'any(.artifacts[]; .expired == false)')"
+              if [[ "$available" == true ]]; then
+                run_id="$candidate" sha="$candidate_sha"
+                break
+              fi
+            done <<< "$builds"
+          fi
+          if [[ ! "$run_id" =~ ^[0-9]+$ || ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Could not find a published Build main image manifest in the last 100 pushes"
+            exit 1
+          fi
+          printf 'sha=%s\nrun-id=%s\n' "$sha" "$run_id" >> "$GITHUB_OUTPUT"
+          printf 'Scanning images from [Build main run %s](%s/%s/actions/runs/%s), commit %s.\n' \
+            "$run_id" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$run_id" "$sha" >> "$GITHUB_STEP_SUMMARY"
+
+  trivy:
+    name: Trivy (${{ matrix.arch }})
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: image-manifest-${{ needs.source.outputs.sha }}
+          path: ${{ runner.temp }}/manifest
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.source.outputs.run-id }}
+      - name: Install Trivy
+        run: |
+          bash scripts/ci/install-security-tool.sh trivy "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Scan GHCR image digests
+        env:
+          SOURCE_SHA: ${{ needs.source.outputs.sha }}
+          ARCH: ${{ matrix.arch }}
+          TRIVY_CACHE_DIR: ${{ runner.temp }}/trivy-cache
+        run: |
+          bash scripts/ci/scan-cloud-images.sh "$RUNNER_TEMP/manifest/image-manifest.json" \
+            "$SOURCE_SHA" "linux/$ARCH" "$RUNNER_TEMP/reports"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: ${{ !cancelled() }}
+        with:
+          name: image-security-${{ needs.source.outputs.sha }}-${{ matrix.arch }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/reports/
+          if-no-files-found: error
+          retention-days: 90
