@@ -11,7 +11,6 @@ import {
   assertUserRestoreNotInProgress,
   cancelUserMigrationsForSuspension,
   deactivateUserVisibility,
-  invalidatePendingCredentialFlows,
   releaseUserPlacement,
   revokeOwnerModelBrokerTokens,
 } from "../lib/user-ops/user-suspension-runtime.js";
@@ -171,7 +170,7 @@ function migration(id: string, fields: Record<string, unknown>): Documents {
   };
 }
 
-describe("Firestore suspension fences", () => {
+describe("platform suspension fences", () => {
   it("terminally cancels queued user migrations and requests cancellation for started work", async () => {
     const records: Documents = {
       ...migration("queued-migration", {}),
@@ -211,66 +210,21 @@ describe("Firestore suspension fences", () => {
     expect(records["glmOperations/queued-migration"]).not.toHaveProperty("cancelledByDeletionId");
   });
 
-  it("deactivates every public projection and deletes social edges in bounded batches", async () => {
+  it("deactivates every public projection in bounded batches", async () => {
     const records: Documents = Object.fromEntries(Array.from({ length: 250 }, (_, index) => [
       [`workspaces/ws-${index}`, { id: `ws-${index}`, slug: `ws-${index}`, ownerUid: "uid-1", ownerActive: true }],
       [`workspaces/ws-0/projects/p-${index}`, { ownerUid: "uid-1", ownerActive: true }],
     ]).flat());
     records["workspaces/other"] = { id: "other", slug: "other", ownerUid: "uid-2", ownerActive: true };
     const { store, committed: transactions } = countingStore(records);
-    const refs = (prefix: string) => Array.from({ length: 250 }, (_, index) => ({
-      ref: { path: `${prefix}/${index}` },
-    }));
-    const queryDocs: Record<string, Array<{ ref: { path: string } }>> = {
-      posts: refs("posts"),
-      feed: refs("feed"),
-      stars: refs("stars"),
-      follows: refs("follows"),
-    };
-    const committed: Array<Array<{ kind: string; path: string }>> = [];
-    const db = {
-      collection: (name: string) => ({
-        where: () => ({ get: async () => ({ docs: queryDocs[name] }) }),
-      }),
-      batch: () => {
-        const operations: Array<{ kind: string; path: string }> = [];
-        return {
-          update: (ref: { path: string }) => operations.push({ kind: "update", path: ref.path }),
-          delete: (ref: { path: string }) => operations.push({ kind: "delete", path: ref.path }),
-          commit: async () => { committed.push(operations); },
-        };
-      },
-    };
 
-    await deactivateUserVisibility(store, db as never, "uid-1");
+    await deactivateUserVisibility(store, "uid-1");
 
     expect(transactions).toEqual([400, 100]);
     const owned = Object.entries(records).filter(([path]) => path !== "workspaces/other");
     expect(owned).toHaveLength(500);
     expect(owned.every(([, row]) => row.ownerActive === false)).toBe(true);
     expect(records["workspaces/other"]).toMatchObject({ ownerActive: true });
-    expect(committed.map((batch) => batch.length)).toEqual([400, 400, 200]);
-    expect(committed.flat().filter((write) => write.kind === "update")).toHaveLength(250);
-    expect(committed.flat().filter((write) => write.kind === "delete")).toHaveLength(750);
-  });
-
-  it("deletes every pending connector and BYOS flow owned by the user", async () => {
-    const deleted: string[] = [];
-    const db = {
-      collection: (name: string) => ({
-        where: () => ({
-          get: async () => ({ docs: [{ ref: { path: `${name}/flow-1` } }] }),
-        }),
-      }),
-      batch: () => ({
-        delete: (ref: { path: string }) => { deleted.push(ref.path); },
-        commit: async () => undefined,
-      }),
-    };
-
-    await invalidatePendingCredentialFlows(db as never, "uid-1");
-
-    expect(deleted).toEqual(["connectFlows/flow-1", "byosubFlows/flow-1"]);
   });
 
   it("revokes every owner token and deletes every owner pointer", async () => {
@@ -305,6 +259,4 @@ describe("Firestore suspension fences", () => {
 
     expect(records["modelBrokerTokens/t0"]).toEqual(token());
   });
-
-
 });

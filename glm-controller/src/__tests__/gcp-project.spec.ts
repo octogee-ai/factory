@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveDefaultStorageBucket, resolveGatewayGcpProject } from "../gcp-project.js";
+import { resolveGatewayGcpProject } from "../gcp-project.js";
 
 describe("resolveGatewayGcpProject", () => {
   it("uses the per-gateway gcpProject when set (BYO-GCP)", () => {
@@ -20,18 +20,5 @@ describe("resolveGatewayGcpProject", () => {
 
   it("throws if neither a gcpProject nor a platform default is available — never silently empty", () => {
     expect(() => resolveGatewayGcpProject({ platformDefault: "" })).toThrow(/platform/i);
-  });
-});
-
-describe("resolveDefaultStorageBucket", () => {
-  it("derives the Firebase default bucket from the GCP project", () => {
-    expect(resolveDefaultStorageBucket("octogee-test")).toBe(
-      "octogee-test.firebasestorage.app",
-    );
-  });
-
-  it("throws when the project is unset — never a cross-project guess", () => {
-    expect(() => resolveDefaultStorageBucket(undefined)).toThrow(/GOOGLE_CLOUD_PROJECT/);
-    expect(() => resolveDefaultStorageBucket("  ")).toThrow(/GOOGLE_CLOUD_PROJECT/);
   });
 });

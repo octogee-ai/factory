@@ -7,17 +7,6 @@ export interface ResolveGcpProjectOpts {
   platformDefault: string;
 }
 
-export function resolveDefaultStorageBucket(gcpProject: string | undefined): string {
-  const project = gcpProject?.trim();
-  if (!project) {
-    throw new Error(
-      "resolveDefaultStorageBucket: GOOGLE_CLOUD_PROJECT is not set — refusing to guess " +
-        "the avatar bucket (a cross-project default would delete from the wrong bucket).",
-    );
-  }
-  return `${project}.firebasestorage.app`;
-}
-
 export function resolveGatewayGcpProject(opts: ResolveGcpProjectOpts): string {
   const perGateway = opts.gcpProject?.trim();
   if (perGateway) return perGateway;

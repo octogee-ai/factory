@@ -30,10 +30,8 @@ export interface UserSuspensionDeps {
     cleanup: UserCleanupContext,
   ) => Promise<void>;
   assertRestoreNotInProgress: (uid: string) => Promise<void>;
-  suspendAuthUser: (uid: string) => Promise<void>;
   cancelUserMigrations: (uid: string, deletionId: string) => Promise<boolean>;
   deactivateUserVisibility: (uid: string) => Promise<void>;
-  invalidatePendingCredentialFlows: (uid: string) => Promise<void>;
   unmountFromGateway: (
     gatewayId: string,
     slug: string,
@@ -141,7 +139,9 @@ export function createSuspendUserHandler(
     const steps: SuspensionStepRunner = { run, skip };
     const productJob = { uid, deletionId, productContext: job.productContext };
 
-    await run("suspend-auth", () => deps.suspendAuthUser(uid));
+    const product = deps.product;
+    if (product) await run("suspend-auth", () => product.suspendSignIn(uid));
+    else await skip("suspend-auth");
     let migrationPending = false;
     const failuresBeforeCancellation = failures.length;
     await run("cancel-customer-migrations", async () => {
@@ -151,8 +151,7 @@ export function createSuspendUserHandler(
     if (migrationRetry) return migrationRetry;
     await run("deactivate-customer-visibility", () =>
       deps.deactivateUserVisibility(uid));
-    await run("invalidate-pending-credential-flows", () =>
-      deps.invalidatePendingCredentialFlows(uid));
+    await product?.afterVisibilityDeactivation(productJob, steps);
     if (cleanup.currentGatewayId && cleanup.slug) {
       await run("unmount-gateway", () =>
         deps.unmountFromGateway(cleanup.currentGatewayId!, cleanup.slug));
@@ -167,10 +166,10 @@ export function createSuspendUserHandler(
         throw new Error("owned gateway retirement is pending");
       }
     });
-    await deps.product?.afterGatewayRetirement(productJob, steps);
+    await product?.afterGatewayRetirement(productJob, steps);
     await run("revoke-connector-grants", () => deps.revokeConnectorGrants(uid));
     await run("revoke-model-broker", () => deps.revokeModelBrokerAccess(uid));
-    await deps.product?.afterModelBrokerRevocation(productJob, steps);
+    await product?.afterModelBrokerRevocation(productJob, steps);
     await run("delete-credential-secrets", () =>
       deps.deleteCredentialSecrets(cleanup.credentialSecretNames));
     await run("retire-project-agent-users", () =>

@@ -63,11 +63,11 @@ function mkDeps(overrides: Partial<DeprovisionUserDeps> = {}): DeprovisionUserDe
     cloudCleanup: {
       git: { eraseOwner: vi.fn(async () => undefined) },
       channels: { erase: vi.fn(async () => undefined) },
-      nukeUserFirestore: vi.fn(async () => undefined),
+      eraseUserRecords: vi.fn(async () => undefined),
       deleteUserStorage: vi.fn(async () => undefined),
       deleteHostingSites: vi.fn(async () => ({ deleted: 0 })),
       deleteCredentialSecrets: vi.fn(async () => undefined),
-      deleteAuthUser: vi.fn(async () => undefined),
+      deleteSignIn: vi.fn(async () => undefined),
       deleteVmHome: vi.fn(async () => ({ deleted: 1 })),
       log: vi.fn(),
     },
@@ -97,8 +97,8 @@ describe("createDeprovisionUserHandler — happy path", () => {
       "credentials:done",
       "computer:skipped",
       "computer-home:done",
-      "firestore:done",
-      "auth:done",
+      "records:done",
+      "sign-in:done",
     ]);
     expect(ctx.reported.find((s) => s.name === "computer-home")).toMatchObject({ detail: "1 object" });
   });
@@ -142,7 +142,7 @@ describe("createDeprovisionUserHandler — gateway has no live pod", () => {
     expect(result.success).toBe(true);
     const unmountSteps = ctx.reported.filter((s) => s.name === "unmount-gateway");
     expect(unmountSteps.map((s) => s.status)).toEqual(["running", "skipped"]);
-    expect(deps.cloudCleanup.nukeUserFirestore).toHaveBeenCalled();
+    expect(deps.cloudCleanup.eraseUserRecords).toHaveBeenCalled();
   });
 });
 
@@ -158,7 +158,7 @@ describe("createDeprovisionUserHandler — unmount RPC failure", () => {
 
     const result = await handler(mkOp({}), ctx);
 
-expect(deps.cloudCleanup.nukeUserFirestore).toHaveBeenCalled();
+expect(deps.cloudCleanup.eraseUserRecords).toHaveBeenCalled();
     
     const unmountSteps = ctx.reported.filter((s) => s.name === "unmount-gateway");
     expect(unmountSteps.map((s) => s.status)).toEqual(["running", "failed"]);
@@ -179,10 +179,10 @@ describe("createDeprovisionUserHandler — cloud step failure", () => {
           }),
         },
         channels: { erase: vi.fn() },
-        nukeUserFirestore: vi.fn(),
+        eraseUserRecords: vi.fn(),
         deleteUserStorage: vi.fn(),
         deleteCredentialSecrets: vi.fn(),
-        deleteAuthUser: vi.fn(),
+        deleteSignIn: vi.fn(),
         deleteVmHome: vi.fn(async () => ({ deleted: 0 })),
         log: vi.fn(),
       },
@@ -230,12 +230,12 @@ describe("createDeprovisionUserHandler — input validation", () => {
 });
 
 describe("createDeprovisionUserHandler — skip flags", () => {
-  it("propagates skipAuth from op.input → nukeUserCloudSide → auth step skipped", async () => {
+  it("propagates skipAuth from op.input → nukeUserCloudSide → sign-in step skipped", async () => {
     const deps = mkDeps();
     const handler = createDeprovisionUserHandler(deps);
     const ctx = mkCtx();
     await handler(mkOp({ input: { uid: "uid-alice", skipAuth: true } }), ctx);
-    expect(deps.cloudCleanup.deleteAuthUser).not.toHaveBeenCalled();
-    expect(ctx.reported.find((s) => s.name === "auth")?.status).toBe("skipped");
+    expect(deps.cloudCleanup.deleteSignIn).not.toHaveBeenCalled();
+    expect(ctx.reported.find((s) => s.name === "sign-in")?.status).toBe("skipped");
   });
 });

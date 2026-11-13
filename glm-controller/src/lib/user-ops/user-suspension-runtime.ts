@@ -1,4 +1,3 @@
-import type { DocumentReference, Firestore } from "firebase-admin/firestore";
 import type {
   PlatformUserRecord,
   OperationRecord,
@@ -7,13 +6,8 @@ import type {
   Stored,
 } from "@octogee/core/platform-state";
 
-const FIRESTORE_WRITE_BATCH_SIZE = 400;
+const PLATFORM_WRITE_BATCH_SIZE = 400;
 const CLEAR = { clear: true } as const;
-
-type VisibilityWrite = {
-  kind: "update" | "delete";
-  ref: DocumentReference;
-};
 
 type PlatformWrite = (transaction: PlatformStateTransaction) => Promise<void>;
 
@@ -46,8 +40,8 @@ function ownedLiveMigration(operation: Stored<OperationRecord> | null, uid: stri
 }
 
 async function commitPlatformWrites(store: PlatformStateStore, label: string, writes: readonly PlatformWrite[]): Promise<void> {
-  for (let offset = 0; offset < writes.length; offset += FIRESTORE_WRITE_BATCH_SIZE) {
-    const chunk = writes.slice(offset, offset + FIRESTORE_WRITE_BATCH_SIZE);
+  for (let offset = 0; offset < writes.length; offset += PLATFORM_WRITE_BATCH_SIZE) {
+    const chunk = writes.slice(offset, offset + PLATFORM_WRITE_BATCH_SIZE);
     await store.transaction({ label }, async (transaction) => {
       for (const write of chunk) await write(transaction);
     });
@@ -118,19 +112,11 @@ export async function releaseUserPlacement(
 
 export async function deactivateUserVisibility(
   store: PlatformStateStore,
-  db: Pick<Firestore, "collection" | "batch">,
   uid: string,
 ): Promise<void> {
-  const [workspaces, projects, posts, ...socialSnapshots] = await Promise.all([
+  const [workspaces, projects] = await Promise.all([
     store.workspaces.records.listByOwner(uid),
     store.workspaces.projects.listByOwner(uid),
-    db.collection("posts").where("authorUid", "==", uid).get(),
-    db.collection("feed").where("actorUid", "==", uid).get(),
-    db.collection("feed").where("targetUid", "==", uid).get(),
-    db.collection("stars").where("actorUid", "==", uid).get(),
-    db.collection("stars").where("target.ownerUid", "==", uid).get(),
-    db.collection("follows").where("actorUid", "==", uid).get(),
-    db.collection("follows").where("target.ownerUid", "==", uid).get(),
   ]);
   await commitPlatformWrites(store, "customer-suspension.deactivate-visibility", [
     ...workspaces.map((workspace): PlatformWrite => (transaction) =>
@@ -138,35 +124,6 @@ export async function deactivateUserVisibility(
     ...projects.map((project): PlatformWrite => (transaction) =>
       transaction.workspaces.projects.patch(project.workspaceSlug, project.projectSlug, { ownerActive: false })),
   ]);
-  const writes: VisibilityWrite[] = [
-    ...posts.docs.map((doc) => ({ kind: "update" as const, ref: doc.ref })),
-    ...Array.from(new Map(
-      socialSnapshots
-        .flatMap((snapshot) => snapshot.docs)
-        .map((doc) => [doc.ref.path, doc.ref]),
-    ).values(), (ref) => ({ kind: "delete" as const, ref })),
-  ];
-  for (let offset = 0; offset < writes.length; offset += FIRESTORE_WRITE_BATCH_SIZE) {
-    const batch = db.batch();
-    for (const write of writes.slice(offset, offset + FIRESTORE_WRITE_BATCH_SIZE)) {
-      if (write.kind === "update") batch.update(write.ref, { ownerActive: false });
-      else batch.delete(write.ref);
-    }
-    await batch.commit();
-  }
-}
-
-export async function invalidatePendingCredentialFlows(
-  db: Pick<Firestore, "collection" | "batch">,
-  uid: string,
-): Promise<void> {
-  const [connectorFlows, byosubFlows] = await Promise.all([
-    db.collection("connectFlows").where("uid", "==", uid).get(),
-    db.collection("byosubFlows").where("uid", "==", uid).get(),
-  ]);
-  const batch = db.batch();
-  for (const flow of [...connectorFlows.docs, ...byosubFlows.docs]) batch.delete(flow.ref);
-  await batch.commit();
 }
 
 export async function revokeOwnerModelBrokerTokens(
