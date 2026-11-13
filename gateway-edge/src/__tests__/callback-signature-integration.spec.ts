@@ -78,8 +78,9 @@ async function callbackChain(options: {
         res.writeHead(response.status, { "content-type": "application/json" });
         res.end(await response.text());
       } catch (error) {
-        res.writeHead(500);
-        res.end(error instanceof Error ? error.message : String(error));
+        console.error("Callback fixture request failed", error);
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "callback_fixture_failed" }));
       }
     }));
   }

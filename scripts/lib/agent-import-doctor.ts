@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { RequestHandler } from "express";
+import { replaceFileAtomically } from "./atomic-file.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -118,13 +119,6 @@ function defaultRun(
   });
 }
 
-function atomicPrivateWrite(filePath: string, value: unknown): void {
-  const tempPath = `${filePath}.tmp`;
-  fs.writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-  fs.renameSync(tempPath, filePath);
-  fs.chmodSync(filePath, 0o600);
-}
-
 function changedPaths(before: unknown, after: unknown, prefix = ""): string[] {
   if (JSON.stringify(before) === JSON.stringify(after)) return [];
   const left = record(before);
@@ -175,7 +169,7 @@ export async function runAgentImportDoctor(
   fs.chmodSync(stateDir, 0o700);
   const configPath = path.join(stateDir, "openclaw.json");
   try {
-    atomicPrivateWrite(configPath, source);
+    replaceFileAtomically(configPath, `${JSON.stringify(source, null, 2)}\n`);
     const env = isolatedEnvironment(stateDir, configPath, options.env ?? process.env);
     const version = versionFrom(await run(command, ["--version"], { env }));
     const doctor = await run(command, ["doctor", "--fix", "--non-interactive"], { env });

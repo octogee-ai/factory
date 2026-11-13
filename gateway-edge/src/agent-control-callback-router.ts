@@ -334,7 +334,12 @@ export function createAgentControlCallbackRouter(input: {
       body = await readBody(req);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      writeJson(res, message === "body_too_large" ? 413 : 400, { error: message });
+      if (message === "body_too_large") writeJson(res, 413, { error: "body_too_large" });
+      else if (message === "body_read_timeout") writeJson(res, 400, { error: "body_read_timeout" });
+      else {
+        input.log("agent control callback body read failed", { error: message });
+        writeJson(res, 400, { error: "invalid_body" });
+      }
       return;
     }
     const timestamp = String(now());

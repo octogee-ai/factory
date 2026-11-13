@@ -1,4 +1,4 @@
-import { execFileSync, execSync } from "child_process";
+import { execFileSync } from "child_process";
 import { randomUUID } from "node:crypto";
 import * as fs from "fs";
 import * as path from "path";
@@ -17,6 +17,7 @@ import { notesWelcomeSeed } from "@octogee/core/templates/project-seeds";
 import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
 import { findUnsafeGitMetadataEntry, readGitMetadataText } from "@octogee/core/git-metadata";
 import type { ProjectRepoSource } from "@octogee/shared/types/project";
+import { isValidUsername } from "@octogee/shared/types/identity";
 import { ADD_USER_DEADLINE_MS } from "../../shared/types/fleet-controller.js";
 
 export function errMessage(err: unknown): string {
@@ -559,6 +560,7 @@ export function removePersistedRepoSshCommand(repoDir: string): void {
 }
 
 export function generateUserSshKey(slug: string): string {
+  if (!isValidUsername(slug)) throw new Error("Invalid SSH key owner");
   const keyDir = path.join(CUSTOMER_KEYS_DIR, slug);
   const keyPath = path.join(keyDir, "id_ed25519");
   const pubPath = keyPath + ".pub";
@@ -569,7 +571,7 @@ export function generateUserSshKey(slug: string): string {
   }
 
   fs.mkdirSync(keyDir, { recursive: true });
-  execSync(`ssh-keygen -t ed25519 -N "" -f "${keyPath}" -C "octogee-${slug}@gateway" -q`, {
+  execFileSync("/usr/bin/ssh-keygen", ["-t", "ed25519", "-N", "", "-f", keyPath, "-C", `octogee-${slug}@gateway`, "-q"], {
     stdio: "pipe",
   });
   /* eslint-disable sonarjs/file-permissions -- restrictive (private key dir), correct */
