@@ -2038,4 +2038,24 @@ describe("surge user handoff on a lone shared pod", () => {
     await reconcileSurgeUserHandoff(h.deps, input);
     expect(h.deps.recheckGatewayLater).not.toHaveBeenCalled();
   });
+
+  it("rechecks a new gateway's booting target on every pass until OpenClaw is up, then releases it", async () => {
+    const newGateway = { gatewayId: "default", desiredImageTag: "new-sha", requiresUserMigration: false, isolatedGateway: false };
+    const bootingUids = [targetPod.uid];
+    const h = harness({ pods: [targetPod], assignments: [], bootingUids });
+
+    await expect(reconcileSurgeUserHandoff(h.deps, newGateway)).resolves.toEqual({ ready: false });
+    await expect(reconcileSurgeUserHandoff(h.deps, newGateway)).resolves.toEqual({ ready: false });
+    expect(h.deps.recheckGatewayLater).toHaveBeenCalledTimes(2);
+    expect(h.deps.recheckGatewayLater).toHaveBeenCalledWith("default");
+    expect(vi.mocked(h.deps.log).mock.calls.filter(([message]) =>
+      message.includes("target is booting; rechecking gateway=default target=gateway-new"))).toHaveLength(2);
+    expect(h.deps.releaseTarget).not.toHaveBeenCalled();
+
+    bootingUids.splice(0);
+    vi.mocked(h.deps.recheckGatewayLater).mockClear();
+    await reconcileSurgeUserHandoff(h.deps, newGateway);
+    expect(h.events).toEqual(["release:target-uid"]);
+    expect(h.deps.recheckGatewayLater).not.toHaveBeenCalled();
+  });
 });

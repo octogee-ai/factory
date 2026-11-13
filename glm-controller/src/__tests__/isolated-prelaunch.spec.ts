@@ -54,11 +54,13 @@ function fixture() {
   const sourceHealth = { ...targetHealth, version: "ab10fce-oc2026.7.1" };
   const targetProbe = { answers: true };
   const releaseTarget = vi.fn();
+  const recheckGatewayLater = vi.fn();
   const surgeDeps = {
     listPods: async () => ({ pods, observedPodUids: pods.map((pod) => pod.uid) }),
     readPodHealth: async (pod: { uid: string }) => pod.uid === target.uid ? (targetProbe.answers ? targetHealth : null) : sourceHealth,
     readAssignments: async () => [],
     releaseTarget,
+    recheckGatewayLater,
     log: vi.fn(),
   } as unknown as SurgeUserHandoffDeps;
   const reconcileSurgeHandoff = vi.fn((input) => reconcileSurgeUserHandoff(surgeDeps, input));
@@ -70,7 +72,7 @@ function fixture() {
   const markLive = () => markGatewayLive({ store, log: vi.fn() }, gateway, artifact, true);
   const bootMode = () => store.transaction({ label: "test.boot-mode", readOnly: true }, (transaction) =>
     isolatedBootMode({ reader: transaction, gateway }));
-  return { gateway, lease, user, runtime, documents, pods, targetHealth, targetProbe, releaseTarget, reconcileSurgeHandoff, refine, markLive, bootMode, writes, store };
+  return { gateway, lease, user, runtime, documents, pods, targetHealth, targetProbe, releaseTarget, recheckGatewayLater, reconcileSurgeHandoff, refine, markLive, bootMode, writes, store };
 }
 
 describe("disposable isolated prelaunch release refresh", () => {
@@ -378,5 +380,6 @@ describe("an operator-given gateway has no lease", () => {
     Object.assign(h.targetHealth, { status: "booting", prelaunchState: "none" });
 
     expect(await h.refine()).toEqual({ kind: "steady" });
+    expect(h.recheckGatewayLater).toHaveBeenCalledExactlyOnceWith(h.gateway.gatewayId);
   });
 });

@@ -1484,7 +1484,11 @@ async function settleOrGateTarget(
   const { target, targetHealth, source, ownedBy, observedPodUids } = context;
   const heldPrelaunchTarget = configuredUserProcessGateRequired(input) &&
     prelaunchTransferEligible(targetHealth);
-  if (targetHealth.status !== "ready" && !heldPrelaunchTarget) return { ready: false };
+  if (targetHealth.status !== "ready" && !heldPrelaunchTarget) {
+    deps.log(`[surge-handoff] target is booting; rechecking gateway=${input.gatewayId} target=${target.name}`);
+    deps.recheckGatewayLater(input.gatewayId);
+    return { ready: false };
+  }
   if (target.ready) {
     return settleReleasedTarget(deps, input, { source, target, targetHealth, ownedBy, observedPodUids });
   }
