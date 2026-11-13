@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 
 import { ERR_SHARED_GATEWAY_NOT_ROLLED_IN_PLACE } from "./admin-fleet-router.js";
+import { isPlainObject } from "./platform-state/documents/secrets.js";
 import {
   REPO,
   auditsIn,
@@ -530,7 +531,7 @@ describe("admin target resolution", () => {
     expect(store.get("gateways/operator/assignments/uid-alice")).toBeUndefined();
   });
 
-  function assignSeed(openclaw: Record<string, unknown>, extra: Record<string, unknown> = {}) {
+  function assignSeed(openclaw: Record<string, unknown>, extra: Record<string, Record<string, unknown>> = {}) {
     const seed = seedNewSchemaGateway("target", sharedPayload());
     seed["gateways/target"] = { ...seed["gateways/target"], liveRelease: 1 };
     seed["users/uid-alice"] = {
@@ -1110,6 +1111,11 @@ describe("P1-5 endpoint gaps", () => {
 
 
 describe('POST /gateways/:id/recover-source', () => {
+  function sourceRecoveryOf(operation: Record<string, unknown> | undefined): Record<string, unknown> {
+    const input = operation?.input;
+    if (!isPlainObject(input) || !isPlainObject(input.sourceRecovery)) throw new Error('operation has no input.sourceRecovery');
+    return input.sourceRecovery;
+  }
   function sourceSeed() {
     const seed = seedNewSchemaGateway('shared-0', sharedPayload());
     seed['gateways/shared-0'].desiredStatus = 'draining';
@@ -1128,7 +1134,7 @@ describe('POST /gateways/:id/recover-source', () => {
     const seed = sourceSeed(), manifest = immutableBuild(), before = structuredClone(seed);
     const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
     await request(app).post('/gateways/shared-0/recover-source').send({ sourceSha: manifest.sourceSha }).expect(202);
-    const recovery = opsIn(store, 'restart-gateway')[0].input.sourceRecovery;
+    const recovery = sourceRecoveryOf(opsIn(store, 'restart-gateway')[0]);
     expect(recovery.assignments).toHaveLength(2);
     expect(recovery.postgresAgentStores).toHaveLength(2);
     expect(recovery.failedExports).toBeUndefined();
@@ -1136,7 +1142,7 @@ describe('POST /gateways/:id/recover-source', () => {
   });
   it.each(['assignment', 'user', 'anchor', 'active-operation', 'active-transfer'])('rejects changed %s custody before journaling', async change => {
     const seed = sourceSeed(), manifest = immutableBuild();
-    if (change === 'assignment') seed['gateways/shared-0/assignments/source-user-0'].epoch++;
+    if (change === 'assignment') seed['gateways/shared-0/assignments/source-user-0'] = { ...seed['gateways/shared-0/assignments/source-user-0'], epoch: 2 };
     if (change === 'user') seed['users/source-user-0'].username = 'other';
     if (change === 'anchor') delete seed['users/source-user-0/agentStores/octogee-jdog99-coach'];
     if (change === 'active-operation') seed['glmOperations/active'] = { kind: 'migrate-user', status: 'running', input: { fromGatewayId: 'shared-0' } };

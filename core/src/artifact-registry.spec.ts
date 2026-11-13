@@ -18,7 +18,7 @@ vi.mock("google-auth-library", () => ({
 import {
   createCentralReleaseAuthority,
   listGatewayBuilds,
-} from "./artifact-registry";
+} from "./artifact-registry.js";
 
 const fetchMock = vi.fn<typeof fetch>();
 beforeEach(() => {
@@ -267,7 +267,7 @@ fetchMock.mockResolvedValueOnce(makeArResponse([]));
   });
 });
 
-function tarFile(name: string, contents: string): Uint8Array {
+function tarFile(name: string, contents: string): Uint8Array<ArrayBuffer> {
   const body = Buffer.from(contents);
   const header = Buffer.alloc(512);
   header.write(name, 0, "utf8");
@@ -281,6 +281,10 @@ function tarFile(name: string, contents: string): Uint8Array {
   header.write("00", 263, "ascii");
   const length = Math.ceil(body.length / 512) * 512;
   return gzipSync(Buffer.concat([header, body, Buffer.alloc(length - body.length), Buffer.alloc(1024)]));
+}
+
+function withoutImage(images: Record<string, string>, name: string): Record<string, string> {
+  return Object.fromEntries(Object.entries(images).filter(([image]) => image !== name));
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -434,12 +438,11 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
       location: "us-central1",
       repository: "octogee",
     });
-    const older = structuredClone(manifest) as typeof manifest & {
-      schemaVersion: number;
-      surfaces: { platform: Record<string, string> };
+    const older = {
+      ...manifest,
+      schemaVersion: 1,
+      surfaces: { ...manifest.surfaces, platform: withoutImage(manifest.surfaces.platform, "octogee-project-runner") },
     };
-    older.schemaVersion = 1;
-    delete older.surfaces.platform["octogee-project-runner"];
     const archive = tarFile("release-digest-manifest.json", JSON.stringify(older));
     fetchMock
       .mockResolvedValueOnce(jsonResponse({
@@ -470,10 +473,10 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
       location: "us-central1",
       repository: "octogee",
     });
-    const incomplete = structuredClone(manifest) as typeof manifest & {
-      surfaces: { gateway: Record<string, string> };
+    const incomplete = {
+      ...manifest,
+      surfaces: { ...manifest.surfaces, gateway: withoutImage(manifest.surfaces.gateway, "octogee-gateway-builder") },
     };
-    delete incomplete.surfaces.gateway["octogee-gateway-builder"];
     const archive = tarFile("release-digest-manifest.json", JSON.stringify(incomplete));
     fetchMock
       .mockResolvedValueOnce(jsonResponse({
