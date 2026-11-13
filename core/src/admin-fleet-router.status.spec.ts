@@ -125,6 +125,27 @@ describe("the status of a gateway", () => {
     expect((await listed(h, "/placement")).status).toEqual({ [SHARED]: "ready", [ISOLATED]: "paused" });
   });
 
+  it("is booting after a resume until the fleet controller restarts the parked deployment, though its last heartbeat said ready", async () => {
+    const parkedDeployment = runtime(ISOLATED, lastReady(60_000));
+    const record = parkedDeployment[`${GLM_GATEWAYS_COLLECTION}/${ISOLATED}`];
+    const h = harness(withIsolated("running", lastReady(60_000), {
+      [`${GLM_GATEWAYS_COLLECTION}/${ISOLATED}`]: { ...record, helm: { replicas: 0 } },
+    }));
+
+    expect((await listed(h, "/gateways")).status).toEqual({ [SHARED]: "ready", [ISOLATED]: "booting" });
+    expect((await listed(h, "/placement")).status).toEqual({ [SHARED]: "ready", [ISOLATED]: "booting" });
+  });
+
+  it("is the heartbeat's status once the fleet controller has restarted the deployment", async () => {
+    const restarted = runtime(ISOLATED, lastReady(5_000));
+    const record = restarted[`${GLM_GATEWAYS_COLLECTION}/${ISOLATED}`];
+    const h = harness(withIsolated("running", lastReady(5_000), {
+      [`${GLM_GATEWAYS_COLLECTION}/${ISOLATED}`]: { ...record, helm: { replicas: 1 } },
+    }));
+
+    expect((await listed(h, "/gateways")).status).toEqual({ [SHARED]: "ready", [ISOLATED]: "ready" });
+  });
+
   it("is unreachable once the heartbeat is older than the reachability limit", async () => {
     const h = harness(withIsolated("running", lastReady(GATEWAY_UNREACHABLE_AFTER_MS + 1_000)));
 
