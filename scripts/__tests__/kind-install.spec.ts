@@ -213,7 +213,7 @@ ${KUBECTL}`);
       rmSync(sqlDir, { recursive: true, force: true });
     });
 
-    const withStoredKeys = (stored: string[], owner = "") => host.stub("kubectl", `if [[ " $* " == *" get secret octogee-"* ]]; then
+    const withStoredKeys = (stored: string[]) => host.stub("kubectl", `if [[ " $* " == *" get secret octogee-"* ]]; then
   for provider in ${stored.join(" ")}; do [[ " $* " == *" get secret octogee-$provider "* ]] && exit 0; done
   exit 1
 fi
