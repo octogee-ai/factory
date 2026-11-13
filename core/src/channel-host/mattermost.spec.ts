@@ -274,6 +274,42 @@ describe("createMattermostChannelHost — userExists", () => {
   });
 });
 
+describe("createMattermostChannelHost — blockSignIn", () => {
+  it("deactivates the account, then revokes every session it holds", async () => {
+    const { host, calls } = setup([{ body: { status: "OK" } }]);
+
+    await host.blockSignIn("u1");
+
+    expect(calls.map(({ method, url, body }) => [method, url, body])).toEqual([
+      ["PUT", "https://mm.test/api/v4/users/u1/active", { active: false }],
+      ["POST", "https://mm.test/api/v4/users/u1/sessions/revoke/all", undefined],
+    ]);
+    expect(calls[0]!.headers.Authorization).toBe("Bearer tok-admin");
+  });
+
+  it("treats an account Mattermost no longer has as already unable to sign in", async () => {
+    const { host, calls, log } = setup([{ status: 404, body: { message: "not found" } }]);
+
+    await expect(host.blockSignIn("u1")).resolves.toBeUndefined();
+
+    expect(calls).toHaveLength(1);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("u1"));
+  });
+
+  it("fails with the status when Mattermost refuses the deactivation", async () => {
+    const { host, calls } = setup([{ status: 500, body: "down" }]);
+
+    await expect(host.blockSignIn("u1")).rejects.toThrow(/deactivate user u1 failed: 500 down/);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("fails with the status when Mattermost refuses the session revocation", async () => {
+    const { host } = setup([{ body: { status: "OK" } }, { status: 403, body: "forbidden" }]);
+
+    await expect(host.blockSignIn("u1")).rejects.toThrow(/revoke sessions for user u1 failed: 403 forbidden/);
+  });
+});
+
 describe("createMattermostChannelHost — setUserPassword", () => {
   it("finds the account by username and sets its password as admin", async () => {
     const { host, calls } = setup([{ body: { id: "u1" } }, { body: { status: "OK" } }]);

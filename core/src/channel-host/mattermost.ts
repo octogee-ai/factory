@@ -127,6 +127,26 @@ async function tolerantDelete(api: MmAdmin, path: string, label: string): Promis
   throw new Error(`mm ${label} failed: ${resp.status} ${await responseText(resp)}`);
 }
 
+async function blockMmSignIn(api: MmAdmin, userId: string): Promise<void> {
+  const deactivated = await api.fetch(`/users/${userId}/active`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ active: false }),
+  });
+  if (deactivated.status === 404) {
+    api.log(`[mm] user ${userId} is gone, so it cannot sign in`);
+    return;
+  }
+  if (!deactivated.ok) {
+    throw new Error(`mm deactivate user ${userId} failed: ${deactivated.status} ${await responseText(deactivated)}`);
+  }
+  const revoked = await api.fetch(`/users/${userId}/sessions/revoke/all`, { method: "POST" });
+  if (!revoked.ok) {
+    throw new Error(`mm revoke sessions for user ${userId} failed: ${revoked.status} ${await responseText(revoked)}`);
+  }
+  api.log(`[mm] user ${userId} deactivated and its sessions revoked`);
+}
+
 async function destroyChannel(api: MmAdmin, channelId: string): Promise<void> {
   const resp = await api.fetch(`/channels/${channelId}`, { method: "DELETE" });
   if (resp.ok || resp.status === 404) {
@@ -293,6 +313,8 @@ export function createMattermostChannelHost(config: MattermostChannelHostConfig)
         throw new Error(`mm set password for ${username} failed: ${resp.status} ${await responseText(resp)}`);
       }
     },
+
+    blockSignIn: (userId) => blockMmSignIn(api, userId),
 
     async addMember(target, userId, roles) {
       await call(

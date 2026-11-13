@@ -6,19 +6,21 @@ import type { ProductUserSuspension } from "../lib/user-ops/user-lifecycle-produ
 
 const CLEANUP: UserCleanupContext = {
   uid: "uid-ada", slug: "ada", email: "ada@users.invalid", giteaOrg: "ada", repoNames: [], projectSlugs: [],
-  workspaceTeamId: null, mmUserId: null, mmCoachUserId: null, adminChannelId: null, currentGatewayId: "shared-a",
+  workspaceTeamId: null, mmUserId: "mm-ada", mmCoachUserId: null, adminChannelId: null, currentGatewayId: "shared-a",
   credentialSecretNames: [], projectAgentMmUserIds: [], projectAgentCredentialDocPaths: [], chatArtifactIds: [], agentImportIds: [],
 };
 
 const OPERATION = { id: "op-1", kind: "suspend-user", input: { uid: "uid-ada", deletionId: "del-1" } } as unknown as Operation;
 
-function suspensionDeps(product?: ProductUserSuspension): UserSuspensionDeps {
+function suspensionDeps(product?: ProductUserSuspension, cleanup: UserCleanupContext = CLEANUP): UserSuspensionDeps {
   const done = vi.fn(async () => undefined);
   return {
-    loadDeletionJob: async () => ({ uid: "uid-ada", slug: "ada", currentGatewayId: "shared-a", productContext: {}, cleanupContext: CLEANUP }),
+    loadDeletionJob: async () => ({ uid: "uid-ada", slug: "ada", currentGatewayId: "shared-a", productContext: {}, cleanupContext: cleanup }),
     loadCleanupContext: async () => CLEANUP,
     persistCleanupContext: done,
     assertRestoreNotInProgress: done,
+    blockChatSignIn: vi.fn(async () => undefined),
+    blockGitSignIn: vi.fn(async () => undefined),
     cancelUserMigrations: vi.fn(async () => false),
     deactivateUserVisibility: done,
     unmountFromGateway: vi.fn(async () => "unmounted" as const),
@@ -53,6 +55,8 @@ describe("suspending a user", () => {
     expect(steps).toEqual([
       "capture-cleanup-context:skipped",
       "suspend-auth:skipped",
+      "suspend-chat-sign-in:done",
+      "suspend-git-sign-in:done",
       "cancel-customer-migrations:done",
       "deactivate-customer-visibility:done",
       "unmount-gateway:done",
@@ -66,6 +70,44 @@ describe("suspending a user", () => {
       "mark-suspended:done",
     ]);
     expect(deps.markSuspended).toHaveBeenCalledWith("del-1");
+    expect(deps.blockChatSignIn).toHaveBeenCalledWith("mm-ada");
+    expect(deps.blockGitSignIn).toHaveBeenCalledWith("ada");
+  });
+
+  it("skips the sign-in steps for a user with no chat account or workspace", async () => {
+    const deps = suspensionDeps(undefined, { ...CLEANUP, mmUserId: null, slug: "" });
+
+    const { result, steps } = await suspend(deps);
+
+    expect(result).toEqual({ steps: [], success: true });
+    expect(steps).toEqual(expect.arrayContaining(["suspend-chat-sign-in:skipped", "suspend-git-sign-in:skipped"]));
+    expect(deps.blockChatSignIn).not.toHaveBeenCalled();
+    expect(deps.blockGitSignIn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["suspend-chat-sign-in", "blockChatSignIn", "mm deactivate user mm-ada failed: 503 unavailable"],
+    ["suspend-git-sign-in", "blockGitSignIn", "gitea-admin block-sign-in failed: 500 database is locked"],
+  ] as const)("fails %s for a cleanup retry, runs every later step, and completes once the retry succeeds", async (step, dependency, message) => {
+    const deps = suspensionDeps();
+    vi.mocked(deps[dependency]).mockRejectedValueOnce(new Error(message));
+
+    const first = await suspend(deps);
+
+    expect(first.result).toEqual({
+      steps: [],
+      success: false,
+      error: `${step}: ${message}`,
+      output: { deletionCleanupRetry: { deletionId: "del-1" } },
+    });
+    expect(first.steps).toEqual(expect.arrayContaining([`${step}:failed`, "delete-project-agent-credentials:done"]));
+    expect(deps.markSuspended).not.toHaveBeenCalled();
+
+    const retry = await suspend(deps);
+
+    expect(retry.result).toEqual({ steps: [], success: true });
+    expect(retry.steps).toEqual(expect.arrayContaining([`${step}:done`, "mark-suspended:done"]));
+    expect(deps[dependency]).toHaveBeenCalledTimes(2);
   });
 
   it("runs the product's sign-in suspension and its steps at their points in the sequence", async () => {
