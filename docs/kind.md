@@ -26,8 +26,9 @@ The cluster runs:
 - Node.js 24
 - openssl, ssh-keygen and git
 - Go, to install the `octogee-fleet` command line
-- a model provider key, so agents can reply: an [OpenRouter](https://openrouter.ai/keys)
-  key for the default agent model, or an Anthropic or OpenAI key
+- a model provider key, so agents can reply: an [OpenRouter](https://openrouter.ai/keys),
+  Anthropic or OpenAI key. The script points agents at models of a provider
+  whose key it stores, described under [Agent models](#agent-models)
 
 ## Install
 
@@ -57,10 +58,17 @@ scripts/ops/kind-install.sh up --pull
 
 `--pull` copies the images that the Build main workflow published for your
 checkout's commit, described under [Images from GitHub](#images-from-github).
-Build main finishes about 15 minutes after a commit reaches `main`. Until then,
-or on a commit that is not on `main`, name a `main` commit that has images. The
-Helm chart and the install steps still come from your checkout, so pick the
-commit nearest to it:
+Build main finishes about 15 minutes after a commit reaches `main`, and a newer
+push to `main` cancels a run that is still going, so a commit can end up with
+no images at all. Until its images exist, or on a commit that is not on `main`,
+name a `main` commit that has images. The Helm chart and the install steps
+still come from your checkout, so pick the commit nearest to it. This prints the
+newest `main` commit whose Build main succeeded:
+
+```bash
+gh run list -R octogee-ai/octogee-cloud --workflow=build-main.yml --branch=main \
+  --status=success --limit=1 --json headSha --jq '.[0].headSha'
+```
 
 ```bash
 scripts/ops/kind-install.sh up --pull --sha=<full commit SHA>
@@ -78,7 +86,8 @@ The script:
 
 1. starts a local image registry on `localhost:5001`;
 2. creates the kind cluster `octogee` with its own kubeconfig, so your current
-   kubectl context does not change;
+   kubectl context does not change. kind reports that it set the context
+   `kind-octogee`; it set it only in that kubeconfig;
 3. with `--pull`, copies each published image for your machine's architecture
    into the local registry, keeping its digest;
 4. without `--pull`, downloads the pinned OpenClaw build, checks its sha256
@@ -90,9 +99,11 @@ The script:
    Gitea admin credentials, and stores each provider key you exported in a
    Secret of its own;
 6. installs PostgreSQL and SeaweedFS, then the Helm chart in `helm/octogee`;
-7. creates the Mattermost admin, its access token and the `octogee` team, and
+7. points agents at models of a provider whose key it stores, described under
+   [Agent models](#agent-models);
+8. creates the Mattermost admin, its access token and the `octogee` team, and
    the Gitea admin, its token and the `octogee` organization;
-8. restarts the platform so it reads those tokens and keys, and waits for the
+9. restarts the platform so it reads those tokens and keys, and waits for the
    fleet controller.
 
 Run it again at any time. Each step checks what exists, and secrets are kept
@@ -146,7 +157,9 @@ On kind the command line signs in with the operator key that the script
 generated. The fleet controller trusts the matching public key
 (`FLEET_OPERATOR_PUBLIC_KEY`), and `scripts/ops/operator-token.mjs` signs a token
 that lasts ten minutes. The script writes a configuration for the command line
-to `$STATE/fleet-config.json`.
+to `$STATE/fleet-config.json`. It runs `scripts/ops/operator-token.mjs` from
+this checkout by its full path, so keep the checkout where it is while you use
+the cluster.
 
 A new terminal has neither `STATE` nor `OCTOGEE_FLEET_CONFIG`, so set both in
 every terminal you open for the cluster. `status` prints both lines with your
@@ -197,9 +210,9 @@ octogee-fleet --env=kind user inspect lin
 When `user inspect` shows provisioning `complete` and the user mounted on
 `shared-a`, the user has:
 
-- a Mattermost account `lin` and a team named after them, with the private
-  channels `lin-general` and `lin-coach`; their agent, the bot `lin-coach`, is
-  in both;
+- a Mattermost account `lin` and a team named after them, shown as lin's
+  Workspace, with the private channels General (`lin-general`) and Coach
+  (`lin-coach`); their agent, the bot `lin-coach`, is in both;
 - a Gitea account `ws-lin` and an organization `lin`, with a `workspace`
   repository and an empty `system_config` repository.
 
@@ -235,7 +248,9 @@ kubectl --kubeconfig="$STATE/kubeconfig" --context=kind-octogee -n octogee-local
 
 Mattermost is then at <http://localhost:8065> and Gitea at
 <http://localhost:3000>. Gitea asks for a new password at the first sign-in.
-The user's workspace clones over the same port-forward:
+Mattermost does not, so change the chat password under **Profile > Security**.
+The user's workspace clones over the same port-forward, with the username
+`ws-lin` and the git password:
 
 ```bash
 git clone http://localhost:3000/lin/workspace.git
@@ -249,7 +264,12 @@ path on `localhost` with that service's port.
 
 ## Talk to the agent
 
-Open `lin-coach` in Mattermost and send a message. The agent answers there.
+Open the Coach channel in Mattermost and send a message. The agent answers in
+a thread under it, so the channel shows `1 reply` below your message.
+
+`kubectl port-forward` stops when a forwarded connection resets, which
+Mattermost's websocket can do, and prints `lost connection to pod`. Start the
+port-forward again if the page stops loading.
 
 On a shared gateway, an agent reaches its model provider through the LLM broker.
 The broker holds the provider keys and gives each agent a token of its own, so
@@ -263,6 +283,26 @@ the state directory. A provider whose key you never exported has no Secret, and
 the broker refuses calls to it. To add or replace a key, export it and run `up`
 again; the script restarts the broker so it reads the new key. If you exported
 no key and none is stored, the script warns that agents cannot reply.
+
+### Agent models
+
+The platform's built-in agent model and house model are OpenAI models. Without
+an OpenAI key, each turn fails at OpenAI several times before it tries the
+fallback. So when the script has a provider key, it sets the platform's agent
+model, its fallback and the house model to models of that provider:
+
+| Stored key | Agent model | Fallback | House model |
+| --- | --- | --- | --- |
+| OpenRouter | `platform-openrouter/meta/muse-ember` | `platform-openrouter/openai/gpt-6-luna` | `platform-openrouter/openai/gpt-6-luna` |
+| Anthropic | `anthropic/claude-sonnet-5` | `anthropic/claude-haiku-4-5` | `anthropic/claude-haiku-4-5` |
+| OpenAI | `platform-openai/gpt-6.1-terra` | `platform-openai/gpt-6-luna` | `platform-openai/gpt-6-luna` |
+
+With more than one key stored, it uses the first of OpenRouter, Anthropic and
+OpenAI. It names the models it sets, and sets them again on each `up`, so they
+follow the keys you store. Agents of users who are already mounted switch at
+the fleet controller's next pass. Models that something else set, such as
+`kind-agent-round-trip.mjs --model`, stay as they are; the script says it kept
+them. With no key it sets nothing.
 
 `scripts/ops/kind-agent-round-trip.mjs` checks the whole path in one command.
 It adds the shared gateway `shared-a` and the user `lin` if they are missing,
@@ -278,7 +318,8 @@ node scripts/ops/kind-agent-round-trip.mjs --state="$STATE" \
 
 `--model` first sets the platform's default agent model and house model to that
 catalog model, with no fallback, and the check then requires a call to it. The
-setting stays on the cluster. Without `--model`, any successful call passes.
+setting stays on the cluster, and later runs of `up` keep it. Without
+`--model`, any successful call passes.
 
 ## Differences from a cloud cluster
 

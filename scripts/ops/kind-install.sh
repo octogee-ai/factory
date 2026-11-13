@@ -275,21 +275,55 @@ write_secrets() {
   apply_provider_keys
 }
 
+STORED_PROVIDERS=()
+
 apply_provider_keys() {
-  local pair provider variable stored=false
+  local pair provider variable
+  STORED_PROVIDERS=()
   for pair in anthropic:ANTHROPIC_API_KEY openrouter:OPENROUTER_API_KEY openai:OPENAI_API_KEY; do
     provider="${pair%%:*}"
     variable="${pair#*:}"
     if [[ -n "${!variable:-}" ]]; then
       apply_secret "octogee-$provider" --from-file=api_key=<(printf '%s' "${!variable}")
       printf 'Stored %s in Secret octogee-%s\n' "$variable" "$provider"
-      stored=true
+      STORED_PROVIDERS+=("$provider")
     elif k get secret "octogee-$provider" >/dev/null 2>&1; then
-      stored=true
+      STORED_PROVIDERS+=("$provider")
     fi
   done
-  $stored || printf '%s\n' "kind-install: no model provider key, so agents cannot reply." \
+  [[ -n "${STORED_PROVIDERS[*]-}" ]] || printf '%s\n' "kind-install: no model provider key, so agents cannot reply." \
     "Set OPENROUTER_API_KEY, ANTHROPIC_API_KEY or OPENAI_API_KEY and run up again." >&2
+}
+
+platform_sql() {
+  k exec -i statefulset/postgres -- psql -U postgres -d octogee_platform -X -A -t -v ON_ERROR_STOP=1 "$@"
+}
+
+apply_agent_models() {
+  local provider="" candidate primary fallback house owner
+  for candidate in openrouter anthropic openai; do
+    if [[ " ${STORED_PROVIDERS[*]-} " == *" $candidate "* ]]; then
+      provider="$candidate"
+      break
+    fi
+  done
+  [[ -n "$provider" ]] || return 0
+  case "$provider" in
+    openrouter) primary=platform-openrouter/meta/muse-ember fallback=platform-openrouter/openai/gpt-6-luna house=platform-openrouter/openai/gpt-6-luna ;;
+    anthropic) primary=anthropic/claude-sonnet-5 fallback=anthropic/claude-haiku-4-5 house=anthropic/claude-haiku-4-5 ;;
+    openai) primary=platform-openai/gpt-6.1-terra fallback=platform-openai/gpt-6-luna house=platform-openai/gpt-6-luna ;;
+  esac
+  owner="$(platform_sql <<<"SELECT updated_by FROM platform.platform_config WHERE key = 'models';")"
+  if [[ -n "$owner" && "$owner" != kind-install ]]; then
+    printf 'Keeping the agent models that %s set\n' "$owner"
+    return
+  fi
+  platform_sql -v value="{\"builderAgentModelRef\":\"$primary\",\"builderAgentFallbackModelRef\":\"$fallback\",\"freeTierModelRef\":\"$house\"}" >/dev/null <<'SQL'
+INSERT INTO platform.platform_config (key, value, updated_at, updated_by)
+VALUES ('models', :'value'::jsonb, (extract(epoch FROM clock_timestamp()) * 1000)::bigint, 'kind-install')
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at, updated_by = EXCLUDED.updated_by;
+SQL
+  printf 'Agents use %s, falling back to %s; the house model is %s\n' "$primary" "$fallback" "$house"
 }
 
 install_infrastructure() {
@@ -401,6 +435,8 @@ up() {
   install_infrastructure
   log "Helm release"
   install_chart
+  log "Agent models"
+  apply_agent_models
   log "Mattermost"
   mattermost_bootstrap
   log "Gitea"
