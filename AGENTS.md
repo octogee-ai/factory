@@ -1,51 +1,67 @@
-# Agents — Octogee Project Context
+# Agents: octogee-cloud
 
-Loaded every session by every agent (CLAUDE.md and AGENTS.md are the same
-file — Claude, Codex, and anything else working here share one context). Just-enough orientation; follow `docs/` pointers for depth.
+Every agent working here loads this file at the start of a session, whether it
+is Claude, Codex or another. It gives just enough orientation; the docs and
+handbook chapters it links to hold the depth.
 
-## What Is Octogee
+## What this repository is
 
-Personal AI partner platform — "Eight arms. One dream." Each user gets an AI agent,
-a workspace with chat (Mattermost) + git (Gitea) + a managed hosting
-pipeline. Users create projects (each with a chat channel, repo, and canvas home
-page); others can join workspaces or projects independently. Admins operate via a
-separate dashboard.
+octogee-cloud runs OpenClaw agents for many users. The fleet controller places
+each user on a shared gateway, where many users share one OpenClaw gateway and
+host code is denied, or on an isolated gateway of their own, and moves users
+between the two. Each user gets a Mattermost account and team for chat and a
+Gitea organization for git. Operators drive the fleet with the
+[`octogee-fleet`](https://github.com/octogee-ai/octogee-fleet) command line,
+which talks to the fleet controller's Admin API.
+[Why octogee-cloud](docs/why-octogee-cloud.md) explains the trust model.
 
-## Monorepo Layout
+The Octogee product pins a commit of this repository and builds on top of it.
+Its features and names stay out of here, and `npm run gate` in `scripts/`
+refuses private identifiers and commercial terms.
 
-No npm workspaces — each package builds standalone (`cd X && npm ci`); root
-`package.json` delegates via `npm run --prefix`. All packages are `@octogee/*`.
+## Layout
+
+There are no npm workspaces. Each package has its own `package.json` and
+lockfile, and installs, typechecks and tests on its own.
 
 ```
-site/            Astro 5 — marketing + public SSR (octogee.com)
-app/             Vite + React PWA, all roles (app.octogee.com)
-octogee-api/     Express cluster singleton — the HTTP API (api.octogee.com)
-gateway-edge/    Express sidecar on each gateway pod — locality routes + MM WS proxy
-glm-controller/  Fleet controller — gateway-fleet lifecycle (provision/retire/roll, /g routing)
-functions/       Firebase Functions (Firestore triggers + scheduled)
-shared/          @octogee/shared — TypeScript types only (no React)
-scripts/         in-pod provisioner + operator tooling
-helm/ terraform/ GKE + GCP infra
-tests/ firestore-rules-tests/  cross-package + security-rules tests
-docs/            start at docs/INDEX.md
+core/            @octogee/core: shared runtime (platform state, secret store, chat and git hosts)
+shared/          @octogee/shared: types and small server helpers
+test-helpers/    @octogee/test-helpers
+glm-controller/  the fleet controller and its Admin API: placement, migration, gateway rollout
+octogee-api/     the platform API, plus the LLM broker and npm cache proxy apps
+gateway-edge/    sidecar in each gateway pod; also runs as the gateway router and the Mattermost callback router
+scripts/         gateway pod boot steps and provisioner (entrypoints/), operator tools (ops/), CI (ci/), specs (__tests__/)
+infra/           the gateway image (infra/gateway/), the isolated gateway VM image (infra/desktop/), vm-bridge
+helm/            octogee (the platform), octogee-gateway (one gateway), monitoring
+terraform/       Google Cloud modules
+templates/       starter files for new agents and their workspaces
+tests/           cross-package specs, such as the Helm chart specs
+install.sh, deploy/  the foundation installer: one stock OpenClaw gateway with chat and git
+docs/            start at docs/getting-started.md
 ```
 
-The per-user agent runtime is the OpenClaw **gateway pod** (built from
-`infra/gateway/`); gateway-edge and the provisioner run inside it. Ready-to-serve
-`static-site` build/test/preview uses a bounded, non-executing API materializer.
-Vite/Astro build/test/preview use external ephemeral gVisor Jobs, and publish
-uses a separate non-executing Hosting publisher.
+`core`, `shared` and `test-helpers` commit their built `dist/`. Other packages
+install them as `file:` dependencies, so build and commit `dist/` with any
+change to their source. The OpenClaw build the gateway image uses is pinned in
+`infra/gateway/openclaw-tarball/current.json`.
 
-## Build + Dev
+## Build and test
+
+Use Node.js 24, the version CI uses. Install the package you work on and run
+its checks. For `scripts`:
 
 ```bash
-npm test            # all packages    ·    npm run typecheck   # tsc --noEmit, all packages
-cd app && npm run dev          # :4322
-cd site && npm run dev         # :4321
-cd octogee-api && npm run dev  # :3001 (the API)
+npm ci --prefix scripts
+cd scripts && npx tsc --noEmit && npm run gate
 ```
 
-## Engineering Principles — non-negotiable (solo operator, pre-launch)
+`.github/workflows/checks.yml` has the typecheck and test commands each pull
+request runs. [The full platform on kind](docs/kind.md) installs everything on
+a local cluster; `scripts/ops/kind-install.sh` builds the images from your
+checkout or copies the published ones.
+
+## Engineering principles
 
 - **Test changed behavior, not files.** Start red for bugs, logic branches,
   state transitions, auth boundaries, handlers, and user interactions. Do not
@@ -54,173 +70,97 @@ cd octogee-api && npm run dev  # :3001 (the API)
 - **No silent failures.** Every error path logs, returns a code, or throws.
 - **Do not mask upstream bugs.** Validate trust boundaries; inside owned code,
   fix malformed state or duplicate work at its source instead of adding fallbacks.
-- **Greenfield.** Breaking changes are fine — no migrations, compat shims, or `_var` renames.
+- **Greenfield.** Breaking changes are fine: no migrations, compat shims, or `_var` renames.
 - **No narrative comments on main.** Names express intent, test names pin behavior,
-  DECISIONS.md records *why*, memory entries hold load-bearing whys. Use comments liberally
-  during the dev loop as in-line chat with the operator — then strip them in the final pre-PR
-  cleanup pass. The code speaks the truth; we don't commit the narrative.
+  and the pull request records *why*. Comment freely while you work with the
+  operator, then strip the comments before the pull request. The code speaks the
+  truth; we don't commit the narrative.
 
 ## Testing
 
-- **PR readiness.** Use CI and deployed TEST for Octogee PR validation. Open PRs
-  for review without adding disposable Gateway qualification or bespoke local
-  runtime proof as readiness gates. Reserve disposable Gateways and local runtime
-  proof for upstream OpenClaw PRs. Focused local unit tests and typechecks remain
-  part of normal development.
-- **Component tests live in `app/`**, never `tests/` (separate `react` install elsewhere →
-  "Invalid hook call"). Vitest only; service routes use a mocked db; `*.emulator.spec.ts`
-  need the Firestore emulator.
-- `cd firestore-rules-tests && npm test` auto-starts the emulator. The site owns
-  a Vitest browser project backed by Playwright; manual product checks use TEST.
-- **Coverage gaps:** `npm run --prefix scripts audit-coverage` (import-graph, both suffixes +
-  `@/`/`@shared` aliases) — never a `*.spec.ts` glob, which false-flags repeatedly.
-- **`scripts/` test-gate:** throwaway operator tooling is exempt, but shared/runtime code
-  under `scripts/lib/` (e.g. `user-lifecycle`, `provision-reconcile`, `git`, `config`)
-  requires behavioral coverage. Blast radius decides, not the directory.
+- **Vitest only.** Specs sit beside their module or in the package's `__tests__/`.
+  Specs for `scripts/` live under `scripts/__tests__/`. Shell scripts are tested
+  against stubbed commands; see `scripts/__tests__/deploy/stub-host.ts`.
+- **PostgreSQL.** `node scripts/ci/core-postgres.mjs` starts a throwaway
+  PostgreSQL 16 server and runs core's integration suite against it. It expects
+  PostgreSQL 16 and pgvector under `/usr/lib/postgresql/16`, as on the CI runner.
+- **Emulator specs.** `*.emulator.spec.ts` files need the Firestore emulator and
+  a Firebase configuration this repository does not have, so CI here does not
+  run them.
+- **Coverage gaps.** `npm run --prefix scripts audit-coverage` follows the
+  import graph, counting `.spec.ts` and `.test.ts` files and resolving the `@/`
+  and `@shared` aliases. Never use a `*.spec.ts` glob, which flags false gaps.
+- **`scripts/` test gate.** Throwaway operator tooling is exempt, but shared
+  runtime code under `scripts/lib/` (for example `user-lifecycle`,
+  `provision-reconcile`, `git`, `config`) needs behavioral coverage. Blast radius
+  decides, not the directory.
 
-## Workflow — keep it small
+## Workflow: keep it small
 
-This is a pre-launch product run by one operator. Prefer one small PR with one
-purpose and the narrowest relevant test/typecheck. Write a spec only when
-the operator needs to choose among materially different cross-subsystem designs.
-Do not add review agents, receipts, baselines, rehearsals, approval layers, or
-multi-PR sequencing unless the operator asks for them or a current user-risk
-boundary requires them.
+Open one small pull request with one purpose and the narrowest relevant test
+and typecheck. Write a spec only when the operator has to choose among
+materially different designs across subsystems. Do not add review agents,
+receipts, baselines, rehearsals, approval layers, or multi-PR sequencing unless
+the operator asks for them or a current risk to users requires them.
 
-**Specs are disposable.** Delete a spec when its work lands; code and tests are
-the record. Keep `DECISIONS.md` to current, non-obvious choices, not a museum of
-superseded process. See [Handbook 14](docs/handbook/14-docs-and-curation.md).
+- Sign off every commit with `git commit -s`. The `dco` check fails a pull
+  request with an unsigned commit.
+- `checks`, `dco` and `CodeQL` are the required checks on `main`. Pull
+  requests merge with a merge commit.
+- **Specs are disposable.** Delete a spec when its work lands; code and tests
+  are the record. See [Handbook 14](docs/handbook/14-docs-and-curation.md).
 
-## CI/CD
+## CI and images
 
-Linux PR checks, main image builds, explicit platform deployments, Ship TEST, and
-scheduled security audits run in **GitHub Actions**. Checks are tiered: PR commits
-run the affected packages' typecheck and tests plus diff-scoped lint and security
-scans; main runs the full suite every two hours, skipped when every lane already
-succeeded on main's current commit; Ship TEST runs the end-to-end tests in `tests/live/` against the
-deployed environment. A new push cancels an older automatic main build, and Ship TEST builds any
-SHA that was skipped.
-Add or change checks in `scripts/lib/ci-checks.ts` and `scripts/ci/`.
-PR jobs use read-only repository access and no cloud credentials. Native image
-builds run on the runner; GCP remains the registry and runtime host. The aggregate
-**Required checks** job is main's only required status check. A Cloud Build trigger
-(`ci/cloudbuild-pr.yaml`) can run the same lanes and stays disabled as a fallback.
+- **Checks** (`.github/workflows/checks.yml`) runs on every pull request and on
+  pushes to `main`. Pull request jobs have read-only repository access and no
+  cloud credentials.
+- **Build main** (`.github/workflows/build-main.yml`) builds the platform images
+  for `linux/amd64` and `linux/arm64` on every push to `main`. It pushes them to
+  `ghcr.io/octogee-ai/octogee-cloud/<image>`, tagged with the full and short
+  commit SHA, and keeps a manifest of every digest as a workflow artifact.
+  Building never deploys.
+- Deploying a build is an operator command. [SHIP.md](SHIP.md) shows the shape
+  of those commands, and every fleet change the controller makes writes an
+  operations-journal entry.
 
-```bash
-npm ci --prefix scripts
-npm run ci:check -- --plan
-npm run ci:check
-npm run ci:docker
-npm run ci:submit -- main
-npm run ci:build
-npm run ci:deploy -- --environment=test --sha=<built-sha> --actor=operator:<name>
-npm run ci:ship-test -- --sha=<full-main-sha> --actor=operator:<name>
-npm run ci:ship-prod -- --sha=<test-passed-main-sha> --actor=operator:<name>
-```
+## Architecture
 
-Hosted operator commands dispatch and wait for an exact GitHub Actions run.
-`ci:build` builds committed main locally; `ci:deploy -- --local` and
-`ci:ship-test -- --local` and `ci:ship-prod -- --local` use the operator host. Desktop installer builds remain explicit. Build main constructs and accepts the
-Desktop VM after the container images, bound to the exact isolated gateway image digest.
-Ship TEST requires that complete build before deploying. Public desktop downloads stay on GitHub Releases.
-Do not add deployment or fleet authority to the main/check identities.
-See [Handbook 21](docs/handbook/21-deploy-and-cicd.md) for credentials and cutover.
+- **HTTP.** The platform API (`octogee-api`) serves most routes. The gateway
+  router, `gateway-edge` in router mode, sends `/g/<gatewayId>/*` to that
+  gateway's edge sidecar, which serves the user's workspace files and proxies
+  the Mattermost WebSocket.
+- **Auth.** The Admin API accepts a Google sign-in or a token signed
+  with the operator key; kind uses the key (`scripts/ops/operator-token.mjs`).
+  Services authenticate to each other with Kubernetes service account tokens
+  bound to the calling gateway, plus dedicated bearers and HMAC signatures.
+- **State.** Platform state lives in PostgreSQL (`core/src/platform-state/`).
+  Secrets the platform creates are encrypted rows there under the root key, or
+  Google Secret Manager. Each agent has its own PostgreSQL store.
+- **Users.** `octogee-fleet user add` records a user and `user assign` places
+  them on a gateway. The provisioner in the gateway pod,
+  `scripts/entrypoints/fleet-controller.ts` despite its name, then sets the user
+  up through the platform API's fleet broker, which holds the admin credentials:
+  their Mattermost account, team, channels and agent bot, and their Gitea
+  organization with a `workspace` repository.
+- **Gateways.** Shared gateways are Kubernetes pods from `helm/octogee-gateway`,
+  under gVisor on a cloud cluster. Isolated gateways run only as Google Cloud
+  virtual machines today. The controller adds no gateway and moves no user on
+  its own; automation such as autoscaling or returning idle users belongs to a
+  product built on top.
+- **Firebase and Firestore** remain in a few paths that have not moved behind a
+  platform port yet: `gateway-edge/src/lib/db.ts` and its auth middleware, and
+  the controller's steps that move, suspend and erase a user. Do not add new ones.
 
-For a change confined to `glm-controller/`, test it on TEST with the one-off fleet controller image swap in
-[Handbook 21](docs/handbook/21-deploy-and-cicd.md#fleet-controller-only-changes) before merging, rather than waiting for Build main and Ship TEST.
+## Where to look
 
-The deployment path preserves three invariants:
-
-1. **Build main** (`.github/workflows/build-main.yml`) produces one immutable, SHA- and
-   digest-addressed image family and manifest. Building never deploys.
-2. **Deploy platform** (`npm run ci:deploy`) checks out an already-built SHA and
-   deploys its platform and site surfaces (in parallel) to the selected environment. The shared pool
-   rides it: the fleet controller converges every `shared-N` slot to the build's gateway
-   image. It never mutates isolated gateway desired state.
-3. Every fleet mutation writes an operations-journal entry.
-
-Isolated gateway deployment is an operator command, independent of platform
-deployment: `fleet --env=<test|prod> gw deploy <gateway-id> --sha=<full-sha> --apply`.
-The command may target any non-retired isolated gateway (shared slots are
-rejected), resolves the existing immutable manifest, writes that gateway's
-desired release, and returns. The fleet controller owns live convergence. There is no semver release, TEST-to-PROD promotion,
-release reservation, or automatic CI fleet authority. **Ship TEST** is an explicit
-operator command (`npm run ci:ship-test`) that waits for the SHA's running Build main run (dispatching one
-when there is no manifest or running build), deploys TEST platform/site, publishes the desktop
-image when included in the build, journals isolated gateway desired releases, and waits for
-shared and isolated gateway live-image convergence. Paused isolated gateways receive the desired release
-without waking; retired gateways are skipped. **Ship PROD** deploys a TEST-passed SHA and
-converges the PROD isolated gateways. The fleet controller attempts the latest accepted VM image when
-a stopped VM boots or restarts after preemption, retaining the home disk and logging
-any skipped upgrade. Project autosave and shutdown flush are best effort. Active VMs
-stay running and suspended VMs resume on their current boot when the Gateway image is unchanged.
-A suspended VM changing Gateway images is stopped before rebinding and cold-started on the retained home.
-Admin **Replace
-computer** forces a rollout.
-Build main constructs the desktop VM before it succeeds, so the boot image carries
-that build's Gateway image and new VMs skip the image pull. The image is
-keyed on the Gateway digest and desktop inputs and reused when unchanged. The
-accepted companion is immutable and bound to the main manifest and Gateway digest.
-Ship TEST, including `--local`, waits for this complete build; it never constructs
-Desktop during deployment. The explicit desktop-image job can complete other main
-SHAs. Main/check identities have no deployment or Desktop construction authority;
-the Desktop job uses its dedicated build identity.
-To deploy one build to several gateways outside a shipment, the operator issues
-the command for each gateway. Active images live
-in Central Artifact Registry.
-
-## Environments
-
-TEST and PROD run in separate GCP projects, each with its own GKE cluster. MM WebSockets ride
-`api.octogee.com` (chat.octogee.com retired).
-
-|                       | Test                                              | Prod                                  |
-| --------------------- | ------------------------------------------------- | ------------------------------------- |
-| GKE cluster / namespace | `<cluster>` / `<test-namespace>`                | `<cluster>` / `<prod-namespace>`      |
-| Firebase data project | `<test-project>`                                  | `<prod-project>`                      |
-| Firebase Hosting project | `<test-project>`                               | `<prod-project>`                      |
-| Site / App / API      | `<test-site-host>` / `<test-app-host>` / `<test-api-host>` | octogee.com / app.octogee.com / api.octogee.com |
-
-## Key Architecture Patterns
-
-- **Surfaces.** `octogee.com` (site/, zero-auth SSR) · `app.octogee.com` (app/ PWA,
-  route-driven via `appRoutes.ts`) · `api.octogee.com` = **octogee-api** (cluster, most
-  routes) **+ gateway-router** (`/g/<gatewayId>/*` public path-affinity to the selected
-  gateway-edge sidecar for workspace git FS, deploy-preview,
-  byosub-internal, MM WS proxy). gateway-edge keeps `/api/g/<gatewayId>/*` as its
-  internal sidecar mount behind the router.
-- **Auth.** Firebase ID token → `requireAuth()`; admin role is the platform-state user `role`
-  (`req.isAdmin`); the PWA reads it from `GET /api/account/role`.
-  Service-to-service: tenant-bound K8s SA tokens + dedicated bearers/HMAC signing (see docs/operations/INTERNAL-SERVICE-AUTH.md).
-- **Chat.** Team-per-workspace in MM; user MM token in `users/{uid}/secrets/mattermost`.
-  gateway-edge swaps Firebase→MM token, proxies via K8s DNS. WS tickets: UUID, 30s TTL,
-  one-time. Channels: `{slug}-general`, `{slug}-{projectSlug}`, `octogee-{slug}-coach`.
-- **Gitea.** Workspace repo `{slug}-workspace`, project repo `{workspaceSlug}-{projectSlug}`;
-  text in Gitea, binaries in GCS (`.files/manifest.json`); per-user `GITEA_TOKEN`.
-- **Membership.** Workspace and project membership are independent; `{slug}-general` channel
-  membership is the canonical workspace-membership signal.
-- **Provisioning.** Onboarding done → Cloud Function records `signupAdmission` → the fleet controller
-  admits through the platform store (sets `provisioning.status`) → in-pod provisioner
-  (scripts, in the gateway pod) creates MM team + user + agent (`octogee-{slug}-coach`)
-  + Gitea org + workspace repo. Project create = `POST /api/projects`
-  (octogee-api): Firestore doc + MM channel + Gitea repo; client reacts to the doc.
-- **Gateways.** glm-controller (the fleet controller) provisions/retires/rolls per-user gateway pods
-  and reconciles the static shared edge routes; per-gateway state in `glmGateways/{id}`.
-- **Canvas.** Workspace/project home page — markdown (a repo file, default `README.md`) or
-  app-preview iframe.
-
-## Where to Look
-
-The **[Handbook](docs/handbook/00-index.md)** is the single source of truth for both
-operations and this dev workflow — the sections above (principles, testing, workflow,
-CI/CD, architecture) are the tight summary; the handbook chapters are the depth. It lives
-in the repo only; the operator reads it via the Playbook surface (dogfood), not Admin.
-
-Start at **[docs/INDEX.md](docs/INDEX.md)**. Essentials:
-[Handbook](docs/handbook/00-index.md) (deploy/verify/troubleshoot/rotate + dev workflow) ·
-[SURFACE-ARCHITECTURE](docs/architecture/SURFACE-ARCHITECTURE.md) ·
-[GATEWAY-PLATFORM-SPEC](docs/architecture/GATEWAY-PLATFORM-SPEC.md) (fleet controller) ·
-[SECURITY](docs/operations/SECURITY.md) · [MATTERMOST](docs/operations/MATTERMOST.md) ·
-[DECISIONS](docs/decisions/DECISIONS.md) (why).
-Code anchors: `app/src/routes/appRoutes.ts`, `octogee-api/src/index.ts`,
-`gateway-edge/src/index.ts`, `glm-controller/src/index.ts`.
+- [Getting started](docs/getting-started.md), [the full platform on kind](docs/kind.md),
+  [running in the cloud](docs/running-in-the-cloud.md) and
+  [requirements](docs/requirements.md).
+- [Why octogee-cloud](docs/why-octogee-cloud.md) and
+  [OpenClaw compatibility](docs/openclaw-compatibility.md).
+- The [handbook](docs/handbook/00-index.md) chapters on principles, testing,
+  pull requests, repository conventions and docs.
+- Code anchors: `octogee-api/src/app.ts`, `gateway-edge/src/index.ts`,
+  `glm-controller/src/index.ts`, `glm-controller/src/http-server.ts` (the Admin
+  API), `scripts/entrypoints/fleet-controller.ts` (the provisioner).
