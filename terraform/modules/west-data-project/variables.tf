@@ -44,3 +44,8 @@ variable "retirement_mode" {
   type        = bool
   default     = false
 }
+
+variable "github_actions_service_account" {
+  description = "Email of the GitHub Actions service account granted the data project CI roles"
+  type        = string
+}

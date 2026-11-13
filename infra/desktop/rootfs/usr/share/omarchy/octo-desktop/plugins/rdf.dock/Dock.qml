@@ -12,7 +12,7 @@ import qs.Ui
 // there on whichever monitor it is on.
 //
 // Parking rather than unmapping mirrors the bar: keeping the layer surface
-// and its scene graph alive makes a reveal a margin change instead of a
+// and its scene graph alive makes a reveal an edge-offset change instead of a
 // surface rebuild.
 //
 // Every color, radius, font, and spacing value comes from the shell's
@@ -1395,7 +1395,7 @@ Item {
         NumberAnimation { duration: 190; easing.type: Easing.OutCubic }
       }
 
-      // Parked = pushed out past its own edge. The start/end margins keep
+      // Parked = pushed out past its own edge. The start/end edge offsets keep
       // the card an edge gap away from the corner it's aligned to.
       readonly property int park: -Math.round(dockWindow.slide * (root.windowCross + Style.space(6)))
       readonly property int sideGap: (root.fullWidth || root.align === "center") ? 0 : root.edgeGap

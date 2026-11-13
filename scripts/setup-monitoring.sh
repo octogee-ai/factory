@@ -81,12 +81,21 @@ process.stdout.write(hash.digest("hex"));
 NODE
 )"
 
+PROD_NAMESPACE="$(octogee_deployment_target_field --environment=prod namespace)"
+TEST_NAMESPACE="$(octogee_deployment_target_field --environment=test namespace)"
+CONTROL_PLANE_PROJECT="$(node "$SCRIPT_DIR/lib/control-plane-config.mjs" project_id)"
+
 helm_values=(
   --set "gmp.projectId=$TARGET_CLUSTER_PROJECT"
   --set "monitoredNamespaces={$TARGET_NAMESPACE}"
+  --set "environmentNamespaces={$PROD_NAMESPACE,$TEST_NAMESPACE}"
+  --set-string "grafana.serviceAccount.annotations.iam\\.gke\\.io/gcp-service-account=monitoring-grafana@$CONTROL_PLANE_PROJECT.iam.gserviceaccount.com"
   --set-string "grafana.podAnnotations.octogee\\.ai/dashboard-checksum=$DASHBOARD_CHECKSUM"
 )
-$IAP_ENABLED && helm_values+=(--set iap.enabled=true)
+if $IAP_ENABLED; then
+  IAP_DOMAIN="$(node "$SCRIPT_DIR/lib/control-plane-config.mjs" monitoring_iap_domain)"
+  helm_values+=(--set iap.enabled=true --set "iap.domain=$IAP_DOMAIN")
+fi
 
 helm upgrade --install grafana "$REPO_DIR/helm/monitoring" \
   --namespace monitoring \

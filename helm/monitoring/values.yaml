@@ -7,9 +7,12 @@ gmp:
 monitoredNamespaces:
   - octogee
 
+environmentNamespaces:
+  - octogee
+
 iap:
   enabled: false
-  domain: monitoring.octogee.com
+  domain: ""
   staticIpName: grafana-ip
   oauthSecretName: grafana-iap-oauth
 
@@ -96,8 +99,6 @@ grafana:
   serviceAccount:
     create: true
     name: grafana
-    annotations:
-      iam.gke.io/gcp-service-account: monitoring-grafana@octogee.iam.gserviceaccount.com
   adminUser: admin
   admin:
     existingSecret: grafana-admin

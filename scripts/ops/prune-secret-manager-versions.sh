@@ -17,9 +17,12 @@ for argument in "$@"; do
   esac
 done
 
+source "${REPO_ROOT}/scripts/lib/deployment-target.sh"
+PROD_PROJECT="$(octogee_deployment_target_field --environment=prod firebase_project_id)"
+TEST_PROJECT="$(octogee_deployment_target_field --environment=test firebase_project_id)"
 case "${PROJECT_ID}" in
-  octogee|octogee-test|octogee-data-test|octogee-data-prod) ;;
-  *) echo "Project must be octogee, octogee-test, octogee-data-test, or octogee-data-prod" >&2; exit 2 ;;
+  "${PROD_PROJECT}"|"${TEST_PROJECT}"|octogee-data-test|octogee-data-prod) ;;
+  *) echo "Project must be ${PROD_PROJECT}, ${TEST_PROJECT}, octogee-data-test, or octogee-data-prod" >&2; exit 2 ;;
 esac
 if [[ ! "${RUN_ID}" =~ ^[a-z0-9-]+$ ]]; then
   echo "SECRET_PRUNE_RUN_ID must contain only lowercase letters, digits, and hyphens" >&2

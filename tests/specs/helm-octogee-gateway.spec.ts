@@ -175,29 +175,41 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     );
   });
 
-  it("allows OpenClaw main preview builds to cross non-monotonic build hashes", () => {
-    const preview = findDoc(helmTemplate("octogee-gw-preview", {
+  it("allows OpenClaw main preview builds to cross non-monotonic build hashes only where the environment opts in", () => {
+    const mainBuild = "515369d-oc2026.8.1-main.16c097b2@sha256:abc123";
+    const optedInPreview = findDoc(helmTemplate("octogee-gw-preview", {
       gatewayId: "preview",
-      "image.tag": "515369d-oc2026.8.1-main.16c097b2@sha256:abc123",
-    }), "Deployment", "octogee-gateway-preview") ?? "";
-    const stable = findDoc(helmTemplate("octogee-gw-stable", {
+      "image.tag": mainBuild,
+      allowOlderOpenclawMainBuilds: "true",
+    }, "any-namespace"), "Deployment", "octogee-gateway-preview") ?? "";
+    const optedInStable = findDoc(helmTemplate("octogee-gw-stable", {
       gatewayId: "stable",
       "image.tag": "515369d-oc2026.8.1@sha256:def456",
+      allowOlderOpenclawMainBuilds: "true",
     }), "Deployment", "octogee-gateway-stable") ?? "";
-    const prodPreview = findDoc(helmTemplate("octogee-gw-prod-preview", {
-      gatewayId: "prod-preview",
-      "image.tag": "515369d-oc2026.8.1-main.16c097b2@sha256:abc123",
-    }, "octogee"), "Deployment", "octogee-gateway-prod-preview") ?? "";
+    const defaultPreview = findDoc(helmTemplate("octogee-gw-default-preview", {
+      gatewayId: "default-preview",
+      "image.tag": mainBuild,
+    }), "Deployment", "octogee-gateway-default-preview") ?? "";
 
-    expect(containerBlock(preview, "gateway")).toMatch(
+    expect(containerBlock(optedInPreview, "gateway")).toMatch(
       /name:\s*OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS[\s\S]*?value:\s*"1"/,
     );
-    expect(containerBlock(stable, "gateway")).not.toContain(
+    expect(containerBlock(optedInStable, "gateway")).not.toContain(
       "OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS",
     );
-    expect(containerBlock(prodPreview, "gateway")).not.toContain(
+    expect(containerBlock(defaultPreview, "gateway")).not.toContain(
       "OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS",
     );
+  });
+
+  it("opts only the TEST gateway values into older OpenClaw main builds", () => {
+    const valuesFor = (file: string) =>
+      parseDocument(fs.readFileSync(path.join(CHART_PATH, file), "utf-8")).toJSON() as Record<string, unknown>;
+
+    expect(valuesFor("values.yaml").allowOlderOpenclawMainBuilds).toBe(false);
+    expect(valuesFor("values.test.yaml").allowOlderOpenclawMainBuilds).toBe(true);
+    expect(valuesFor("values.prod.yaml").allowOlderOpenclawMainBuilds).toBeUndefined();
   });
 
   it("mounts sidecar-only broker capabilities without adding gateway credentials", () => {

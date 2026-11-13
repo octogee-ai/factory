@@ -1,4 +1,5 @@
+{{- $namespaces := include "octogee-monitoring.environmentNamespaces" . }}
 {{- range $path, $_ := .Files.Glob "**/gmp-rules.yaml" }}
 ---
-{{ $.Files.Get $path }}
+{{ $.Files.Get $path | replace "__ENVIRONMENT_NAMESPACES__" $namespaces }}
 {{- end }}

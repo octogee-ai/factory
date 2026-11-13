@@ -6,7 +6,7 @@ from pathlib import Path
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--context', required=True)
-parser.add_argument('--namespace', default='octogee-test')
+parser.add_argument('--namespace', required=True)
 parser.add_argument('--pod', required=True)
 parser.add_argument('--output', required=True)
 parser.add_argument('--seconds', type=int, default=180)

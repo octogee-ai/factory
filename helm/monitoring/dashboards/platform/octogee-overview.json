@@ -63,7 +63,7 @@
           "query": "label_values(kube_pod_info{job=\"gmp-kube-state-metrics\"}, namespace)",
           "refId": "ns"
         },
-        "regex": "/^(octogee|octogee-west|octogee-test|octogee-test-west)$/",
+        "regex": "/^(__ENVIRONMENT_NAMESPACES__)$/",
         "current": {
           "text": "octogee",
           "value": "octogee"
@@ -82,7 +82,7 @@
       "title": "Start here",
       "options": {
         "mode": "markdown",
-        "content": "**Green means no action. Click any number to open the one dashboard that explains it.** Use the Namespace picker for PROD (`octogee`) or TEST (`octogee-test`)."
+        "content": "**Green means no action. Click any number to open the one dashboard that explains it.** Use the Namespace picker to choose the environment."
       },
       "gridPos": {
         "h": 3,

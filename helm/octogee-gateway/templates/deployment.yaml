@@ -272,7 +272,7 @@ spec:
               value: {{ $revision | quote }}
             - name: GATEWAY_IMAGE_TAG
               value: {{ $gatewayImageTag | quote }}
-            {{- if and (eq .Release.Namespace "octogee-test") (contains "-main." $gatewayImageTag) }}
+            {{- if and .Values.allowOlderOpenclawMainBuilds (contains "-main." $gatewayImageTag) }}
             - name: OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS
               value: "1"
             {{- end }}

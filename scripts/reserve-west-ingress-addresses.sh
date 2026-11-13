@@ -8,6 +8,8 @@ RECEIPT_GENERATOR="${REPO_ROOT}/scripts/ops/terraform-plan-receipt.mjs"
 PLAN_VERIFIER="${REPO_ROOT}/scripts/ops/verify-west-ingress-plan.mjs"
 INGRESS_STATE_ADOPTER="${REPO_ROOT}/scripts/ops/adopt-west-ingress-addresses.sh"
 RETIREMENT_PREFLIGHT="${REPO_ROOT}/scripts/ops/verify-retired-west-ingress-unused.sh"
+PROJECT_ID="octogee"
+REGION="us-west1"
 EXPECTED_CONFIRMATION="octogee/us-west1/ingress-addresses"
 RECEIPT_BUCKET="gs://octogee-terraform-state/receipts/west-platform"
 APPLY=false
@@ -163,22 +165,24 @@ if [[ "${APPLY}" != "true" ]]; then
 fi
 
 if [[ "${PLAN_RESULT}" == "retire" || "${PLAN_RESULT}" == "reconcile" ]]; then
+  source "${REPO_ROOT}/scripts/lib/deployment-target.sh"
+  octogee_load_deployment_target --environment=test
   "${RETIREMENT_PREFLIGHT}" \
-    "--project=octogee" \
+    "--project=${PROJECT_ID}" \
     "--shared-address=workspace-api-ip-test-west" \
     "--cloudflare-zone-id=${CLOUDFLARE_ZONE_ID:-}" \
     "--cloudflare-zone-name=octogee.com" \
-    "--kube-context=gke_us-west1_octogee" \
-    "--namespace=octogee-test-west" \
+    "--kube-context=gke_${REGION}_${PROJECT_ID}" \
+    "--namespace=${TARGET_NAMESPACE}-west" \
     "--ingress-name=octogee-edge-ingress" \
     "--receipt=${DNS_INVENTORY_RECEIPT}" \
     "--retired-address=gitea-ip-test-west" \
     "--retired-address=mattermost-ip-test-west" \
     "--retired-address=preview-ip-test-west" \
-    "--hostname=api-test.octogee.com" \
-    "--hostname=git-test.octogee.com" \
-    "--hostname=mattermost-test.octogee.com" \
-    "--hostname=preview-test.octogee.com"
+    "--hostname=${TARGET_API_ORIGIN#https://}" \
+    "--hostname=${TARGET_GIT_ORIGIN#https://}" \
+    "--hostname=${TARGET_MATTERMOST_ORIGIN#https://}" \
+    "--hostname=${TARGET_PREVIEW_ORIGIN#https://}"
   upload_receipt dns-inventory "${DNS_INVENTORY_RECEIPT}"
 fi
 

@@ -89,7 +89,7 @@ if bq show "${PROJECT}:${DS}.gcp_billing_export_resource_v1_${ACCT}" >/dev/null 
   create_daily "$DETAIL"
   create_gke_by_ns
   create_gke_by_workload
-  echo "done. Point Looker Studio at project=${PROJECT} dataset=${DS} → these views."
+  echo "done. Point a Looker report at project=${PROJECT} dataset=${DS} → these views."
   self_decron
 elif bq show "${PROJECT}:${DS}.gcp_billing_export_v1_${ACCT}" >/dev/null 2>&1; then
   echo "only STANDARD export present → creating daily view; enable the DETAILED (resource-level) export for GKE-by-namespace."

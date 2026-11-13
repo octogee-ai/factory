@@ -2,7 +2,7 @@
 # Rendered by scripts/provision-namespace.sh into values.${NAMESPACE}.yaml.
 # Placeholders are rendered from the selected TEST deployment target.
 #
-# Design: custom namespaces are internal-only, share the octogee-test Firebase
+# Design: custom namespaces are internal-only, share the TEST target's Firebase
 # project, have no public ingress, no Cloud Armor, no preview host. Access is
 # via `kubectl port-forward`. Cheap, isolated, and disposable.
 
@@ -15,11 +15,11 @@ global:
   deploymentProjectId: "__FIREBASE_PROJECT__"
   blobStoreBackend: gcs
   publicAppOrigins:
-    - https://octogee-test.web.app
-    - https://app-test.octogee.com
-    - https://app-octogee-test.web.app
-    - https://octogee-test.firebaseapp.com
-    - https://app-octogee-test.firebaseapp.com
+    - "__SITE_ORIGIN__"
+    - "__APP_ORIGIN__"
+    - https://app-__HOSTING_PROJECT__.web.app
+    - https://__FIREBASE_PROJECT__.firebaseapp.com
+    - https://app-__FIREBASE_PROJECT__.firebaseapp.com
 
 npmCacheProxy:
   enabled: false
@@ -80,8 +80,8 @@ gateway-edge:
   env:
     FIREBASE_PROJECT_ID: "__FIREBASE_PROJECT__"
     GCLOUD_PROJECT: "__FIREBASE_PROJECT__"
-    APP_URL: "https://app-test.octogee.com"
-    SITE_URL: "https://octogee-test.web.app"
+    APP_URL: "__APP_ORIGIN__"
+    SITE_URL: "__SITE_ORIGIN__"
     K8S_NAMESPACE: "__NAMESPACE__"
   ingress:
     enabled: false
@@ -100,7 +100,7 @@ octogee-api:
       iam.gke.io/gcp-service-account: octogee-api@__FIREBASE_PROJECT__.iam.gserviceaccount.com
   env:
     OCTOGEE_KMS_KEY_NAME: "__KMS_KEY_NAME__"
-    API_PUBLIC_URL: "https://octogee-test.web.app"
+    API_PUBLIC_URL: "__SITE_ORIGIN__"
     MM_INTERNAL_URL: "http://mattermost.__NAMESPACE__.svc.cluster.local:8065"
     PLATFORM_CREDIT_MARKUP_MULTIPLIER: "1.25"
     PLATFORM_WEB_MARKUP_MULTIPLIER: "1.25"
@@ -151,7 +151,7 @@ opsAgent:
   gcpServiceAccount: octogee-ops-agent@__FIREBASE_PROJECT__.iam.gserviceaccount.com
   loggingProjectId: __CLUSTER_PROJECT__
   loggingResourceName: projects/__CLUSTER_PROJECT__/locations/global/buckets/ops-agent-test/views/ops-agent
-  appUrl: https://app-test.octogee.com
+  appUrl: "__APP_ORIGIN__"
 
 networkPolicy:
   agentStorePostgresCidr: "__AGENT_STORE_POSTGRES_CIDR__"

@@ -1,3 +1,4 @@
+{{- $namespaces := include "octogee-monitoring.environmentNamespaces" . }}
 {{- range $path, $bytes := .Files.Glob "dashboards/**/*.json" }}
 {{- $group := base (dir $path) }}
 {{- $folder := title $group }}
@@ -14,5 +15,5 @@ metadata:
     grafana_folder: {{ $folder | quote }}
 data:
   {{ base $path }}: |-
-{{ $bytes | toString | nindent 4 }}
+{{ $bytes | toString | replace "__ENVIRONMENT_NAMESPACES__" $namespaces | nindent 4 }}
 {{- end }}

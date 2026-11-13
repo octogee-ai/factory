@@ -24,6 +24,7 @@
       "type": "string",
       "minLength": 1
     },
+    "allowOlderOpenclawMainBuilds": { "type": "boolean" },
     "profile": {
       "type": "string",
       "enum": ["", "standard", "builder", "isolated"],

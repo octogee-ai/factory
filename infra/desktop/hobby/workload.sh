@@ -15,7 +15,7 @@ python3 /benchmark/desktop-apps.py
 phase multi-tab
 node /benchmark/browser-load.mjs
 phase agent-turn
-/benchmark/oc.sh agent --agent bench --session-id "hobby-${BENCH_CASE:-trial}-$(date +%s)" \
+/benchmark/oc.sh agent --agent bench --session-id "hobby-${BENCH_CASE:-run}-$(date +%s)" \
   --message 'Create the benchmark tasks file with the exec tool.' --json > /home/node/results/agent-turn.json
 test "$(node -e 'console.log(JSON.parse(require("fs").readFileSync("/home/node/workspace/tasks.json")).length)')" = 10000
 phase multi-tab-idle

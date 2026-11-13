@@ -268,7 +268,7 @@ resource "google_service_account" "firebase_deployer" {
 resource "google_service_account_iam_member" "firebase_deployer_github_actions" {
   service_account_id = google_service_account.firebase_deployer.name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "principalSet://iam.googleapis.com/projects/94934561284/locations/global/workloadIdentityPools/github-actions/attribute.repository_id/1181841184"
+  member             = var.github_actions_principal_set
 }
 
 resource "google_project_iam_member" "firebase_deployer" {

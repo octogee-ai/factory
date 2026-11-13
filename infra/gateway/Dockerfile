@@ -134,7 +134,6 @@ COPY --chown=node:node templates/claws/ /octogee/templates/claws/
 COPY --chown=node:node templates/github-workflow/ /octogee/templates/github-workflow/
 COPY --chown=node:node templates/shared/ /octogee/templates/shared/
 COPY --chown=node:node templates/tiers/ /octogee/templates/tiers/
-COPY --chown=node:node templates/workspace/ /octogee/templates/workspace/
 COPY --chown=node:node templates/product/tiers/ /octogee/templates/tiers/
 
 # ── Computer-use skills ────────────────────────────────────────────────────

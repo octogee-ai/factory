@@ -65,7 +65,7 @@
           "query": "label_values(kube_pod_info{job=\"gmp-kube-state-metrics\"}, namespace)",
           "refId": "ns"
         },
-        "regex": "/^(octogee|octogee-west|octogee-test|octogee-test-west)$/",
+        "regex": "/^(__ENVIRONMENT_NAMESPACES__)$/",
         "current": {
           "text": "octogee",
           "value": "octogee"

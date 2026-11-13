@@ -41,3 +41,8 @@ variable "firebase_deployer_sa_name" {
   type        = string
   default     = "firebase-deployer"
 }
+
+variable "github_actions_principal_set" {
+  description = "Workload Identity principal set of the GitHub repository allowed to federate as the Firebase deployer"
+  type        = string
+}

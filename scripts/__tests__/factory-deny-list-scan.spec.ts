@@ -107,7 +107,6 @@ describe("factory deny-list price rule", () => {
 describe("factory deny-list personal email rule", () => {
   it.each([
     "mail chris@gmail.com",
-    "owner: someone@squarepointconsulting.com",
     "a.b+tag@company.io",
     "notify ops@example.company.com",
     "email: `${uid}@octogee.local`,",
@@ -128,6 +127,7 @@ describe("factory deny-list personal email rule", () => {
     "dev@app.localhost",
     "    @unittest.skipUnless(sys.platform == 'linux', 'linux only')",
     "support@octogee.com",
+    "owner: someone@squarepointconsulting.com",
     "member = \"serviceAccount:${data.google_project.this.number}-compute@developer.gserviceaccount.com\"",
     "After=network-online.target user-runtime-dir@1000.service user@1000.service",
     "| `systemd-zram-setup@zram0.service` | compressed swap |",
@@ -236,6 +236,8 @@ describe("factory deny-list identity exceptions do not shelter a real identity b
     ["reserved label as a subdomain", "personal email", "admin@test.company.com"],
     ["localhost label as a subdomain", "personal email", "dev@localhost.company.com"],
     ["company domain as a prefix", "personal email", "x@octogee.com.evil.io"],
+    ["operator company domain as a prefix", "personal email", "x@squarepointconsulting.com.evil.io"],
+    ["operator company domain as a suffix", "personal email", "x@notsquarepointconsulting.com"],
     ["address opening a line", "personal email", "chris@gmail.com"],
     ["indented address opening a line", "personal email", "\tchris@gmail.com"],
     ["unit suffix as a subdomain", "personal email", "ops@alerts.target.com"],
@@ -321,7 +323,6 @@ describe("factory deny-list identity rules together", () => {
     "https://api-test.octogee.com",
     "gke_acme-prod_us-central1_cluster",
     "projects/94934561284/locations/global",
-    "user@squarepointconsulting.com",
     "https://admin.octogee.com",
     "https://monitoring.octogee.com",
   ])("reports the real identity %s under at least one identity rule", content => {
@@ -339,6 +340,11 @@ describe("factory deny-list identity rules together", () => {
     'local sa="github-actions@${PROJECT_ID}.iam.gserviceaccount.com"',
   ])("reports no identity for the placeholder %s", content => {
     expect(identityHits(content)).toEqual([]);
+  });
+
+  it("accepts the operator's own company domain under every rule", () => {
+    expect(DENY_LIST.map(rule => rule.name)).not.toContain("company domain");
+    expect(ruleHits("x.tf", 'members = ["user:someone@squarepointconsulting.com"] # squarepointconsulting')).toEqual([]);
   });
 });
 

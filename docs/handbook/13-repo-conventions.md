@@ -43,8 +43,7 @@ Consequences to keep in mind:
   a missing-install artifact, not a real type error. `npm ci` the imported
   packages (they have their own lockfiles) before trusting the failure.
 
-Every package is named `@octogee/<name>` (consistent scope, no NuCrew-era
-leftovers).
+Every package is named `@octogee/<name>` (one consistent scope).
 
 ## Internal package directory dependencies
 

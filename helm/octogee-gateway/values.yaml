@@ -30,6 +30,11 @@ runtimeKind: cluster
 # precedence when set, but the operator workflow is single-SHA.
 imageTag: "latest"
 
+# Lets OpenClaw main-branch preview images (tags containing "-main.") run
+# destructive actions against state written by a build with a different
+# hash. Only an environment that ships main previews opts in.
+allowOlderOpenclawMainBuilds: false
+
 image:
   repository: ""
   # Inherits from .Values.imageTag when empty. Override only for an
@@ -299,7 +304,7 @@ gatewayEdge:
     # gateway-edge/src/lib/kms.ts.
     OCTOGEE_KMS_KEY_NAME: ""
   # Platform secrets (GITEA_TOKEN, MM_ADMIN_TOKEN, INTERNAL_SERVICE_KEY,
-  # OAuth/Discord/Resend/Stripe/INVITE_SECRET, …) are intentionally NOT mounted on
+  # OAuth, Discord, email and billing keys, INVITE_SECRET, …) are intentionally NOT mounted on
   # the gateway-edge sidecar or the OpenClaw gateway pod — the agent runs
   # arbitrary code there, so platform credentials must stay off it. Nothing rendered
   # this list anyway (the deployment injects only gatewayEdge.env); the cluster

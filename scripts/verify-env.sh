@@ -934,9 +934,9 @@ else
 fi
 
 # ── 8b. Orchestrator Config (Firestore) ──────────────────────────────────────
-# `config/orchestrator` holds the operator dials (shared pool autoscaling) and
-# `platformConfig/trial` the Signup Offer. Shared pool membership is not
-# configured anywhere: it derives from the shared-class durable roots.
+# `config/orchestrator` holds the operator dials (shared pool autoscaling).
+# Shared pool membership is not configured anywhere: it derives from the
+# shared-class durable roots.
 #
 set_section bootstrap
 header "8b. Orchestrator Config"

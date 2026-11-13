@@ -219,5 +219,5 @@ resource "google_project_iam_member" "github_actions" {
 
   project = google_project.data.project_id
   role    = each.value
-  member  = "serviceAccount:github-actions@octogee.iam.gserviceaccount.com"
+  member  = "serviceAccount:${var.github_actions_service_account}"
 }

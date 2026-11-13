@@ -57,6 +57,30 @@ function createHarness(): {
   TARGET_KUBE_CONTEXT=gke_us-west1_octogee
   TARGET_NAMESPACE=octogee-west
 }
+octogee_deployment_target_field() {
+  case "$1 $2" in
+    "--environment=prod namespace") printf '%s\\n' prod-ns ;;
+    "--environment=test namespace") printf '%s\\n' test-ns ;;
+    *) return 1 ;;
+  esac
+}
+`,
+  );
+  copyFileSync(
+    join(repoRoot, "scripts/lib/control-plane-config.mjs"),
+    join(scripts, "lib/control-plane-config.mjs"),
+  );
+  const controlPlane = join(root, "terraform/environments/control-plane");
+  mkdirSync(controlPlane, { recursive: true });
+  writeFileSync(
+    join(controlPlane, "variables.tf"),
+    `variable "project_id" {
+  default = "acme-central"
+}
+
+variable "monitoring_iap_domain" {
+  default = "grafana.example.test"
+}
 `,
   );
   executable(
@@ -159,6 +183,21 @@ describe("monitoring setup", () => {
     expect(helmCall).toContain("--set monitoredNamespaces={octogee-west}");
   });
 
+  it("selects every environment's namespace in alert rules and dashboards", () => {
+    const helmCall = runHarness().calls.find((call) => call.startsWith("helm:upgrade")) ?? "";
+
+    expect(helmCall).toContain("--set environmentNamespaces={prod-ns,test-ns}");
+  });
+
+  it("binds Grafana to the monitoring service account in the control-plane project", () => {
+    const helmCall = runHarness().calls.find((call) => call.startsWith("helm:upgrade")) ?? "";
+
+    expect(helmCall).toContain(
+      "--set-string grafana.serviceAccount.annotations.iam\\.gke\\.io/gcp-service-account=monitoring-grafana@acme-central.iam.gserviceaccount.com",
+    );
+    expect(helmCall).not.toContain("iap.domain");
+  });
+
   it("passes no compute class to the monitoring Helm release", () => {
     const result = runHarness();
     const helmCall = result.calls.find((call) => call.startsWith("helm:upgrade")) ?? "";
@@ -184,5 +223,7 @@ describe("monitoring setup", () => {
     expect(result.calls[1]).toContain("static-ip:compute addresses describe grafana-ip");
     expect(result.calls.findIndex((call) => call.startsWith("helm:"))).toBeGreaterThan(1);
     expect(result.calls.every((call) => !call.startsWith("computeclass:"))).toBe(true);
+    const helmCall = result.calls.find((call) => call.startsWith("helm:upgrade")) ?? "";
+    expect(helmCall).toContain("--set iap.enabled=true --set iap.domain=grafana.example.test");
   });
 });

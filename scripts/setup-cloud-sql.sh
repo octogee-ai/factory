@@ -113,7 +113,9 @@ verify_terraform_prerequisites() {
       || fail_prerequisites "Secret Manager container '$secret' is absent"
   done
 
-  release_identity="octogee-release-${TARGET_ENVIRONMENT}@octogee.iam.gserviceaccount.com"
+  control_plane_project="$(node "$SCRIPT_DIR/lib/control-plane-config.mjs" project_id)" \
+    || fail_prerequisites "control-plane project is not declared"
+  release_identity="octogee-release-${TARGET_ENVIRONMENT}@${control_plane_project}.iam.gserviceaccount.com"
   iam_member="$(gcloud secrets get-iam-policy "$GITEA_PASSWORD_SECRET" \
     --project="$PROJECT" \
     --flatten='bindings[].members' \

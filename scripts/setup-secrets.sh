@@ -367,7 +367,7 @@ else
   info "  Generating SSH keypair for Gitea..."
   TMPKEY=$(mktemp)
   rm -f "$TMPKEY" "${TMPKEY}.pub"
-  ssh-keygen -t ed25519 -f "$TMPKEY" -N "" -C "octogee-gateway@octogee.local" -q
+  ssh-keygen -t ed25519 -f "$TMPKEY" -N "" -C "octogee-gateway" -q
   ksecret gitea-ssh-key \
     --from-file=id_ed25519="$TMPKEY" \
     --from-file=id_ed25519.pub="${TMPKEY}.pub"

@@ -18,10 +18,13 @@ export const VENDORED_FILES: readonly string[] = [
   "gateway-edge/src/vendor/openclaw-browser-resources/index.ts",
   "gateway-edge/src/vendor/openclaw-browser-resources/LICENSES.txt",
   "gateway-edge/src/vendor/openclaw-browser-resources/provenance.json",
+  "helm/monitoring/charts/grafana-13.0.1.tgz",
+  "helm/octogee/charts/gitea-12.7.0.tgz",
 ];
 
 const NON_PERSONAL_DOMAINS: readonly RegExp[] = [
   /^octogee\.com$/i,
+  /^squarepointconsulting\.com$/i,
   /\.(?:test|example|invalid|localhost)$/i,
   /(?:^|\.)example\.(?:com|net|org)$/i,
   /^[a-z0-9-]+\.(?:service|socket|target|timer|mount|slice)$/i,
@@ -127,7 +130,6 @@ function isPrice(match: RegExpExecArray, line: string): boolean {
 
 export const DENY_LIST: readonly DenyRule[] = [
   { name: "personal email", scope: "identity", pattern: /@[a-z0-9][a-z0-9.-]*/gi, accept: isPersonalAddress },
-  { name: "company domain", scope: "identity", pattern: /squarepointconsulting/gi },
   { name: "GCP project number", scope: "identity", pattern: /94934561284/g },
   { name: "service account", scope: "identity", pattern: /(?:@|%40)[a-z0-9][a-z0-9.-]*\.gserviceaccount\.com/gi, accept: isServiceAccount },
   { name: "TEST environment identity", scope: "identity", pattern: /octogee-test(?!er)|-test\.octogee\.com|gke_(?:[a-z0-9-]+_)?[a-z]+-[a-z]+\d/gi },

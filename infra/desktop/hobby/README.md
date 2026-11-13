@@ -13,7 +13,7 @@ an external model; its timings do not measure model inference or answer quality.
 
 ## Measured on 2026-10-07
 
-Both trials ran on actual GKE Spot nodes with gVisor, a 4-GiB memory limit, and
+Both runs used actual GKE Spot nodes with gVisor, a 4-GiB memory limit, and
 Chromium's namespace/seccomp sandbox enabled. The workload used ten browser
 tabs (eight with 1,000 table rows), a terminal, a file manager, and an actual
 OpenClaw exec turn. No OOM or runtime failure occurred during either workload.
@@ -27,7 +27,7 @@ OpenClaw exec turn. No OOM or runtime failure occurred during either workload.
 | Small accessibility query (79 elements) | 1.64 s | 0.89 s |
 | Large accessibility query (1,149 elements) | 11.51 s | 6.17 s |
 
-The 1-vCPU trial establishes a working core-computer floor; 2 vCPUs is the
+The 1-vCPU run establishes a working core-computer floor; 2 vCPUs is the
 stronger responsiveness candidate. Four GiB fits this workload with roughly
 one GiB remaining. Budget the full platform processes before assigning this
 memory limit to paying users. Real websites can have different memory and
@@ -43,7 +43,7 @@ prompt, so graceful browser shutdown remains part of production qualification.
 This was deliberate pod replacement, not a simulated provider Spot eviction.
 
 The two agent turns both executed the tool successfully. Their single-run
-durations are not a CPU comparison: the first trial had additional warmup from
+durations are not a CPU comparison: the first run had additional warmup from
 interactive setup. The 2-vCPU loaded query was repeated on the populated page
 after discovering navigation had replaced its table with the smaller fixture.
 
@@ -67,14 +67,15 @@ docker push '<registry>/octogee-hobby-benchmark:<tag>'
 ```
 
 Copy `benchmark.yaml` to a temporary file. Replace its image digest and set the
-CPU request/limit and `BENCH_CASE` for each trial. The example is TEST only and
-uses the existing Spot-first compute class, which can fall back to on-demand.
+CPU request/limit and `BENCH_CASE` for each run. Set its namespace to a
+non-production environment and its compute class to that environment's
+Spot-first class, which can fall back to on-demand.
 Record the actual node's Spot label; do not infer it from the class name.
 
 ```sh
-kubectl --context gke_octogee_us-central1_octogee-gateway -n octogee-test \
+kubectl --context <kube-context> -n <namespace> \
   create configmap hobby-computer-benchmark-scripts --from-file=infra/desktop/hobby
-kubectl --context gke_octogee_us-central1_octogee-gateway apply -f /tmp/hobby-benchmark.yaml
+kubectl --context <kube-context> apply -f /tmp/hobby-benchmark.yaml
 ```
 
 Container readiness is `/home/node/results/ready`, after Chromium, the gateway,
@@ -82,7 +83,7 @@ and the paired desktop node are all available. Kubernetes `Running` alone is
 insufficient. Watch container logs for startup failure, then run:
 
 ```sh
-kubectl --context gke_octogee_us-central1_octogee-gateway -n octogee-test \
+kubectl --context <kube-context> -n <namespace> \
   exec hobby-computer-bench -- /benchmark/workload.sh
 ```
 
@@ -96,7 +97,7 @@ Collect authoritative host memory/CPU concurrently with `gke-sample.py`:
 
 ```sh
 python3 infra/desktop/hobby/gke-sample.py \
-  --context gke_octogee_us-central1_octogee-gateway --pod hobby-computer-bench \
+  --context <kube-context> --namespace <namespace> --pod hobby-computer-bench \
   --output /tmp/hobby-gke-metrics.jsonl --seconds 600
 ```
 
@@ -120,9 +121,9 @@ the temporary PVC's disk is deleted by the StorageClass reclaim policy.
 
 ## Selected production tiers
 
-Hobby is an on-demand `e2-medium` GCE VM (2 shared vCPU, 4 GB) at $20;
-Pro is `e2-standard-2` (2 vCPU / 8 GiB) at $100 and Team `e2-standard-4`
-(4 vCPU / 16 GiB) at $200. The benchmark supports Hobby's core-computer floor;
+Hobby is an on-demand `e2-medium` GCE VM (2 shared vCPU, 4 GB);
+Pro is `e2-standard-2` (2 vCPU / 8 GiB) and Team `e2-standard-4`
+(4 vCPU / 16 GiB). The benchmark supports Hobby's core-computer floor;
 the full platform still needs qualification at 4 GB before fleet release.
 
 Every tier boots the Omarchy image family. A Hobby VM carries

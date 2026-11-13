@@ -54,7 +54,7 @@ def tmpl_namespace():
         "name": "namespace", "label": "Namespace", "type": "query",
         "datasource": ds(),
         "query": {"query": f'label_values(kube_pod_info{{job="{KSM_JOB}"}}, namespace)', "refId": "ns"},
-        "regex": "/^(octogee|octogee-west|octogee-test|octogee-test-west)$/",
+        "regex": "/^(__ENVIRONMENT_NAMESPACES__)$/",
         "current": {"text": "octogee", "value": "octogee"},
         "includeAll": False, "multi": False, "refresh": 2, "sort": 1,
     }
@@ -273,7 +273,7 @@ PLAT_JOBS = 'octogee-api|gateway-edge'
 def d_overview():
     p = [
         text("Start here", "**Green means no action. Click any number to open the one dashboard that explains it.** "
-             "Use the Namespace picker for PROD (`octogee`) or TEST (`octogee-test`).", h=3),
+             "Use the Namespace picker to choose the environment.", h=3),
         row("Act now"),
         stat("Firing alerts", [f'count(ALERTS{{alertstate="firing",namespace="{NS}"}}) or vector(0)'],
              thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}],

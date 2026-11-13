@@ -1,4 +1,4 @@
-# GitHub Actions workflow for building and deploying NuCrew user websites
+# GitHub Actions workflow for building and deploying user websites
 # This file is included in each user's website repository
 
 name: Deploy Website

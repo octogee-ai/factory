@@ -20,9 +20,14 @@ describe("firebase deployer Terraform IAM", () => {
 
     expect(binding).toContain("service_account_id = google_service_account.firebase_deployer.name");
     expect(binding).toContain('role               = "roles/iam.workloadIdentityUser"');
-    expect(binding).toContain(
-      "principalSet://iam.googleapis.com/projects/94934561284/locations/global/workloadIdentityPools/github-actions/attribute.repository_id/1181841184",
-    );
+    expect(binding).toContain("member             = var.github_actions_principal_set");
+    expect(source).not.toMatch(/projects\/\d+\//);
+    for (const environment of [centralPlatform, testEnvironment]) {
+      const moduleCall = readFileSync(environment, "utf-8").match(/^module "iam" \{([\s\S]*?)^\}/m)?.[1];
+      expect(moduleCall, environment).toContain(
+        'github_actions_principal_set = "principalSet://iam.googleapis.com/projects/94934561284/locations/global/workloadIdentityPools/github-actions/attribute.repository_id/1181841184"',
+      );
+    }
   });
 
   it("grants the CI verifier the Firestore composite-index administrator role", () => {

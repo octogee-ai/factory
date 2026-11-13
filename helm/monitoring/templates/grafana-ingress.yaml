@@ -1,7 +1,7 @@
 {{- if .Values.iap.enabled }}
 # ─────────────────────────────────────────────────────────────────────────────
-# Grafana IAP Ingress — exposes Grafana at https://monitoring.octogee.com behind
-# Google IAP (only IAP-allowlisted Google accounts can reach it).
+# Grafana IAP Ingress — exposes Grafana at https://<iap.domain> behind Google
+# IAP (only IAP-allowlisted Google accounts can reach it).
 #
 # Applied by scripts/setup-monitoring-iap.sh (Step 5). Prereqs the script sets
 # up: a global static IP `grafana-ip`, the `grafana-iap-oauth` secret, the DNS A

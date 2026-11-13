@@ -156,11 +156,16 @@ spec:
                   key: admin_token
             - name: PROJECT_HOSTING_RETIREMENT_URL
               value: {{ printf "http://octogee-api.%s.svc.cluster.local:3001/internal/project-hosting" .Release.Namespace | quote }}
-            - name: STRIPE_SECRET_KEY
+            {{- range $path, $_ := .Files.Glob "**/secret-env.yaml" }}
+            {{- range ($.Files.Get $path | fromYamlArray) }}
+            - name: {{ .envName }}
               valueFrom:
                 secretKeyRef:
-                  name: stripe-secrets
-                  key: secret_key
+                  name: {{ .secretName }}
+                  key: {{ .secretKey }}
+                  optional: {{ .optional | default false }}
+            {{- end }}
+            {{- end }}
             {{- if and .Values.posthog.host .Values.posthog.projectId }}
             - name: POSTHOG_HOST
               value: {{ .Values.posthog.host | quote }}

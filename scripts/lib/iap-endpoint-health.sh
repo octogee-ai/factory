@@ -1,14 +1,29 @@
 #!/usr/bin/env bash
 
+IAP_ENDPOINT_HEALTH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$IAP_ENDPOINT_HEALTH_DIR/deployment-target.sh"
+IAP_PROTECTED_ADMIN_HOSTS=""
+
+iap_protected_admin_hosts() {
+  local environment field origin hosts=""
+  for environment in prod test; do
+    for field in git_origin mattermost_origin; do
+      origin="$(octogee_deployment_target_field "--environment=$environment" "$field")" || return 1
+      hosts+="${origin#https://}"$'\n'
+    done
+  done
+  origin="$(node "$IAP_ENDPOINT_HEALTH_DIR/control-plane-config.mjs" monitoring_iap_domain)" || return 1
+  printf '%s%s\n' "$hosts" "$origin"
+}
+
 is_iap_protected_admin_host() {
-  case "$1" in
-    git.octogee.com|git-test.octogee.com|mattermost.octogee.com|mattermost-test.octogee.com|monitoring.octogee.com)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
+  if [[ -z "$IAP_PROTECTED_ADMIN_HOSTS" ]]; then
+    IAP_PROTECTED_ADMIN_HOSTS="$(iap_protected_admin_hosts)" || {
+      echo "Could not resolve the IAP-protected admin hosts" >&2
+      exit 1
+    }
+  fi
+  grep -qxF -- "$1" <<< "$IAP_PROTECTED_ADMIN_HOSTS"
 }
 
 is_expected_iap_redirect() {

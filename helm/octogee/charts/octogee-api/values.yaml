@@ -21,12 +21,12 @@ serviceAccountName: octogee-api
 serviceAccount:
   create: true
   annotations:
-    iam.gke.io/gcp-service-account: octogee-api@octogee.iam.gserviceaccount.com
+    iam.gke.io/gcp-service-account: ""
 
 # Distinct from octogee-api's own Workload Identity GSA. Admin fleet routes use
 # this as the consumer member when creating gateway-auth-token-* Secret Manager
 # secrets for cattle gateway pods.
-gatewayServiceAccount: octogee-gateway@octogee.iam.gserviceaccount.com
+gatewayServiceAccount: ""
 
 env:
   GITEA_URL: ""  # auto-computed from K8S_NAMESPACE

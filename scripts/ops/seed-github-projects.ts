@@ -8,17 +8,18 @@
 // GitHub repoSource product gate.
 //
 // Usage (run once per repo):
-//   GCLOUD_PROJECT=octogee-test \
+//   GCLOUD_PROJECT=<TEST Firebase project> \
 //   GOOGLE_APPLICATION_CREDENTIALS=~/path/to/sa.json \
 //   OPERATOR_UID=<admin uid> \
 //   FIREBASE_WEB_API_KEY=<web api key> \
-//   API_BASE=https://api-test.octogee.com \
+//   API_BASE=<API origin, default the TEST target's> \
 //   npx tsx ops/seed-github-projects.ts --slug octogee --name "Octogee" --owner octogee-ai --repo octogee
 //   npx tsx ops/seed-github-projects.ts --slug openclaw --name "OpenClaw" --owner octogee-ai --repo openclaw
 
 import { initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { pathToFileURL } from "node:url";
+import { deploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
 
 export interface SeedGithubProjectArgs {
   name: string;
@@ -65,7 +66,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
 
   const operatorUid = requireEnv("OPERATOR_UID");
   const webApiKey = requireEnv("FIREBASE_WEB_API_KEY");
-  const apiBase = process.env.API_BASE ?? "https://api-test.octogee.com";
+  const apiBase = process.env.API_BASE ?? deploymentEnvironmentSettings("test").apiOrigin;
 
   initializeApp();
   const customToken = await getAuth().createCustomToken(operatorUid);
