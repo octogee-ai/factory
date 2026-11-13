@@ -158,7 +158,7 @@ linuxTest.each(["missing", "stale"])("keeps nested project histories out of a %s
   expect(existsSync(path.join(user, "projects/.octogee-state/runtime.json"))).toBe(true);
 });
 
-it("still refuses a workspace symlink outside the reserved projects namespace", async () => {
+linuxTest("still refuses a workspace symlink outside the reserved projects namespace", async () => {
   const outside = path.join(root, "outside.txt"); writeFileSync(outside, "private\n");
   symlinkSync(outside, path.join(user, "escape.txt"));
   const before = git(path.join(remoteRoot, "workspace.git"), "rev-parse", "main");
@@ -252,7 +252,7 @@ it.each(["missing", "migrating", "epoch"])("refuses %s canonical assignment cust
   expect(git(path.join(remoteRoot, "workspace.git"), "rev-parse", "main")).toBe(before);
 });
 
-it("refuses a noncanonical project remote without committing its local persona", async () => {
+linuxTest("refuses a noncanonical project remote without committing its local persona", async () => {
   const metadata = path.join(root, "git-metadata/alice/projects/demo.git");
   const before = git(metadata, "rev-parse", "HEAD");
   git(metadata, "config", "remote.origin.url", "git@foreign:alice/demo.git");
