@@ -17,12 +17,18 @@ const { getFirestore, FieldValue } = await import("firebase-admin/firestore");
 if (getApps().length === 0) initializeApp({ projectId: EMULATOR_PROJECT });
 const db = getFirestore();
 
-const { markProvisioningComplete: markProvisioningCompleteImpl } = await import("@octogee/core/provisionSteps");
+const { markProvisioningComplete: markProvisioningCompleteImpl, firestoreProvisioningProjection } = await import(
+  "@octogee/core/provisionSteps"
+);
+
+type ProvisioningArgs = Parameters<typeof markProvisioningCompleteImpl>;
 
 async function markProvisioningComplete(
-  ...args: Parameters<typeof markProvisioningCompleteImpl>
+  ctx: ProvisioningArgs[0],
+  mmUpdate: ProvisioningArgs[1],
+  allAgentIds: ProvisioningArgs[2],
 ): Promise<void> {
-  await markProvisioningCompleteImpl(...args);
+  await markProvisioningCompleteImpl(ctx, mmUpdate, allAgentIds, firestoreProvisioningProjection);
 }
 
 let seq = 0;

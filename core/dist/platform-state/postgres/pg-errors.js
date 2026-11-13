@@ -36,6 +36,7 @@ export const TABLE_AGGREGATES = {
     placement_receipts: "placement-receipt",
     schedule_transfers: "schedule-transfer",
     agent_stores: "agent-store",
+    user_accounts: "user-account",
     workspaces: "workspace",
     workspace_members: "workspace-member",
     workspace_projects: "workspace-project",

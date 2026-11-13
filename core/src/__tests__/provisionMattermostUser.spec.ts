@@ -62,7 +62,33 @@ interface ProvisionInput {
   photoURL?: string;
 }
 
-const call = (i: ProvisionInput) => provisionMattermostUser(i, host);
+type StoredMattermostNames = Parameters<typeof provisionMattermostUser>[2];
+
+const storedNames: StoredMattermostNames = async (uid, slug) => ({
+  username: ((h.docs[`users/${uid}`]?.mattermost as { username?: string } | undefined)?.username) ?? null,
+  coachChannelName: (h.docs[`workspaces/${slug}/channels/coach-dm`]?.name as string | undefined) ?? null,
+});
+const noStoredNames: StoredMattermostNames = async () => ({ username: null, coachChannelName: null });
+
+const call = (i: ProvisionInput, names: StoredMattermostNames = storedNames) => provisionMattermostUser(i, host, names);
+
+function withoutFirestore() {
+  const firestoreUnavailable = () => {
+    throw new Error("Firestore is not available");
+  };
+  const doc = vi.spyOn(h.db, "doc").mockImplementation(firestoreUnavailable);
+  const collection = vi.spyOn(h.db, "collection").mockImplementation(firestoreUnavailable);
+  return {
+    expectUnread() {
+      expect(doc).not.toHaveBeenCalled();
+      expect(collection).not.toHaveBeenCalled();
+    },
+    restore() {
+      doc.mockRestore();
+      collection.mockRestore();
+    },
+  };
+}
 
 const HAPPY: ProvisionInput = {
   uid: "u1",
@@ -145,6 +171,19 @@ describe("provisionMattermostUser — new user (happy path)", () => {
 
     expect(seq()).not.toContain("POST /teams/legacy-community-team/members");
   });
+
+  it("provisions a user with no Mattermost account without reading Firestore", async () => {
+    const firestore = withoutFirestore();
+    try {
+      const result = await call(HAPPY, noStoredNames);
+
+      expect(result["mattermost.userId"]).toBe("builder-1");
+      expect(result["mattermost.teamId"]).toBe("team-1");
+      firestore.expectUnread();
+    } finally {
+      firestore.restore();
+    }
+  });
 });
 
 describe("provisionMattermostUser — already provisioned (idempotent backfill)", () => {
@@ -190,6 +229,22 @@ describe("provisionMattermostUser — already provisioned (idempotent backfill)"
 
     expect(result["mattermost.username"]).toBe("legacy-name");
     expect(result["mattermost.channelName"]).toBe("acme-coach");
+  });
+
+  it("re-provisions from platform state alone, naming the user and agent channel as provisioning created them", async () => {
+    const firestore = withoutFirestore();
+    try {
+      const result = await call(HAPPY, noStoredNames);
+
+      expect(result["mattermost.userId"]).toBe("existing-user");
+      expect(result["mattermost.username"]).toBe("acme");
+      expect(result["mattermost.channelName"]).toBe(workspaceDefaultAgentChannelName("acme"));
+      expect(result["mattermost.channelId"]).toBe("existing-coach-ch");
+      expect(seq()).not.toContain("POST /users");
+      firestore.expectUnread();
+    } finally {
+      firestore.restore();
+    }
   });
 
   it("keeps a new-style topology without an Admin channel idempotent", async () => {

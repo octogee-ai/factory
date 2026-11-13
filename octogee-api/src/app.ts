@@ -14,6 +14,7 @@ import { createAdminRoutes, type ProductAdminRoutes } from "../../gateway-edge/s
 import type { DeletionProductContextDiscovery } from "@octogee/core/admin-fleet-router";
 import type { AdminUserDirectorySource, AdminUserProductDetail } from "@octogee/core/admin-user-directory-router";
 import type { ControlSessionChecks } from "@octogee/core/platform-state";
+import type { ProvisioningProjection } from "@octogee/core/provisionSteps";
 import {
   installUserEntitlements,
   staticUserEntitlements,
@@ -39,7 +40,7 @@ import { createAgentImportBrokerRoutes } from "./routes/agent-import-broker.js";
 import { createModelKeyIssuerRoutes } from "./routes/model-key-issuer.js";
 import type { FundedBudgetInterruption } from "./lib/model-broker-budget.js";
 import { operatorRailRegistry, type ModelBrokerRailRegistry } from "./lib/model-broker-rails.js";
-import { NO_BROKER_RECORDS, type BrokerRecords } from "./lib/broker-records.js";
+import { platformStateBrokerRecords, type BrokerRecords } from "./lib/broker-records.js";
 import { createFeatureRoutes } from "./routes/features.js";
 import type { ProductNotifications } from "./lib/user-notifications.js";
 import { DisabledFeatureFlagProvider, FeaturePolicy } from "./lib/feature-policy.js";
@@ -158,6 +159,7 @@ export interface ProductRuntime {
   publicCanvasFile?: PublicCanvasFileReader;
   sessionChannelPurpose?: SessionChannelPurposeReader;
   brokerRecords?: BrokerRecords;
+  provisioningProjection?: ProvisioningProjection;
   chatArtifactJobs?: ArtifactJobStore;
   adminUserDetail?: AdminUserProductDetail;
   adminUserDirectory?: AdminUserDirectorySource;
@@ -429,7 +431,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   const featurePolicy = opts.featurePolicy ?? product?.featurePolicy ?? new FeaturePolicy(new DisabledFeatureFlagProvider(), { logger });
   const productRouteDeps: ProductRouteDeps = { featurePolicy };
   const modelBrokerRails = opts.product?.modelBrokerRails ?? operatorRailRegistry();
-  const brokerRecords = product?.brokerRecords ?? NO_BROKER_RECORDS;
+  const brokerRecords = product?.brokerRecords ?? platformStateBrokerRecords(platformStateStore);
   app.locals.productShutdown = product?.shutdown;
   const tenantBindingMetrics = createTenantBindingMetrics(metricsRegistry);
   const tenantBindingReviewer = opts.tenantBindingReviewer ?? createGatewayIdentityReviewer({
@@ -571,6 +573,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
     modelBrokerRails,
     onBudgetInterruption: product?.onBudgetInterruption,
     onUserProvisioned: product?.onUserProvisioned,
+    provisioningProjection: product?.provisioningProjection,
   }));
   // octogee-api-only: broker sidecar GitHub file-browser token reads
   // so cattle pods do not need Firestore or KMS access to user secrets.

@@ -19,6 +19,7 @@ export type PlatformAggregate =
   | "placement-receipt"
   | "schedule-transfer"
   | "agent-store"
+  | "user-account"
   | "workspace"
   | "workspace-member"
   | "workspace-project"

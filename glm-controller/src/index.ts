@@ -217,7 +217,8 @@ import {
 } from "@octogee/core/admin-user-directory-router";
 import { createMattermostChannelHost } from "@octogee/core/channel-host";
 import { createGiteaGitHost } from "@octogee/core/git-host";
-import { noUserAccounts, type UserAccountReader } from "@octogee/core/user-account";
+import type { UserAccountReader } from "@octogee/core/user-account";
+import { platformStateUserAccountReader, platformStateUserAccounts } from "@octogee/core/platform-state-user-accounts";
 import { createUnmountFromGateway } from "./lib/user-ops/unmount-gateway.js";
 import { isRetiredSharedGateway, retiredSharedGatewayRuntimeAbsent } from "./lib/user-ops/retired-shared-gateway.js";
 import { nukeUserCloudSide, type NukeCloudDeps } from "./lib/user-ops/nuke-cloud.js";
@@ -2183,7 +2184,7 @@ type ControllerStopper = () => void;
 
 interface ControllerBackgroundTasksDeps {
   addProductAdminRoutes?: ProductAdminRoutes;
-  userAccounts?: UserAccounts | undefined;
+  userAccounts: UserAccounts;
   discoverDeletionProductContext?: ((uid: string) => Promise<ProductContext>) | undefined;
   productAdminUserDetail?: AdminUserProductDetail | undefined;
   accounts: UserAccountReader;
@@ -2816,14 +2817,14 @@ export interface ControllerProduct {
   createHostingCleanup?: (log: (message: string) => void) => HostingCleanup;
   userLifecycle: ProductUserLifecycleFactory | null;
   addAdminRoutes?: ProductAdminRoutes;
-  userAccounts?: (db: Firestore) => UserAccounts;
-  accountReader?: (db: Firestore) => UserAccountReader;
-  userDirectory?: (db: Firestore) => AdminUserDirectorySource;
-  adminUserDetail?: (db: Firestore) => AdminUserProductDetail;
+  userAccounts?: (store: PlatformStateStore) => UserAccounts;
+  accountReader?: (store: PlatformStateStore) => UserAccountReader;
+  userDirectory?: (store: PlatformStateStore) => AdminUserDirectorySource;
+  adminUserDetail?: (store: PlatformStateStore) => AdminUserProductDetail;
   adminIdentity?: IdentityProvider;
   placementAdmission?: PlacementAdmissionPolicy;
   userAdmission?: UserAdmissionSourceFactory;
-  userPolicyInputs?: (db: Firestore, log: (message: string) => void) => UserPolicyInputsSource;
+  userPolicyInputs?: (store: PlatformStateStore, log: (message: string) => void) => UserPolicyInputsSource;
   isolatedGateways?: IsolatedGatewayProductFactory;
   sharedGateways?: SharedGatewayProductFactory;
   startProjection?: (deps: {
@@ -2833,10 +2834,17 @@ export interface ControllerProduct {
   }) => ControllerStopper;
 }
 
-function productUserReads(product: ControllerProduct, db: Firestore) {
+export function controllerUserSeams(
+  product: ControllerProduct,
+  store: PlatformStateStore,
+  log: (message: string) => void,
+) {
   return {
-    accounts: product.accountReader?.(db) ?? noUserAccounts,
-    userDirectory: product.userDirectory?.(db) ?? noAdminUserDirectorySource,
+    userAccounts: product.userAccounts?.(store) ?? platformStateUserAccounts(store),
+    accounts: product.accountReader?.(store) ?? platformStateUserAccountReader(store),
+    userDirectory: product.userDirectory?.(store) ?? noAdminUserDirectorySource,
+    adminUserDetail: product.adminUserDetail?.(store),
+    policyInputs: product.userPolicyInputs?.(store, log) ?? noUserPolicyInputs,
   };
 }
 
@@ -2866,7 +2874,7 @@ export async function main(product: ControllerProduct): Promise<void> {
     logger,
   });
   const userLifecycle = createUserLifecycle(product, db, store);
-  const { accounts, userDirectory } = productUserReads(product, db);
+  const { userAccounts, accounts, userDirectory, adminUserDetail, policyInputs } = controllerUserSeams(product, store, log);
   const { deps, fleetControllerPrivateKey, chartFingerprint } =
     await createControllerRuntime(db, store, product.createHostingCleanup, userLifecycle, accounts);
 
@@ -2909,7 +2917,6 @@ export async function main(product: ControllerProduct): Promise<void> {
     );
   }
 
-  const policyInputs = product.userPolicyInputs?.(db, log) ?? noUserPolicyInputs;
   const adminIdentity = combineIdentityProviders([
     product.adminIdentity,
     googleIdentityFromEnvironment(process.env),
@@ -2928,9 +2935,9 @@ export async function main(product: ControllerProduct): Promise<void> {
     fleetControllerPrivateKey,
     platformArtifact,
     controllerStartedAt,
-    userAccounts: product.userAccounts?.(db),
+    userAccounts,
     discoverDeletionProductContext: userLifecycle?.discover,
-    productAdminUserDetail: product.adminUserDetail?.(db),
+    productAdminUserDetail: adminUserDetail,
     accounts,
     userDirectory,
   });

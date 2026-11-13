@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { type CollectionReference, type DocumentData, type DocumentReference, type DocumentSnapshot, FieldPath, FieldValue, type Firestore, type Query, type QueryDocumentSnapshot, type QuerySnapshot, type Timestamp } from "firebase-admin/firestore";
 import { SCHEDULE_TRANSFERS_SUBCOLLECTION, type ScheduleTransferDoc } from "@octogee/shared/types/fleet-controller";
 import { PLACEMENT_RECEIPTS_SUBCOLLECTION, type PlacementReceipt, placementReceiptDocId } from "@octogee/shared/types/placement-receipts";
-import type { ActivationLeaseFence, AgentStoreRecord, AgentStoresRepository, PlacementReceiptsRepository, PlatformUserRecord, ScheduleTransfersRepository, UserActivationLease, UserFence, UserRecordsRepository, UserRepositories, UserRole } from "../../platform-state/users.js";
+import type { ActivationLeaseFence, AgentStoreRecord, AgentStoresRepository, PlacementReceiptsRepository, UserAccountsRepository, PlatformUserRecord, ScheduleTransfersRepository, UserActivationLease, UserFence, UserRecordsRepository, UserRepositories, UserRole } from "../../platform-state/users.js";
 import { DuplicateRecordError, FenceMismatchError, MissingRecordError, type RecordKey, UnsupportedOperationError } from "../../platform-state/errors.js";
 import type { Page, PageRequest, Revision, Stored } from "../../platform-state/store.js";
 import { assertFenceEquals, assertFenceOneOf } from "../../platform-state/documents/fences.js";
@@ -553,8 +553,16 @@ function createAgentStoresRepository(session: FirestoreSession): AgentStoresRepo
   };
 }
 
+function unsupportedUserAccounts(): UserAccountsRepository {
+  const unsupported = (operation: string) => async (): Promise<never> => {
+    throw new UnsupportedOperationError("firestore", `users.accounts.${operation}`, "backend-capability");
+  };
+  return { get: unsupported("get"), getMany: unsupported("getMany"), listAll: unsupported("listAll"), create: unsupported("create") };
+}
+
 export const createFirestoreUserRepositories = (session: FirestoreSession): UserRepositories => ({
   records: createUserRecordsRepository(session),
+  accounts: unsupportedUserAccounts(),
   placementReceipts: createPlacementReceiptsRepository(session),
   scheduleTransfers: createScheduleTransfersRepository(session),
   agentStores: createAgentStoresRepository(session),

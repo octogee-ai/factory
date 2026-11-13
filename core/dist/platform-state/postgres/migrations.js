@@ -1097,6 +1097,15 @@ CREATE TABLE activity_receipts (
 CREATE TRIGGER activity_receipts_revision BEFORE UPDATE ON activity_receipts
   FOR EACH ROW EXECUTE FUNCTION bump_revision();
 `;
+const USER_ACCOUNTS = String.raw `
+CREATE TABLE user_accounts (
+  uid         text PRIMARY KEY REFERENCES users (uid) ON DELETE CASCADE,
+  name        text NOT NULL UNIQUE CHECK (name <> ''),
+  email       text NOT NULL UNIQUE CHECK (email <> '' AND email = lower(email)),
+  created_at  bigint NOT NULL,
+  revision    bigint NOT NULL DEFAULT nextval('record_revision_seq')
+);
+`;
 export const PLATFORM_STATE_MIGRATIONS = [
     { version: 1, name: "core-schema", sql: CORE_SCHEMA },
     { version: 2, name: "change-feed", sql: CHANGE_FEED },
@@ -1111,4 +1120,5 @@ export const PLATFORM_STATE_MIGRATIONS = [
     { version: 11, name: "meta-broker-provider", sql: META_BROKER_PROVIDER },
     { version: 12, name: "neutral-stored-names", sql: NEUTRAL_STORED_NAMES },
     { version: 13, name: "activity-receipts", sql: ACTIVITY_RECEIPTS },
+    { version: 14, name: "user-accounts", sql: USER_ACCOUNTS },
 ];

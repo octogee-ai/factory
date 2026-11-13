@@ -132,7 +132,7 @@ export function buildRemoveUserConfig(current, slug, agentId) {
     }
     return config;
 }
-export async function provisionMattermost(ctx, channelHost) {
+export async function provisionMattermost(ctx, channelHost, projection) {
     const data = ctx.userData;
     const vibe = data.onboarding?.vibe ?? null;
     return provisionMattermostUser({
@@ -145,7 +145,7 @@ export async function provisionMattermost(ctx, channelHost) {
             (data.displayName?.split(" ").slice(1).join(" ")) ||
             "",
         photoURL: data.photoURL || "",
-    }, channelHost);
+    }, channelHost, projection.storedMattermostNames);
 }
 export function upsertMattermostBindingByAgentAndPeer(bindings, binding) {
     const idx = bindings.findIndex((b) => b.agentId === binding.agentId &&
@@ -180,16 +180,58 @@ export function wireDefaultAgentMattermostBindings(config, userDefaultAgentId, s
         log(`[mattermost] binding: ${userDefaultAgentId} ← ${label} group:${channelId} (account=${accountId})`);
     }
 }
-export async function markProvisioningComplete(ctx, mmUpdate, allAgentIds) {
-    const provisioningObj = buildProvisioningSnapshot(ctx, allAgentIds);
-    await writeSystemConfig(ctx);
+export const noProvisioningProjection = {
+    storedMattermostNames: async () => ({ username: null, coachChannelName: null }),
+    systemConfig: async () => undefined,
+    user: async () => undefined,
+    workspace: async () => undefined,
+    channel: async () => undefined,
+    agent: async () => undefined,
+    workspaceEntry: async () => undefined,
+};
+function storedString(value) {
+    return typeof value === "string" ? value : null;
+}
+export const firestoreProvisioningProjection = {
+    storedMattermostNames: async (uid, slug) => {
+        const [user, coachChannel] = await Promise.all([
+            db.doc(`users/${uid}`).get(),
+            db.doc(`workspaces/${slug}/channels/coach-dm`).get(),
+        ]);
+        return {
+            username: storedString(user.data()?.mattermost?.username),
+            coachChannelName: storedString(coachChannel.data()?.name),
+        };
+    },
+    systemConfig: async (ctx) => {
+        await db.doc(`users/${ctx.uid}/system/config`).set({ updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    },
+    user: async (ctx, mmUpdate) => {
+        await db.collection("users").doc(ctx.uid).update(buildUserProductFields(ctx, mmUpdate));
+    },
+    workspace: async (ctx) => {
+        await db.doc(`workspaces/${ctx.slug}`).set({ name: ctx.slug, ownerDisplayName: ctx.slug, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    },
+    channel: async (ctx, channelId, name) => {
+        await db.doc(`workspaces/${ctx.slug}/channels/${channelId}`).set({ name }, { merge: true });
+    },
+    agent: async (ctx) => {
+        await db.doc(`agents/${ctx.uid}`).set(buildDefaultAgentDoc(ctx.uid), { merge: true });
+    },
+    workspaceEntry: (ctx, allAgentIds) => updateUserWorkspaceEntry(ctx, buildProvisioningSnapshot(ctx, allAgentIds)),
+};
+export async function markProvisioningComplete(ctx, mmUpdate, allAgentIds, projection) {
+    await writeDefaultRole(ctx);
+    await projection.systemConfig(ctx);
     await writeProvisionedUser(ctx, allAgentIds, mmUpdate);
-    await db.collection("users").doc(ctx.uid).update(buildUserProductFields(ctx, mmUpdate));
+    await projection.user(ctx, mmUpdate);
     await writeWorkspaceRecord(ctx, mmUpdate);
-    await seedWorkspaceChannels(ctx, mmUpdate);
+    await projection.workspace(ctx);
+    await seedWorkspaceChannels(ctx, mmUpdate, projection);
     await seedWorkspaceOwner(ctx, mmUpdate);
-    await writeAgentIdentity(ctx, mmUpdate);
-    await updateUserWorkspaceEntry(ctx, provisioningObj);
+    if (await writeAgentIdentity(ctx, mmUpdate))
+        await projection.agent(ctx);
+    await projection.workspaceEntry(ctx, allAgentIds);
 }
 const SERVER_NOW = { serverNow: true };
 function buildProvisioningSnapshot(ctx, allAgentIds) {
@@ -203,7 +245,7 @@ function buildProvisioningSnapshot(ctx, allAgentIds) {
         provisionedAt: FieldValue.serverTimestamp(),
     };
 }
-async function writeSystemConfig(ctx) {
+async function writeDefaultRole(ctx) {
     await platformStateStore.transaction({ label: "provisioning.default-role" }, async (transaction) => {
         const user = await transaction.users.records.get(ctx.uid);
         if (user === null)
@@ -211,7 +253,6 @@ async function writeSystemConfig(ctx) {
         if (user.role === null)
             await transaction.users.records.patch(ctx.uid, { role: "user" });
     });
-    await db.doc(`users/${ctx.uid}/system/config`).set({ updatedAt: FieldValue.serverTimestamp() }, { merge: true });
 }
 export function buildProvisionedUserPatch(ctx, mmUpdate) {
     const mattermostUserId = mmUpdate["mattermost.userId"];
@@ -260,9 +301,8 @@ async function writeWorkspaceRecord(ctx, mmUpdate) {
             updatedAt: SERVER_NOW,
         });
     });
-    await db.doc(`workspaces/${ctx.slug}`).set({ name: ctx.slug, ownerDisplayName: ctx.slug, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
 }
-async function seedWorkspaceChannel(ctx, channelId, mattermostChannelId, name) {
+async function seedWorkspaceChannel(ctx, channelId, mattermostChannelId, name, projection) {
     const scope = { workspaceSlug: ctx.slug, projectSlug: null };
     await platformStateStore.transaction({ label: "provisioning.channel" }, async (transaction) => {
         if ((await transaction.workspaces.channels.get(scope, channelId)) === null) {
@@ -279,16 +319,16 @@ async function seedWorkspaceChannel(ctx, channelId, mattermostChannelId, name) {
         }
         await transaction.workspaces.channels.patch(scope, channelId, { mattermostChannelId });
     });
-    await db.doc(`workspaces/${ctx.slug}/channels/${channelId}`).set({ name }, { merge: true });
+    await projection.channel(ctx, channelId, name);
 }
-async function seedWorkspaceChannels(ctx, mmUpdate) {
+async function seedWorkspaceChannels(ctx, mmUpdate, projection) {
     const generalChannelId = mmUpdate["mattermost.generalChannelId"];
     if (generalChannelId)
-        await seedWorkspaceChannel(ctx, "general", generalChannelId, "general");
+        await seedWorkspaceChannel(ctx, "general", generalChannelId, "general", projection);
     const coachDmChannelId = mmUpdate["mattermost.channelId"];
     if (coachDmChannelId) {
         const name = mmUpdate["mattermost.channelName"] || "coach-dm";
-        await seedWorkspaceChannel(ctx, "coach-dm", coachDmChannelId, name);
+        await seedWorkspaceChannel(ctx, "coach-dm", coachDmChannelId, name, projection);
     }
 }
 async function seedWorkspaceOwner(ctx, mmUpdate) {
@@ -308,13 +348,13 @@ async function seedWorkspaceOwner(ctx, mmUpdate) {
 async function writeAgentIdentity(ctx, mmUpdate) {
     const defaultAgentMmUserId = mmUpdate["mattermost.coachUserId"];
     if (!defaultAgentMmUserId)
-        return;
+        return false;
     await platformStateStore.workspaces.agentIdentities.put({
         uid: ctx.uid,
         mattermostUserId: defaultAgentMmUserId,
         at: SERVER_NOW,
     });
-    await db.doc(`agents/${ctx.uid}`).set(buildDefaultAgentDoc(ctx.uid), { merge: true });
+    return true;
 }
 export function buildDefaultAgentDoc(uid) {
     return {

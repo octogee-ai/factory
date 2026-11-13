@@ -261,8 +261,25 @@ export interface AgentStoresRepository {
   delete(uid: string, storeKey: string): Promise<void>;
 }
 
+export interface UserAccountRecord {
+  readonly uid: string;
+  readonly name: string;
+  readonly email: string;
+  readonly createdAt: number;
+}
+
+export type NewUserAccountRecord = Omit<UserAccountRecord, "createdAt"> & { readonly createdAt: TimeInput };
+
+export interface UserAccountsRepository {
+  get(uid: string): Promise<Stored<UserAccountRecord> | null>;
+  getMany(uids: readonly string[]): Promise<ReadonlyMap<string, Stored<UserAccountRecord>>>;
+  listAll(): Promise<readonly Stored<UserAccountRecord>[]>;
+  create(account: NewUserAccountRecord): Promise<void>;
+}
+
 export interface UserRepositories {
   readonly records: UserRecordsRepository;
+  readonly accounts: UserAccountsRepository;
   readonly placementReceipts: PlacementReceiptsRepository;
   readonly scheduleTransfers: ScheduleTransfersRepository;
   readonly agentStores: AgentStoresRepository;

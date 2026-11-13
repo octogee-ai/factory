@@ -55,6 +55,12 @@ const SCHEDULE_TRANSFERS_TABLE = {
         column("restoreFailures", "jsonb"),
     ],
 };
+const USER_ACCOUNTS_TABLE = {
+    table: "user_accounts",
+    aggregate: "user-account",
+    keyColumns: ["uid"],
+    columns: [column("uid", "text"), column("name", "text"), column("email", "text"), column("createdAt", "bigint")],
+};
 const AGENT_STORES_TABLE = {
     table: "agent_stores",
     aggregate: "agent-store",
@@ -195,8 +201,34 @@ function createAgentStoresRepository(session) {
         },
     };
 }
+function decodeUserAccount(row) {
+    return decodeStored(USER_ACCOUNTS_TABLE, row);
+}
+function createUserAccountsRepository(session) {
+    return {
+        async get(uid) {
+            const row = await selectByKey(session, "users.accounts.get", { table: USER_ACCOUNTS_TABLE, key: [uid] });
+            return row === null ? null : decodeUserAccount(row);
+        },
+        async getMany(uids) {
+            const unique = [...new Set(uids)];
+            if (unique.length === 0)
+                return new Map();
+            const rows = await selectRecords(session, "users.accounts.getMany", "SELECT * FROM $schema.user_accounts WHERE uid = ANY($1::text[]) ORDER BY uid", [unique]);
+            return new Map(rows.map((row) => [row.uid, decodeUserAccount(row)]));
+        },
+        async listAll() {
+            const rows = await selectRecords(session, "users.accounts.listAll", "SELECT * FROM $schema.user_accounts ORDER BY uid");
+            return rows.map(decodeUserAccount);
+        },
+        async create(account) {
+            await insertRecord(session, "users.accounts.create", USER_ACCOUNTS_TABLE, account, "create");
+        },
+    };
+}
 export const createPostgresUserRepositories = (session) => ({
     records: createPostgresUserRecordsRepository(session),
+    accounts: createUserAccountsRepository(session),
     placementReceipts: createPlacementReceiptsRepository(session),
     scheduleTransfers: createScheduleTransfersRepository(session),
     agentStores: createAgentStoresRepository(session),

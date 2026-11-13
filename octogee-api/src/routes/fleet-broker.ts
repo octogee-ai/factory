@@ -2,6 +2,7 @@ import { isBlobObjectVersion } from "@octogee/shared/types/fleet-broker";
 import { gcsBlobStore, runtimeBlobStore } from "../lib/runtime-blob-store.js";
 import type { WorkspaceProject } from "@octogee/core/platform-state";
 import { isolatedBootMode } from "@octogee/core/isolated-prelaunch";
+import type { ProvisioningProjection } from "@octogee/core/provisionSteps";
 import { sharedAgentAnchorMigrationScope, sharedAssignedSourceSurgeAnchorScope } from "../lib/shared-agent-anchor-migration.js";
 import { installWorkspaceBlobBrokerRoute, type WorkspaceBlobStore } from "./fleet-broker-workspace-blob.js";
 import { readUserRestoreAuthoritySnapshot } from "@octogee/core/fleet-state";
@@ -261,6 +262,7 @@ interface FleetBrokerRouteDeps {
     userData: Record<string, unknown>;
     mmUpdate: FleetBrokerMattermostUpdate;
   }) => Promise<void>;
+  provisioningProjection?: ProvisioningProjection;
   onUserProvisioned?: (report: ProvisionedUserReport) => Promise<void>;
   renderAvatar?: RenderAvatar;
   createBlobSignedUrl?: CreateBlobSignedUrl;
@@ -293,30 +295,32 @@ const ISOLATED_RUNTIME_STATE_MINUTE_RETENTION_MS = 10 * 60_000;
 const ISOLATED_RUNTIME_STATE_HOUR_RETENTION_MS = 24 * 60 * 60_000;
 const ISOLATED_RUNTIME_STATE_DAY_RETENTION_MS = 30 * 24 * 60 * 60_000;
 
-async function defaultProvisionMattermost(input: {
-  uid: string;
-  userData: Record<string, unknown>;
-}): Promise<FleetBrokerMattermostUpdate> {
-  const { buildProvisioningContext, provisionMattermost } = await import(
-    "@octogee/core/provisionSteps"
-  );
-  const { mattermostChannelHostFromEnv } = await import("@octogee/core/channel-host");
-  return provisionMattermost(
-    buildProvisioningContext(input.uid, input.userData),
-    mattermostChannelHostFromEnv(),
-  );
+function defaultProvisionMattermost(
+  projection: ProvisioningProjection | undefined,
+): NonNullable<FleetBrokerRouteDeps["provisionMattermost"]> {
+  return async (input) => {
+    const { buildProvisioningContext, provisionMattermost, noProvisioningProjection } = await import(
+      "@octogee/core/provisionSteps"
+    );
+    const { mattermostChannelHostFromEnv } = await import("@octogee/core/channel-host");
+    return provisionMattermost(
+      buildProvisioningContext(input.uid, input.userData),
+      mattermostChannelHostFromEnv(),
+      projection ?? noProvisioningProjection,
+    );
+  };
 }
 
-async function defaultMarkProvisioningComplete(input: {
-  uid: string;
-  userData: Record<string, unknown>;
-  mmUpdate: FleetBrokerMattermostUpdate;
-}): Promise<void> {
-  const { buildProvisioningContext, markProvisioningComplete } = await import(
-    "@octogee/core/provisionSteps"
-  );
-  const ctx = buildProvisioningContext(input.uid, input.userData);
-  await markProvisioningComplete(ctx, input.mmUpdate, [`octogee-${ctx.slug}-coach`]);
+function defaultMarkProvisioningComplete(
+  projection: ProvisioningProjection | undefined,
+): NonNullable<FleetBrokerRouteDeps["markProvisioningComplete"]> {
+  return async (input) => {
+    const { buildProvisioningContext, markProvisioningComplete, noProvisioningProjection } = await import(
+      "@octogee/core/provisionSteps"
+    );
+    const ctx = buildProvisioningContext(input.uid, input.userData);
+    await markProvisioningComplete(ctx, input.mmUpdate, [`octogee-${ctx.slug}-coach`], projection ?? noProvisioningProjection);
+  };
 }
 
 const defaultRenderAvatar: RenderAvatar = async (bytes) => {
@@ -1718,9 +1722,9 @@ function resolveFleetBrokerRouteImplementations(
   opts: FleetBrokerRouteDeps,
 ) {
   return {
-    provisionMattermost: opts.provisionMattermost ?? defaultProvisionMattermost,
+    provisionMattermost: opts.provisionMattermost ?? defaultProvisionMattermost(opts.provisioningProjection),
     markProvisioningComplete:
-      opts.markProvisioningComplete ?? defaultMarkProvisioningComplete,
+      opts.markProvisioningComplete ?? defaultMarkProvisioningComplete(opts.provisioningProjection),
     onUserProvisioned: opts.onUserProvisioned ?? (async () => {}),
     renderAvatar: opts.renderAvatar ?? defaultRenderAvatar,
     createBlobSignedUrl: opts.createBlobSignedUrl ?? defaultCreateBlobSignedUrl,

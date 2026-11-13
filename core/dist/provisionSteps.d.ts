@@ -1,6 +1,7 @@
 import { type ProductFields } from "@octogee/shared/types/user-entitlements";
 import type { MmUpdate } from "./user-lifecycle.js";
 import type { UserPatch } from "./platform-state/users.js";
+import type { ReadStoredMattermostNames } from "./mattermost/provision.js";
 import type { ManagedChannelHost } from "./channel-host/types.js";
 export { listTierTemplateFiles, writeTierTemplateFiles, } from "./tier-template-files.js";
 export interface AgentBinding {
@@ -71,7 +72,7 @@ export declare function registerDefaultAgent(ctx: ProvisioningContext, config: O
 export declare function buildDefaultAgentEntry(ctx: ProvisioningContext): AgentEntry;
 export declare function buildDefaultAgentBindings(current: unknown, userDefaultAgentId: string, slug: string, mmUpdate: MmUpdate): AgentBinding[];
 export declare function buildRemoveUserConfig(current: OpenclawConfigShape & Record<string, unknown>, slug: string, agentId: string): OpenclawConfigShape & Record<string, unknown>;
-export declare function provisionMattermost(ctx: ProvisioningContext, channelHost: ManagedChannelHost): Promise<MmUpdate>;
+export declare function provisionMattermost(ctx: ProvisioningContext, channelHost: ManagedChannelHost, projection: ProvisioningProjection): Promise<MmUpdate>;
 export declare function upsertMattermostBindingByAgentAndPeer(bindings: AgentBinding[], binding: AgentBinding & {
     match: {
         peer: {
@@ -80,7 +81,18 @@ export declare function upsertMattermostBindingByAgentAndPeer(bindings: AgentBin
     };
 }): void;
 export declare function wireDefaultAgentMattermostBindings(config: OpenclawConfigShape, userDefaultAgentId: string, slug: string, mmUpdate: MmUpdate): void;
-export declare function markProvisioningComplete(ctx: ProvisioningContext, mmUpdate: MmUpdate, allAgentIds: string[]): Promise<void>;
+export interface ProvisioningProjection {
+    storedMattermostNames: ReadStoredMattermostNames;
+    systemConfig(ctx: ProvisioningContext): Promise<void>;
+    user(ctx: ProvisioningContext, mmUpdate: MmUpdate): Promise<void>;
+    workspace(ctx: ProvisioningContext): Promise<void>;
+    channel(ctx: ProvisioningContext, channelId: "general" | "coach-dm", name: string): Promise<void>;
+    agent(ctx: ProvisioningContext): Promise<void>;
+    workspaceEntry(ctx: ProvisioningContext, allAgentIds: string[]): Promise<void>;
+}
+export declare const noProvisioningProjection: ProvisioningProjection;
+export declare const firestoreProvisioningProjection: ProvisioningProjection;
+export declare function markProvisioningComplete(ctx: ProvisioningContext, mmUpdate: MmUpdate, allAgentIds: string[], projection: ProvisioningProjection): Promise<void>;
 export declare function buildProvisionedUserPatch(ctx: ProvisioningContext, mmUpdate: MmUpdate): UserPatch;
 export declare function buildUserProductFields(ctx: ProvisioningContext, mmUpdate: MmUpdate): Record<string, unknown>;
 export declare function buildDefaultAgentDoc(uid: string): Record<string, unknown>;

@@ -121,6 +121,10 @@
       "types": "./dist/user-account.d.ts",
       "default": "./dist/user-account.js"
     },
+    "./platform-state-user-accounts": {
+      "types": "./dist/platform-state-user-accounts.d.ts",
+      "default": "./dist/platform-state-user-accounts.js"
+    },
     "./user-activation-lease": {
       "types": "./dist/user-activation-lease.d.ts",
       "default": "./dist/user-activation-lease.js"

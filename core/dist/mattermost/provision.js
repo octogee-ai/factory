@@ -1,6 +1,6 @@
 import * as crypto from "crypto";
 import { log } from "../config.js";
-import { db, platformStateStore } from "../firebase.js";
+import { platformStateStore } from "../firebase.js";
 import { workspaceGeneralChannelName, workspaceDefaultAgentChannelName, } from "@octogee/shared/types/identity";
 import { computeWorkspaceDisplayName, WORKSPACE_CHANNEL_DISPLAY_NAMES, } from "@octogee/shared/types/display-names";
 import { userChannelMembers } from "./channel-members.js";
@@ -38,12 +38,11 @@ function nonEmptyString(value) {
 async function loadExistingMattermostTopology(slug) {
     const scope = { workspaceSlug: slug, projectSlug: null };
     const { records, channels } = platformStateStore.workspaces;
-    const [workspace, defaultAgentDm, general, admin, defaultAgentDmPresentation] = await Promise.all([
+    const [workspace, defaultAgentDm, general, admin] = await Promise.all([
         records.get(slug),
         channels.get(scope, "coach-dm"),
         channels.get(scope, "general"),
         channels.get(scope, "admin"),
-        db.doc(`workspaces/${slug}/channels/coach-dm`).get(),
     ]);
     const teamId = nonEmptyString(workspace?.mattermostTeamId);
     const coachChannelId = nonEmptyString(defaultAgentDm?.mattermostChannelId);
@@ -55,17 +54,16 @@ async function loadExistingMattermostTopology(slug) {
         coachChannelId,
         generalChannelId,
         adminChannelId: nonEmptyString(admin?.mattermostChannelId),
-        channelName: nonEmptyString(defaultAgentDmPresentation.data()?.name) ?? workspaceDefaultAgentChannelName(slug),
     };
 }
 function existingProvisioningUpdate(input) {
-    const { userMmUserId, username, topology, coachUserId, personalToken } = input;
+    const { userMmUserId, username, channelName, topology, coachUserId, personalToken } = input;
     const update = {
         "mattermost.userId": userMmUserId,
         "mattermost.username": username,
         "mattermost.teamId": topology.teamId,
         "mattermost.channelId": topology.coachChannelId,
-        "mattermost.channelName": topology.channelName,
+        "mattermost.channelName": channelName,
         "mattermost.dmChannelId": topology.coachChannelId,
         "mattermost.generalChannelId": topology.generalChannelId,
         "mattermost.proxyUrl": process.env.API_PUBLIC_URL || "",
@@ -77,24 +75,23 @@ function existingProvisioningUpdate(input) {
         update._coachPersonalToken = personalToken;
     return update;
 }
-async function backfillExistingProvisioning(host, uid, slug) {
-    const [user, userDoc] = await Promise.all([
-        platformStateStore.users.records.get(uid),
-        db.doc(`users/${uid}`).get(),
-    ]);
+async function backfillExistingProvisioning(host, uid, slug, readStoredNames) {
+    const user = await platformStateStore.users.records.get(uid);
     const userMmUserId = nonEmptyString(user?.mattermostUserId);
     if (!userMmUserId)
         return null;
     const topology = await loadExistingMattermostTopology(slug);
     if (!topology)
         return null;
+    const stored = await readStoredNames(uid, slug);
     log(`[mattermost] user already provisioned (userId=${userMmUserId}) — skipping MM creation`);
     const backfilledDefaultAgent = await backfillDefaultAgentIdentity(host, uid, slug);
     const coachUserId = backfilledDefaultAgent.coachUserId
         ?? nonEmptyString((await platformStateStore.workspaces.agentIdentities.get(uid))?.mattermostUserId);
     return existingProvisioningUpdate({
         userMmUserId,
-        username: nonEmptyString(userDoc.data()?.mattermost?.username) ?? slug,
+        username: nonEmptyString(stored.username) ?? slug,
+        channelName: nonEmptyString(stored.coachChannelName) ?? workspaceDefaultAgentChannelName(slug),
         topology,
         coachUserId,
         personalToken: backfilledDefaultAgent.personalToken,
@@ -259,11 +256,11 @@ function buildResultMap(args) {
         ...(defaultAgent.personalToken ? { _coachPersonalToken: defaultAgent.personalToken } : {}),
     };
 }
-export async function provisionMattermostUser(input, host) {
+export async function provisionMattermostUser(input, host, readStoredNames) {
     const { uid, slug, firstName, email, vibe, lastName, photoURL } = input;
     const MM_ADMIN_USER_ID = process.env.MM_ADMIN_USER_ID;
     try {
-        const backfilled = await backfillExistingProvisioning(host, uid, slug);
+        const backfilled = await backfillExistingProvisioning(host, uid, slug, readStoredNames);
         if (backfilled)
             return backfilled;
         const mmUser = await createOrFindMattermostUser(host, { uid, slug, email, firstName, lastName });

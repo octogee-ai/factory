@@ -418,8 +418,15 @@ function createAgentStoresRepository(session) {
         },
     };
 }
+function unsupportedUserAccounts() {
+    const unsupported = (operation) => async () => {
+        throw new UnsupportedOperationError("firestore", `users.accounts.${operation}`, "backend-capability");
+    };
+    return { get: unsupported("get"), getMany: unsupported("getMany"), listAll: unsupported("listAll"), create: unsupported("create") };
+}
 export const createFirestoreUserRepositories = (session) => ({
     records: createUserRecordsRepository(session),
+    accounts: unsupportedUserAccounts(),
     placementReceipts: createPlacementReceiptsRepository(session),
     scheduleTransfers: createScheduleTransfersRepository(session),
     agentStores: createAgentStoresRepository(session),

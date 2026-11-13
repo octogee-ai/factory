@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => {
   const writes: Array<{ path: string; data: Record<string, unknown> }> = [];
+  const stored = new Map<string, Record<string, unknown>>();
   const workspaceEntries: Array<{ ref: { update: (data: Record<string, unknown>) => Promise<void> } }> = [];
   const docRef = (path: string): Record<string, unknown> => ({
+    get: async () => ({ data: () => stored.get(path) }),
     set: async (data: Record<string, unknown>) => {
       writes.push({ path, data });
     },
@@ -36,12 +38,17 @@ const h = vi.hoisted(() => {
     workspaces,
     transaction: (_options: unknown, body: (transaction: unknown) => Promise<unknown>) => body(store),
   };
-  return { writes, workspaceEntries, records, workspaces, store, db: { collection: collectionRef, doc: docRef } };
+  return { writes, stored, workspaceEntries, records, workspaces, store, db: { collection: collectionRef, doc: docRef } };
 });
 
 vi.mock("./firebase.js", () => ({ db: h.db, platformStateStore: h.store }));
 
-import { buildProvisioningContext, markProvisioningComplete } from "./provisionSteps.js";
+import {
+  buildProvisioningContext,
+  firestoreProvisioningProjection,
+  markProvisioningComplete,
+  noProvisioningProjection,
+} from "./provisionSteps.js";
 
 const SERVER_NOW = { serverNow: true };
 const ctx = buildProvisioningContext("u1", { username: "acme", tier: "pro" });
@@ -67,7 +74,7 @@ describe("markProvisioningComplete store routing", () => {
   });
 
   it("records the user's platform provisioning state through the store", async () => {
-    await markProvisioningComplete(ctx, mmUpdate, ["octogee-acme-coach", "octogee-second"]);
+    await markProvisioningComplete(ctx, mmUpdate, ["octogee-acme-coach", "octogee-second"], firestoreProvisioningProjection);
 
     expect(h.records.patch).toHaveBeenCalledWith("u1", {
       slug: "acme",
@@ -79,17 +86,29 @@ describe("markProvisioningComplete store routing", () => {
     expect(h.records.setActivatedAgents).toHaveBeenCalledWith("u1", ["coach"]);
   });
 
+  it("records the same platform state and writes nothing to Firestore without a projection", async () => {
+    await markProvisioningComplete(ctx, mmUpdate, ["octogee-acme-coach"], noProvisioningProjection);
+
+    expect(h.writes).toEqual([]);
+    expect(h.records.patch).toHaveBeenCalledWith("u1", expect.objectContaining({ slug: "acme", mattermostUserId: "mm-user" }));
+    expect(h.records.addAgents).toHaveBeenCalledWith("u1", ["octogee-acme-coach"]);
+    expect(h.workspaces.records.put).toHaveBeenCalledWith(expect.objectContaining({ slug: "acme", mattermostTeamId: "mm-team" }));
+    expect(h.workspaces.channels.put).toHaveBeenCalledTimes(2);
+    expect(h.workspaces.members.put).toHaveBeenCalledWith(expect.objectContaining({ uid: "u1", role: "owner" }));
+    expect(h.workspaces.agentIdentities.put).toHaveBeenCalledWith(expect.objectContaining({ uid: "u1", mattermostUserId: "mm-coach" }));
+  });
+
   it("marks the user's workspace entry complete", async () => {
     const update = vi.fn(async (_data: Record<string, unknown>): Promise<void> => undefined);
     h.workspaceEntries.push({ ref: { update } });
 
-    await markProvisioningComplete(ctx, mmUpdate, []);
+    await markProvisioningComplete(ctx, mmUpdate, [], firestoreProvisioningProjection);
 
     expect(update).toHaveBeenCalledWith(expect.objectContaining({ "provisioning.openclaw.status": "complete" }));
   });
 
   it("records the workspace and owner through the store, leaving Firestore the display names", async () => {
-    await markProvisioningComplete(ctx, mmUpdate, []);
+    await markProvisioningComplete(ctx, mmUpdate, [], firestoreProvisioningProjection);
 
     expect(h.workspaces.records.put).toHaveBeenCalledWith({
       slug: "acme",
@@ -117,7 +136,7 @@ describe("markProvisioningComplete store routing", () => {
   it("does not clear a workspace's team when the update carries none", async () => {
     h.workspaces.records.get.mockResolvedValueOnce({ slug: "acme", mattermostTeamId: "mm-existing" });
 
-    await markProvisioningComplete(ctx, { "mattermost.generalChannelId": "mm-general" }, []);
+    await markProvisioningComplete(ctx, { "mattermost.generalChannelId": "mm-general" }, [], firestoreProvisioningProjection);
 
     expect(h.workspaces.records.put).not.toHaveBeenCalled();
     expect(h.workspaces.records.patch).toHaveBeenCalledTimes(1);
@@ -127,13 +146,13 @@ describe("markProvisioningComplete store routing", () => {
   it("replaces a workspace's team when the update carries one", async () => {
     h.workspaces.records.get.mockResolvedValueOnce({ slug: "acme", mattermostTeamId: "mm-existing" });
 
-    await markProvisioningComplete(ctx, mmUpdate, []);
+    await markProvisioningComplete(ctx, mmUpdate, [], firestoreProvisioningProjection);
 
     expect(h.workspaces.records.patch).toHaveBeenCalledWith("acme", expect.objectContaining({ mattermostTeamId: "mm-team" }));
   });
 
   it("seeds each primary channel through the store, leaving Firestore its name", async () => {
-    await markProvisioningComplete(ctx, mmUpdate, []);
+    await markProvisioningComplete(ctx, mmUpdate, [], firestoreProvisioningProjection);
 
     const scope = { workspaceSlug: "acme", projectSlug: null };
     const channel = { scope, archivedAt: null, createdBy: null, createdAt: SERVER_NOW };
@@ -154,7 +173,7 @@ describe("markProvisioningComplete store routing", () => {
   });
 
   it("seeds only the channels the update carries", async () => {
-    await markProvisioningComplete(ctx, { "mattermost.generalChannelId": "mm-general" }, []);
+    await markProvisioningComplete(ctx, { "mattermost.generalChannelId": "mm-general" }, [], firestoreProvisioningProjection);
 
     expect(h.workspaces.channels.put).toHaveBeenCalledTimes(1);
     expect(h.workspaces.channels.put).toHaveBeenCalledWith(expect.objectContaining({ channelId: "general" }));
@@ -164,7 +183,7 @@ describe("markProvisioningComplete store routing", () => {
   it("keeps an existing channel's creation record and updates only its Mattermost channel", async () => {
     h.workspaces.channels.get.mockResolvedValueOnce({ channelId: "general" });
 
-    await markProvisioningComplete(ctx, { "mattermost.generalChannelId": "mm-general" }, []);
+    await markProvisioningComplete(ctx, { "mattermost.generalChannelId": "mm-general" }, [], firestoreProvisioningProjection);
 
     expect(h.workspaces.channels.put).not.toHaveBeenCalled();
     expect(h.workspaces.channels.patch).toHaveBeenCalledWith(
@@ -177,13 +196,13 @@ describe("markProvisioningComplete store routing", () => {
   it("leaves an existing owner membership alone", async () => {
     h.workspaces.members.get.mockResolvedValueOnce({ uid: "u1", role: "owner" });
 
-    await markProvisioningComplete(ctx, mmUpdate, []);
+    await markProvisioningComplete(ctx, mmUpdate, [], firestoreProvisioningProjection);
 
     expect(h.workspaces.members.put).not.toHaveBeenCalled();
   });
 
   it("records the agent's identity through the store, leaving Firestore its presentation", async () => {
-    await markProvisioningComplete(ctx, mmUpdate, []);
+    await markProvisioningComplete(ctx, mmUpdate, [], firestoreProvisioningProjection);
 
     expect(h.workspaces.agentIdentities.put).toHaveBeenCalledWith({
       uid: "u1",
@@ -201,9 +220,32 @@ describe("markProvisioningComplete store routing", () => {
   });
 
   it("writes no agent identity when the update has no agent user", async () => {
-    await markProvisioningComplete(ctx, { "mattermost.generalChannelId": "mm-general" }, []);
+    await markProvisioningComplete(ctx, { "mattermost.generalChannelId": "mm-general" }, [], firestoreProvisioningProjection);
 
     expect(h.workspaces.agentIdentities.put).not.toHaveBeenCalled();
     expect(firestoreWrite("agents/u1")).toBeUndefined();
+  });
+});
+
+describe("stored Mattermost names", () => {
+  beforeEach(() => {
+    h.stored.clear();
+  });
+
+  it("reads the product's username and agent channel name from Firestore", async () => {
+    h.stored.set("users/u1", { mattermost: { username: "legacy-name" } });
+    h.stored.set("workspaces/acme/channels/coach-dm", { name: "acme-coach" });
+
+    await expect(firestoreProvisioningProjection.storedMattermostNames("u1", "acme"))
+      .resolves.toEqual({ username: "legacy-name", coachChannelName: "acme-coach" });
+    await expect(firestoreProvisioningProjection.storedMattermostNames("u2", "other"))
+      .resolves.toEqual({ username: null, coachChannelName: null });
+  });
+
+  it("has no stored names without a product projection", async () => {
+    h.stored.set("users/u1", { mattermost: { username: "legacy-name" } });
+
+    await expect(noProvisioningProjection.storedMattermostNames("u1", "acme"))
+      .resolves.toEqual({ username: null, coachChannelName: null });
   });
 });

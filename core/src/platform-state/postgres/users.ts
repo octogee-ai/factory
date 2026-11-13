@@ -4,6 +4,8 @@ import { placementReceiptDocId, type PlacementReceipt } from "@octogee/shared/ty
 import type {
   AgentStoreRecord,
   AgentStoresRepository,
+  UserAccountRecord,
+  UserAccountsRepository,
   UserRepositories,
   PlacementReceiptsRepository,
   ScheduleTransfersRepository,
@@ -68,6 +70,13 @@ const SCHEDULE_TRANSFERS_TABLE: TableSpec = {
     column("restoredAt", "bigint"),
     column("restoreFailures", "jsonb"),
   ],
+};
+
+const USER_ACCOUNTS_TABLE: TableSpec = {
+  table: "user_accounts",
+  aggregate: "user-account",
+  keyColumns: ["uid"],
+  columns: [column("uid", "text"), column("name", "text"), column("email", "text"), column("createdAt", "bigint")],
 };
 
 const AGENT_STORES_TABLE: TableSpec = {
@@ -235,8 +244,43 @@ function createAgentStoresRepository(session: PostgresSession): AgentStoresRepos
   };
 }
 
+function decodeUserAccount(row: Row): Stored<UserAccountRecord> {
+  return decodeStored<UserAccountRecord>(USER_ACCOUNTS_TABLE, row);
+}
+
+function createUserAccountsRepository(session: PostgresSession): UserAccountsRepository {
+  return {
+    async get(uid) {
+      const row = await selectByKey(session, "users.accounts.get", { table: USER_ACCOUNTS_TABLE, key: [uid] });
+      return row === null ? null : decodeUserAccount(row);
+    },
+
+    async getMany(uids) {
+      const unique = [...new Set(uids)];
+      if (unique.length === 0) return new Map();
+      const rows = await selectRecords(
+        session,
+        "users.accounts.getMany",
+        "SELECT * FROM $schema.user_accounts WHERE uid = ANY($1::text[]) ORDER BY uid",
+        [unique],
+      );
+      return new Map(rows.map((row) => [row.uid as string, decodeUserAccount(row)]));
+    },
+
+    async listAll() {
+      const rows = await selectRecords(session, "users.accounts.listAll", "SELECT * FROM $schema.user_accounts ORDER BY uid");
+      return rows.map(decodeUserAccount);
+    },
+
+    async create(account) {
+      await insertRecord(session, "users.accounts.create", USER_ACCOUNTS_TABLE, account, "create");
+    },
+  };
+}
+
 export const createPostgresUserRepositories: PostgresRepositoryFactory<UserRepositories> = (session) => ({
   records: createPostgresUserRecordsRepository(session),
+  accounts: createUserAccountsRepository(session),
   placementReceipts: createPlacementReceiptsRepository(session),
   scheduleTransfers: createScheduleTransfersRepository(session),
   agentStores: createAgentStoresRepository(session),

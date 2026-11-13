@@ -1,3 +1,5 @@
+import type { PlatformStateStore } from "@octogee/core/platform-state";
+import { platformStateUserAccountReader, userAccountDocument } from "@octogee/core/platform-state-user-accounts";
 import { noUserAccounts, type UserAccountReader } from "@octogee/core/user-account";
 import type { AgentLook } from "@octogee/shared/types/agent-look";
 import type { FleetBrokerUsageData } from "@octogee/shared/types/fleet-broker";
@@ -97,3 +99,19 @@ export const NO_BROKER_RECORDS: BrokerRecords = {
     throw new Error("usage events need a product recorder");
   },
 };
+
+export function platformStateBrokerRecords(store: Pick<PlatformStateStore, "users">): BrokerRecords {
+  return {
+    ...NO_BROKER_RECORDS,
+    accounts: platformStateUserAccountReader(store),
+    userDocuments: {
+      ...NO_BROKER_RECORDS.userDocuments,
+      account: async (uid) => {
+        const record = await store.users.accounts.get(uid);
+        return record === null ? undefined : userAccountDocument(record);
+      },
+      accounts: async (uids) =>
+        new Map([...(await store.users.accounts.getMany(uids))].map(([uid, record]) => [uid, userAccountDocument(record)])),
+    },
+  };
+}
