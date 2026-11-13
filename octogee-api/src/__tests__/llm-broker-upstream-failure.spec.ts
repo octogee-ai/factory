@@ -159,3 +159,70 @@ describe("llm broker upstream failure log", () => {
     ]);
   });
 });
+
+describe("llm broker provider refusal log", () => {
+  async function openAiRequestWith(deps: Pick<Parameters<typeof createLlmBrokerApp>[0], "providerKeyResolver">) {
+    const store = new InMemoryModelBrokerTokenStore();
+    const log: BrokerLog = vi.fn();
+    const fetchImpl = vi.fn();
+    const app = createLlmBrokerApp({
+      rails: operatorRailRegistry(),
+      store,
+      usageStore: new InMemoryModelBrokerUsageStore(),
+      providerKeys: { anthropic: PLATFORM_KEY },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      now: () => 12_000,
+      log,
+      ...deps,
+    });
+    const issued = await store.issueToken({
+      gatewayId: "jack",
+      ownerUid: "uid-jack",
+      provider: "openai",
+      secretName: "gateway-model-key-jack-openai",
+      limits: { spendWindowUsd: 10 },
+      now: 1_000,
+    });
+    const response = await request(app)
+      .post("/v1/chat/completions")
+      .set("authorization", `Bearer ${issued.token}`)
+      .send({ model: "gpt-6.1-terra", messages: [{ role: "user", content: PROMPT }] });
+    return { response, log, fetchImpl, token: issued.token };
+  }
+
+  const REFUSAL_FIELDS = {
+    gatewayId: "jack",
+    ownerUid: "uid-jack",
+    provider: "openai",
+    path: "/v1/chat/completions",
+    requestModel: "gpt-6.1-terra",
+    status: 503,
+  };
+
+  it("logs one line with the provider, model and reason when the provider has no key configured", async () => {
+    const { response, log, fetchImpl, token } = await openAiRequestWith({});
+
+    expect(response.status).toBe(503);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(linesNamed(log, "llm-broker provider refused")).toEqual([
+      { ...REFUSAL_FIELDS, reason: "no_key_configured" },
+    ]);
+    const logged = JSON.stringify(log.mock.calls);
+    expect(logged).not.toContain(PROMPT);
+    expect(logged).not.toContain(PLATFORM_KEY);
+    expect(logged).not.toContain(token);
+  });
+
+  it("names a key the broker could not read apart from a key that is not configured", async () => {
+    const { response, log } = await openAiRequestWith({
+      providerKeyResolver: async () => {
+        throw new Error("secret store unreachable");
+      },
+    });
+
+    expect(response.status).toBe(503);
+    expect(linesNamed(log, "llm-broker provider refused")).toEqual([
+      { ...REFUSAL_FIELDS, reason: "key_resolution_failed" },
+    ]);
+  });
+});

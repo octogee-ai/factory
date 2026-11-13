@@ -263,23 +263,28 @@ async function resolveProviderKey(input: {
   return apiKey ? { apiKey, source: "platform" } : null;
 }
 
+type ProviderKeyResolution =
+  | { key: ModelBrokerProviderKey }
+  | { refusal: "no_key_configured" | "key_resolution_failed" };
+
 async function resolveProviderKeyForRequest(input: {
   record: ModelBrokerTokenRecord;
   providerKeys: Partial<Record<ModelBrokerProvider, string | undefined>>;
   providerKeyResolver?: ModelBrokerProviderKeyResolver;
   vertex?: VertexBrokerConfig;
   onError: (err: unknown) => void;
-}): Promise<ModelBrokerProviderKey | null> {
+}): Promise<ProviderKeyResolution> {
   try {
-    return await resolveProviderKey({
+    const key = await resolveProviderKey({
       record: input.record,
       providerKeys: input.providerKeys,
       providerKeyResolver: input.providerKeyResolver,
       vertex: input.vertex,
     });
+    return key ? { key } : { refusal: "no_key_configured" };
   } catch (err) {
     input.onError(err);
-    return null;
+    return { refusal: "key_resolution_failed" };
   }
 }
 
@@ -1453,6 +1458,33 @@ async function resolveGrantForBrokerRequest(
   }
 }
 
+async function providerKeyForBrokerRequest(
+  deps: LlmBrokerAppDeps,
+  request: { url: URL; record: ModelBrokerTokenRecord; requestModel: string | null },
+  res: ExpressResponse,
+): Promise<ModelBrokerProviderKey | null> {
+  const { url, record, requestModel } = request;
+  const resolution = await resolveProviderKeyForRequest({
+    record,
+    providerKeys: deps.providerKeys,
+    providerKeyResolver: deps.providerKeyResolver,
+    vertex: deps.vertex,
+    onError: deps.onMeteringError ?? (() => undefined),
+  });
+  if ("key" in resolution) return resolution.key;
+  deps.log?.("llm-broker provider refused", {
+    gatewayId: record.gatewayId,
+    ownerUid: record.ownerUid,
+    provider: record.provider,
+    path: url.pathname,
+    requestModel,
+    status: 503,
+    reason: resolution.refusal,
+  });
+  res.status(503).json({ error: `${record.provider} upstream is not configured` });
+  return null;
+}
+
 interface BrokerRequestHandlerOptions {
   deps: LlmBrokerAppDeps;
   rails: ModelBrokerRailRegistry;
@@ -1511,12 +1543,12 @@ function createBrokerCatalogHandler(deps: LlmBrokerAppDeps, now: () => number) {
     try {
       const configured = record.provider === "vertex"
         ? providerConfigured(deps, "vertex")
-        : Boolean(await resolveProviderKeyForRequest({
+        : "key" in await resolveProviderKeyForRequest({
             record,
             providerKeys: deps.providerKeys,
             providerKeyResolver: deps.providerKeyResolver,
             onError: (error) => reportBrokerResolutionError(deps, error),
-          }));
+          });
       if (!await authorizeBrokerCredential(deps, req, res, now)) return;
       if (!configured) {
         res.status(503).json({ error: `${record.provider} upstream is not configured` });
@@ -1575,17 +1607,8 @@ async function resolveBrokerRequest(
     res.status(400).json({ error: "unsupported embedding model" });
     return null;
   }
-  const providerKey = await resolveProviderKeyForRequest({
-    record,
-    providerKeys: deps.providerKeys,
-    providerKeyResolver: deps.providerKeyResolver,
-    vertex: deps.vertex,
-    onError: deps.onMeteringError ?? (() => undefined),
-  });
-  if (!providerKey) {
-    res.status(503).json({ error: `${record.provider} upstream is not configured` });
-    return null;
-  }
+  const providerKey = await providerKeyForBrokerRequest(deps, { url, record, requestModel }, res);
+  if (!providerKey) return null;
   const grant = await resolveGrantForBrokerRequest(deps, record, now(), res);
   if (!grant) return null;
   let rail: ModelBrokerRail;
