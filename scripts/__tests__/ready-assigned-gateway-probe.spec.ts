@@ -48,9 +48,9 @@ exit 2
 `);
 
   const result = spawnSync("bash", ["-euo", "pipefail", "-c", [
-    `source ${JSON.stringify(helper)}`,
+    'source "$1"',
     "probe_ready_assigned_gateway_gitea_broker test-context test-namespace",
-  ].join("\n")], {
+  ].join("\n"), "--", helper], {
     cwd: repoRoot,
     encoding: "utf8",
     env: {

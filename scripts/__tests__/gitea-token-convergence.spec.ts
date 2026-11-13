@@ -64,11 +64,11 @@ exit 0
     "fail() { printf '%s\\n' \"$1\" >&2; [[ \"${FAKE_RECORDING_FAIL:-false}\" == \"true\" ]] && return 0; return 1; }",
     "info() { :; }",
     "ok() { :; }",
-    `source ${JSON.stringify(helper)}`,
+    'source "$1"',
     'K8S_CONTEXT="test-context"',
     'K8S_NAMESPACE="octogee-test-west"',
     functionCall,
-  ].join("\n")], {
+  ].join("\n"), "--", helper], {
     cwd: repoRoot,
     encoding: "utf8",
     env: {

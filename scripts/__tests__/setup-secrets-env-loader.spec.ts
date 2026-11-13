@@ -12,11 +12,11 @@ const envExamplePath = path.join(repoRoot, "../.env.example");
 
 function runLoader(envFile: string, env: Record<string, string> = {}): string {
   const script = [
-    `source ${JSON.stringify(helperPath)}`,
-    `load_env_file ${JSON.stringify(envFile)}`,
+    'source "$1"',
+    'load_env_file "$2"',
     `printf '%s\\n' "$RESEND_FROM_EMAIL" "$RESEND_FROM_NAME" "$UNQUOTED_VALUE"`,
   ].join("\n");
-  const res = spawnSync("bash", ["-euo", "pipefail", "-c", script], {
+  const res = spawnSync("bash", ["-euo", "pipefail", "-c", script, "--", helperPath, envFile], {
     cwd: repoRoot,
     env: { ...process.env, ...env },
     encoding: "utf-8",
@@ -27,8 +27,8 @@ function runLoader(envFile: string, env: Record<string, string> = {}): string {
   return res.stdout;
 }
 
-function runShell(script: string, env: Record<string, string> = {}): string {
-  const res = spawnSync("bash", ["-euo", "pipefail", "-c", script], {
+function runShell(script: string, env: Record<string, string> = {}, args: string[] = []): string {
+  const res = spawnSync("bash", ["-euo", "pipefail", "-c", script, "--", helperPath, ...args], {
     cwd: repoRoot,
     env: { ...process.env, ...env },
     encoding: "utf-8",
@@ -54,7 +54,7 @@ function secretManagerState(mode: "present" | "absent" | "error"): string {
   chmodSync(gcloud, 0o755);
 
   return runShell([
-    `source ${JSON.stringify(helperPath)}`,
+    'source "$1"',
     "secret_manager_secret_state GOOGLE_CLIENT_ID firebase-test",
   ].join("\n"), {
     FAKE_GCLOUD_MODE: mode,
@@ -62,8 +62,8 @@ function secretManagerState(mode: "present" | "absent" | "error"): string {
   });
 }
 
-function runShellStatus(script: string, env: Record<string, string> = {}): number | null {
-  return spawnSync("bash", ["-euo", "pipefail", "-c", script], {
+function runShellStatus(script: string, env: Record<string, string> = {}, args: string[] = []): number | null {
+  return spawnSync("bash", ["-euo", "pipefail", "-c", script, "--", helperPath, ...args], {
     cwd: repoRoot,
     env: { ...process.env, ...env },
     encoding: "utf-8",
@@ -72,17 +72,17 @@ function runShellStatus(script: string, env: Record<string, string> = {}): numbe
 
 function saveEnvValue(envFile: string, key: string, value: string): string {
   return runShell([
-    `source ${JSON.stringify(helperPath)}`,
-    `save_env_file_value ${JSON.stringify(envFile)} ${JSON.stringify(key)} ${JSON.stringify(value)}`,
-    `cat ${JSON.stringify(envFile)}`,
-  ].join("\n"));
+    'source "$1"',
+    'save_env_file_value "$2" "$3" "$4"',
+    'cat "$2"',
+  ].join("\n"), {}, [envFile, key, value]);
 }
 
 function readEnvValue(envFile: string, key: string): string {
   return runShell([
-    `source ${JSON.stringify(helperPath)}`,
-    `read_env_file_value ${JSON.stringify(envFile)} ${JSON.stringify(key)}`,
-  ].join("\n"));
+    'source "$1"',
+    'read_env_file_value "$2" "$3"',
+  ].join("\n"), {}, [envFile, key]);
 }
 
 function selectedSecretValue(
@@ -92,9 +92,9 @@ function selectedSecretValue(
   kubernetes: string,
 ): string {
   return runShell([
-    `source ${JSON.stringify(helperPath)}`,
-    `select_environment_secret_value ${JSON.stringify(env)} ${JSON.stringify(secretManager)} ${JSON.stringify(envFile)} ${JSON.stringify(kubernetes)}`,
-  ].join("\n"));
+    'source "$1"',
+    'select_environment_secret_value "$2" "$3" "$4" "$5"',
+  ].join("\n"), {}, [env, secretManager, envFile, kubernetes]);
 }
 
 describe("setup-secrets env loader", () => {
@@ -116,9 +116,9 @@ describe("setup-secrets env loader", () => {
     writeFileSync(envFile, "MM_TEAM_ID=first\nMM_TEAM_ID=second\n");
 
     expect(runShellStatus([
-      `source ${JSON.stringify(helperPath)}`,
-      `read_env_file_value ${JSON.stringify(envFile)} MM_TEAM_ID`,
-    ].join("\n"))).not.toBe(0);
+      'source "$1"',
+      'read_env_file_value "$2" MM_TEAM_ID',
+    ].join("\n"), {}, [envFile])).not.toBe(0);
   });
 
   it("removes surrounding .env quotes before values are materialized into Kubernetes secrets", () => {
@@ -177,9 +177,9 @@ describe("setup-secrets env loader", () => {
     writeFileSync(envFile, "UNCHANGED=keep\n");
 
     const status = runShellStatus([
-      `source ${JSON.stringify(helperPath)}`,
-      `save_env_file_value ${JSON.stringify(envFile)} GOOGLE_CLIENT_ID new-client-id`,
-    ].join("\n"), { PATH: `${binDir}:${process.env.PATH}` });
+      'source "$1"',
+      'save_env_file_value "$2" GOOGLE_CLIENT_ID new-client-id',
+    ].join("\n"), { PATH: `${binDir}:${process.env.PATH}` }, [envFile]);
 
     expect(status).not.toBe(0);
     expect(readFileSync(envFile, "utf-8")).toBe("UNCHANGED=keep\n");
