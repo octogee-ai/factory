@@ -1,9 +1,9 @@
 # MEMORY.md
 
-## Onboarding
-- [ ] Coach personality set
-- [ ] Dream defined
-- [ ] Workspace set up
+## Setup
+- [ ] Name and voice agreed in SOUL.md
+- [ ] USER.md filled in
+- [ ] First project chosen
 
 ## Notes
-*(Significant decisions, context, and things to remember — daily details go in memory/YYYY-MM-DD.md)*
+*(Decisions, context and things to remember. Daily details go in memory/YYYY-MM-DD.md.)*
