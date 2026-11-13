@@ -145,7 +145,7 @@ jobs:
   kind-agent-round-trip:
     name: Kind agent round trip (amd64)
     needs: publish
-    if: github.ref == 'refs/heads/main' && needs.publish.outputs.sha != '' ''
+    if: github.ref == 'refs/heads/main' && needs.publish.outputs.sha != ''
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     environment: agent-round-trip
