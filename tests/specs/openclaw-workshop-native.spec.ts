@@ -3,13 +3,13 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { reconcilePlatformInvariants } from "../../platform/core/dist/system-config-invariants.js";
+import { reconcilePlatformInvariants } from "../../core/dist/system-config-invariants.js";
 
 const binary = process.env.OCTOGEE_TEST_OPENCLAW_BIN;
 const runtimePlugins = process.env.OCTOGEE_TEST_OPENCLAW_NPM;
 const extensions = process.env.OCTOGEE_TEST_OPENCLAW_EXTENSIONS;
 const repo = path.resolve(import.meta.dirname, "../..");
-const sourceSha = JSON.parse(readFileSync(path.join(repo, "platform/infra/gateway/openclaw-tarball/current.json"), "utf8")).sourceSha as string;
+const sourceSha = JSON.parse(readFileSync(path.join(repo, "infra/gateway/openclaw-tarball/current.json"), "utf8")).sourceSha as string;
 
 describe.skipIf(!binary || !runtimePlugins || !extensions)("pinned Native Workshop config writes", () => {
   it.each(["shared", "builder"] as const)("validates %s config after each writer and retains Workshop policy through Doctor", (gatewayClass) => {
@@ -20,7 +20,7 @@ describe.skipIf(!binary || !runtimePlugins || !extensions)("pinned Native Worksh
     symlinkSync(runtimePlugins!, path.join(state, "npm"));
     const file = path.join(state, "openclaw.json");
     const template = gatewayClass === "shared" ? "openclaw.template.json" : "openclaw.isolated.template.json";
-    const config = JSON.parse(readFileSync(path.join(repo, "platform/infra/gateway", template), "utf8"));
+    const config = JSON.parse(readFileSync(path.join(repo, "infra/gateway", template), "utf8"));
     config.agents.defaults.workspace = path.join(home, "workspace");
     config.database.postgres.schemaPrefix = `workshop_${path.basename(home).slice(-6).toLowerCase()}`;
     writeFileSync(file, JSON.stringify(config));
@@ -54,7 +54,7 @@ describe.skipIf(!binary || !runtimePlugins || !extensions)("pinned Native Worksh
       expect(`${refused.stdout}\n${refused.stderr}`).toContain("must be migrated first");
       writeFileSync(file, JSON.stringify(config));
       validate();
-      const policy = spawnSync(process.execPath, [path.join(repo, "platform/infra/gateway/apply-gateway-class-policy.mjs")], { env, encoding: "utf8" });
+      const policy = spawnSync(process.execPath, [path.join(repo, "infra/gateway/apply-gateway-class-policy.mjs")], { env, encoding: "utf8" });
       expect(policy.status, policy.stderr).toBe(0);
       validate();
       const projected = JSON.parse(readFileSync(file, "utf8"));

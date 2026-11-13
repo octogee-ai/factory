@@ -42,6 +42,7 @@ const MEASURED_CHECK_SECONDS: Partial<Record<JobKey, number>> = {
   [JOBS.scripts]: 220,
   [JOBS.octogeeApi]: 140,
   [JOBS.tests]: 140,
+  [JOBS.platformTests]: 120,
   [JOBS.core]: 140,
   [JOBS.gatewayEdge]: 135,
   [JOBS.desktopPackage]: 90,
@@ -116,7 +117,7 @@ export function vitestOptions(script: string, emulated: boolean, concurrentLanes
 }
 
 function installsFor(directory: string): string[] {
-  if (directory === "tests") return ["platform/scripts", "platform/shared", "platform/glm-controller", directory];
+  if (directory === "tests" || directory === "platform/tests") return ["platform/scripts", "platform/shared", "platform/glm-controller", directory];
   if (directory === "platform/octogee-api") return ["platform/gateway-edge", "platform/shared", directory];
   if (["app", "artifact-worker", "functions", "platform/gateway-edge"].includes(directory)) return ["platform/shared", directory];
   if (directory === "platform/glm-controller") return ["platform/scripts", directory];

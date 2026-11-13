@@ -2,11 +2,11 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseIsolatedToolGroups } from "../../platform/scripts/lib/isolated-tool-groups";
+import { parseIsolatedToolGroups } from "../../scripts/lib/isolated-tool-groups";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
-const manifestPath = path.join(repoRoot, "platform/infra/gateway/isolated-toolchain/groups.json");
-const projectorPath = path.join(repoRoot, "platform/infra/gateway/isolated-toolchain/base-inputs.mjs");
+const manifestPath = path.join(repoRoot, "infra/gateway/isolated-toolchain/groups.json");
+const projectorPath = path.join(repoRoot, "infra/gateway/isolated-toolchain/base-inputs.mjs");
 const manifest = () => JSON.parse(readFileSync(manifestPath, "utf8"));
 const project = (input: unknown) => execFileSync(process.execPath, [projectorPath], {
   input: JSON.stringify(input),

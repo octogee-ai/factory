@@ -102,6 +102,8 @@ const textExtensions = new Set([
   ".yml",
 ]);
 
+const INVENTORY_FIXTURES = "tests/fixtures/dependency-inventory";
+
 function posixPath(value: string): string {
   return value.split(path.sep).join("/");
 }
@@ -114,7 +116,7 @@ function walkFiles(root: string): string[] {
       if (entry.isDirectory()) {
         if (skippedDirectories.has(entry.name)) continue;
         const relative = posixPath(path.relative(root, absolute));
-        if (relative === "tests/fixtures/dependency-inventory") continue;
+        if (relative === INVENTORY_FIXTURES || relative.endsWith(`/${INVENTORY_FIXTURES}`)) continue;
         walk(absolute);
       } else if (entry.isFile()) {
         files.push(absolute);

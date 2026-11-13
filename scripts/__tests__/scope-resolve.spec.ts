@@ -37,6 +37,22 @@ describe("resolveScope — ownership", () => {
   it("owns product files outside any platform package", () => {
     expectJobs(["product/README.md"], ["scripts", "tests"]);
   });
+  it("runs the platform suite for platform/tests changes", () => {
+    expectJobs(["platform/tests/specs/helm-octogee-api.spec.ts", "platform/tests/vitest.config.ts"], ["platform-tests"]);
+  });
+  it("runs every suite that reads the shared conformance fixtures", () => {
+    expectJobs(
+      ["platform/tests/fixtures/agent-conversation/agent-activity-envelopes.json"],
+      ["app", "gateway-edge", "platform-tests", "tests"],
+    );
+  });
+  it("runs the recipe specs and the dependency policy for the platform deploy recipes", () => {
+    expectJobs(["platform/deploy/manifests/gateway.yaml"], ["scripts", "tests"]);
+    expectJobs(["platform/install.sh"], ["scripts"]);
+  });
+  it("runs the dependency policy for the platform workflows", () => {
+    expectJobs(["platform/.github/workflows/checks.yml"], ["platform-tests", "tests"]);
+  });
   it("empty diff runs nothing (not everything)", () => {
     const r = resolveScope([]);
     expect(r.jobs).toEqual([]);
@@ -49,7 +65,7 @@ describe("resolveScope — ownership", () => {
       // + the platform/octogee-api/ edge pulls tests (byok-provider-registry-parity,
       // helm-octogee-api-ingress, model-credential-snapshot-projection specs
       // all read platform/octogee-api/src source directly).
-      ["octogee-api", "octogee-api-emulator", "tests"],
+      ["octogee-api", "octogee-api-emulator", "platform-tests", "tests"],
     );
   });
 
@@ -66,6 +82,7 @@ describe("resolveScope — ownership", () => {
         "gateway-edge-emulator",
         "octogee-api",
         "octogee-api-emulator",
+        "platform-tests",
         "tests",
       ],
     );
@@ -77,7 +94,7 @@ describe("resolveScope — ownership", () => {
       // + the platform/scripts/ edge pulls tests (internal-routing-guard.spec.ts walks
       // the entire platform/scripts/ tree; several specs also read specific platform/scripts/
       // root files directly).
-      ["scripts", "customer-lifecycle-emulator", "tests"],
+      ["scripts", "customer-lifecycle-emulator", "platform-tests", "tests"],
     );
   });
 
@@ -96,7 +113,7 @@ describe("resolveScope — ownership", () => {
     // regression (#1521) that spec exists to catch.
     expectJobs(
       ["platform/glm-controller/src/index.ts"],
-      ["glm-controller", "glm-controller-emulator", "tests"],
+      ["glm-controller", "glm-controller-emulator", "platform-tests", "tests"],
     );
   });
 
@@ -203,6 +220,7 @@ describe("resolveScope — cross-package hazard edges", () => {
         "gateway-edge",
         "gateway-edge-emulator",
         "glm-controller",
+        "platform-tests",
         "product-core",
         "tests",
       ],
@@ -223,6 +241,7 @@ describe("resolveScope — cross-package hazard edges", () => {
         "octogee-api-emulator",
         "functions",
         "functions-emulator",
+        "platform-tests",
         "tests",
       ],
     );
@@ -235,14 +254,14 @@ describe("resolveScope — cross-package hazard edges", () => {
     // platform/scripts/lib source directly, so a platform/scripts/lib edit must also run tests.
     expectJobs(
       ["platform/scripts/lib/admin-fleet-router.ts"],
-      ["scripts", "customer-lifecycle-emulator", "tests"],
+      ["scripts", "customer-lifecycle-emulator", "platform-tests", "tests"],
     );
   });
 
   it("third-party license plugin changes run both production web surfaces", () => {
     expectJobs(
       ["platform/scripts/lib/vite-third-party-licenses.mjs"],
-      ["app", "site", "scripts", "customer-lifecycle-emulator", "tests"],
+      ["app", "site", "scripts", "customer-lifecycle-emulator", "platform-tests", "tests"],
     );
   });
 
@@ -262,7 +281,7 @@ describe("resolveScope — cross-package hazard edges", () => {
     // of platform/scripts/, not just lib/.
     expectJobs(
       ["platform/scripts/ops/audit-coverage.ts"],
-      ["scripts", "customer-lifecycle-emulator", "tests"],
+      ["scripts", "customer-lifecycle-emulator", "platform-tests", "tests"],
     );
   });
 
@@ -276,6 +295,7 @@ describe("resolveScope — cross-package hazard edges", () => {
         "gateway-edge-emulator",
         "glm-controller-emulator",
         "octogee-api-emulator",
+        "platform-tests",
         "tests",
       ],
     );
@@ -292,6 +312,7 @@ describe("resolveScope — cross-package hazard edges", () => {
         "gateway-edge-emulator",
         "octogee-api",
         "octogee-api-emulator",
+        "platform-tests",
         "tests",
       ],
     );
@@ -322,7 +343,7 @@ describe("resolveScope — consumer scoping", () => {
   });
 
   it("a gateway image change runs the packages that read gateway files, not app, site or emulators", () => {
-    expectJobs(["platform/infra/gateway/Dockerfile"], ["acceptance", "core", "gateway-edge", "octogee-api", "scripts", "tests"]);
+    expectJobs(["platform/infra/gateway/Dockerfile"], ["acceptance", "core", "gateway-edge", "octogee-api", "platform-tests", "scripts", "tests"]);
   });
 
   it("the artifact worker runs its own suite and the specs that read it", () => {
@@ -331,6 +352,7 @@ describe("resolveScope — consumer scoping", () => {
 
   it("files no test reads run no test jobs", () => {
     expectJobs(["platform/infra/mattermost/Dockerfile", ".github/ISSUE_TEMPLATE/bug.yml", ".gitleaksignore"], []);
+    expectJobs(["platform/.github/ISSUE_TEMPLATE/bug.md", "platform/.gitattributes", "platform/.gitignore", "platform/.gitleaks.toml", "platform/LICENSE"], []);
   });
 });
 
@@ -371,6 +393,10 @@ describe("resolveScope — inert paths run nothing", () => {
     expectJobs(["README.md"], []);
   });
 
+  it("the platform root's docs and markdown run nothing", () => {
+    expectJobs(["platform/docs/handbook/11-testing.md", "platform/README.md"], []);
+  });
+
   it("inert + a real package change runs only the package (+ its cross-package edges)", () => {
     expectJobs(["docs/x.md", "site/src/x.ts"], ["site", "tests"]);
   });
@@ -381,7 +407,7 @@ describe("toGhaOutputs", () => {
     const out = toGhaOutputs(resolveScope(["platform/octogee-api/src/x.ts"]));
     expect(out.any).toBe(true);
     // + tests, via the platform/octogee-api/ edge.
-    expect(out.test_matrix.map((p) => p.name).sort()).toEqual(["octogee-api", "tests"]);
+    expect(out.test_matrix.map((p) => p.name).sort()).toEqual(["octogee-api", "platform-tests", "tests"]);
     expect(out.run_app).toBe(false);
     expect(out.run_functions_emulator).toBe(false);
     // octogee-api-emulator is a standalone job (JDK), not a unit-matrix entry —

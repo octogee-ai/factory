@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync } from "fs";
 import path from "path";
 
-const platformRoot = path.resolve(__dirname, "../../platform");
+const platformRoot = path.resolve(__dirname, "../..");
 const entrypoint = readFileSync(
   path.join(platformRoot, "infra/gateway/entrypoint.sh"),
   "utf8",

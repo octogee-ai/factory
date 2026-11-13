@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-import { USER_CODE_DENIED_TOOLS } from "../../platform/core/src/system-config-invariants";
+import { USER_CODE_DENIED_TOOLS } from "../../core/src/system-config-invariants";
 
 const repoRoot = path.resolve(__dirname, "../..");
 
@@ -16,7 +16,7 @@ type Template = {
 } & Record<string, unknown>;
 
 function read(name: string): Template {
-  return JSON.parse(readFileSync(path.join(repoRoot, "platform/infra/gateway", name), "utf8")) as Template;
+  return JSON.parse(readFileSync(path.join(repoRoot, "infra/gateway", name), "utf8")) as Template;
 }
 
 const USER_OWNED_TOP_LEVEL = new Set([
@@ -29,7 +29,7 @@ const USER_OWNED_TOP_LEVEL = new Set([
   "gateway",
 ]);
 
-describe("platform/infra/gateway/openclaw.isolated.template.json — the user seed boots on the slim runtime", () => {
+describe("infra/gateway/openclaw.isolated.template.json — the user seed boots on the slim runtime", () => {
   const shared = read("openclaw.template.json");
   const user = read("openclaw.isolated.template.json");
 

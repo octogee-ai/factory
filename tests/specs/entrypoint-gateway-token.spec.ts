@@ -5,9 +5,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 // Pins the contract of the OPENCLAW_GATEWAY_TOKEN require block in
-// platform/infra/gateway/entrypoint.sh.
+// infra/gateway/entrypoint.sh.
 //
-// Pre-PR #TBD: entrypoint sourced platform/infra/gateway/resolve-gateway-token.sh,
+// Pre-PR #TBD: entrypoint sourced infra/gateway/resolve-gateway-token.sh,
 // which had three fallback layers (env > openclaw.json > fresh random per
 // boot). The fresh-random branch caused token drift across reboots on
 // isolated gateways where openclaw.json was edited out-of-band, and the
@@ -24,7 +24,7 @@ import * as path from "node:path";
 // failure surfaces in `kubectl describe pod` rather than silently
 // producing a gateway nobody can authenticate against.
 
-const ENTRYPOINT = path.resolve(__dirname, "../../platform/infra/gateway/entrypoint.sh");
+const ENTRYPOINT = path.resolve(__dirname, "../../infra/gateway/entrypoint.sh");
 
 function runGuardBlock(envToken: string | undefined): {
   status: number | null;
@@ -48,7 +48,7 @@ function runGuardBlock(envToken: string | undefined): {
   return { status: r.status, stderr: r.stderr };
 }
 
-describe("platform/infra/gateway/entrypoint.sh — OPENCLAW_GATEWAY_TOKEN platform-owned (fail-loud)", () => {
+describe("infra/gateway/entrypoint.sh — OPENCLAW_GATEWAY_TOKEN platform-owned (fail-loud)", () => {
   it("accepts a non-empty OPENCLAW_GATEWAY_TOKEN from env (the chart's secretKeyRef path)", () => {
     const result = runGuardBlock("a".repeat(48));
     expect(result.status).toBe(0);
@@ -116,7 +116,7 @@ function runPublishBlock(opts: {
   }
 }
 
-describe("platform/infra/gateway/entrypoint.sh — gateway token Secret Manager publish boundary", () => {
+describe("infra/gateway/entrypoint.sh — gateway token Secret Manager publish boundary", () => {
   it("skips Secret Manager publish by default on standard gateways", () => {
     const result = runPublishBlock({ profile: "standard", nodeExit: 2 });
     expect(result.status).toBe(0);
@@ -195,7 +195,7 @@ function runRunnerBlock(
   }
 }
 
-describe("platform/infra/gateway/entrypoint.sh — in-pod runner boundary", () => {
+describe("infra/gateway/entrypoint.sh — in-pod runner boundary", () => {
   it("starts only the db-less controller and neutral side runners on isolated gateways", () => {
     const result = runRunnerBlock("builder");
     expect(result.status).toBe(0);
@@ -264,7 +264,7 @@ describe("platform/infra/gateway/entrypoint.sh — in-pod runner boundary", () =
 
 });
 
-describe("platform/infra/gateway/entrypoint.sh — shell var export contract (subprocess visibility)", () => {
+describe("infra/gateway/entrypoint.sh — shell var export contract (subprocess visibility)", () => {
   // OpenClaw and the config helpers run as subprocesses and read OPENCLAW_DIR
   // from their environment. If the
   // top-level OPENCLAW_DIR assignment isn't `export`ed, every subprocess
@@ -288,7 +288,7 @@ describe("platform/infra/gateway/entrypoint.sh — shell var export contract (su
   });
 });
 
-describe("platform/infra/gateway/entrypoint.sh — gateway token stays outside durable config", () => {
+describe("infra/gateway/entrypoint.sh — gateway token stays outside durable config", () => {
   it("does not patch OPENCLAW_GATEWAY_TOKEN into openclaw.json", () => {
     const entrypoint = fs.readFileSync(ENTRYPOINT, "utf8");
     expect(entrypoint).not.toMatch(/setdefault\("gateway"[\s\S]*\["token"\]/);
@@ -296,7 +296,7 @@ describe("platform/infra/gateway/entrypoint.sh — gateway token stays outside d
   });
 });
 
-describe("platform/infra/gateway/entrypoint.sh — no per-user sourced secret seam", () => {
+describe("infra/gateway/entrypoint.sh — no per-user sourced secret seam", () => {
   it("does not source the retired operator.env file", () => {
     const entrypoint = fs.readFileSync(ENTRYPOINT, "utf8");
     expect(entrypoint).not.toMatch(/operator\.env/);

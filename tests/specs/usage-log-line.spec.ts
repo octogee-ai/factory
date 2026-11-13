@@ -1,5 +1,5 @@
 import { test, expect, describe } from "vitest";
-import { formatUsageLogLine } from "../../platform/scripts/lib/usage-log-line";
+import { formatUsageLogLine } from "../../scripts/lib/usage-log-line";
 
 describe("formatUsageLogLine", () => {
   const base = {

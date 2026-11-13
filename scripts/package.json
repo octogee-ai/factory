@@ -24,7 +24,7 @@
     "verify:mattermost-capability": "tsx ops/verify-mattermost-capability-artifact.ts",
     "scope": "tsx ops/scope.ts",
     "audit-duplication": "node ops/audit-duplication.mjs",
-    "publish-factory-repo": "tsx ops/publish-factory-repo.ts"
+    "gate": "tsx ci/factory-deny-list-scan.ts .."
   },
   "allowScripts": {
     "esbuild": true,

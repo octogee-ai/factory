@@ -7,7 +7,7 @@ import {
   startConnectChallengeTracker,
   sendWsRequest,
   type WireSocket,
-} from "../../platform/shared/types/openclaw-wire-core";
+} from "../../shared/types/openclaw-wire-core";
 
 class FakeSocket extends EventEmitter implements WireSocket {
   sent: string[] = [];

@@ -3,6 +3,7 @@ export const JOBS = {
   octogeeApi: "octogee-api",
   glmController: "glm-controller",
   tests: "tests",
+  platformTests: "platform-tests",
   acceptance: "acceptance",
   artifactWorker: "artifact-worker",
   scripts: "scripts",
@@ -94,6 +95,7 @@ export const UNIT_PACKAGES: readonly UnitPackage[] = [
     typecheck: 'echo "ops-agent-runtime-tools — no tsconfig; vitest is the gate"',
   },
   { name: JOBS.tests, dir: "tests", typecheck: TYPECHECK },
+  { name: JOBS.platformTests, dir: "platform/tests", typecheck: TYPECHECK },
   { name: JOBS.acceptance, dir: "acceptance", typecheck: TYPECHECK },
   { name: JOBS.artifactWorker, dir: "artifact-worker", typecheck: TYPECHECK },
   { name: JOBS.scripts, dir: "platform/scripts", typecheck: "npx tsc --noEmit", matchGatewayImageNpm: true },
@@ -194,6 +196,7 @@ export const OWNERSHIP: readonly Ownership[] = [
   },
   { dir: "ops-agent/", jobs: [JOBS.opsAgent, JOBS.tests] },
   { dir: "tests/", jobs: [JOBS.tests] },
+  { dir: "platform/tests/", jobs: [JOBS.platformTests] },
   { dir: "acceptance/", jobs: [JOBS.acceptance] },
   { dir: "desktop/", jobs: [JOBS.desktop, JOBS.desktopPackage] },
   { dir: "platform/scripts/", jobs: [JOBS.scripts, JOBS.userLifecycleEmulator] },
@@ -246,14 +249,14 @@ export const OWNERSHIP: readonly Ownership[] = [
   { dir: "product/core/", jobs: [JOBS.productCore] },
   { dir: "product/shared/", jobs: [JOBS.productShared] },
   { dir: "artifact-worker/", jobs: [JOBS.artifactWorker] },
-  { dir: "platform/infra/gateway/", jobs: [JOBS.scripts, JOBS.tests, JOBS.octogeeApi, JOBS.gatewayEdge, JOBS.core, JOBS.acceptance] },
+  { dir: "platform/infra/gateway/", jobs: [JOBS.scripts, JOBS.tests, JOBS.platformTests, JOBS.octogeeApi, JOBS.gatewayEdge, JOBS.core, JOBS.acceptance] },
   { dir: "platform/infra/desktop/", jobs: [JOBS.scripts, JOBS.tests, JOBS.glmController] },
   { dir: "platform/infra/vm-bridge/", jobs: [JOBS.tests] },
   { dir: "platform/infra/mattermost/", jobs: [] },
   { dir: "platform/infra/cloud-sql/", jobs: [] },
-  { dir: "platform/helm/", jobs: [JOBS.scripts, JOBS.tests] },
-  { dir: "platform/terraform/", jobs: [JOBS.scripts, JOBS.tests] },
-  { dir: "platform/templates/", jobs: [JOBS.scripts, JOBS.tests, JOBS.gatewayEdge, JOBS.glmController, JOBS.octogeeApi] },
+  { dir: "platform/helm/", jobs: [JOBS.scripts, JOBS.tests, JOBS.platformTests] },
+  { dir: "platform/terraform/", jobs: [JOBS.scripts, JOBS.tests, JOBS.platformTests] },
+  { dir: "platform/templates/", jobs: [JOBS.scripts, JOBS.tests, JOBS.platformTests, JOBS.gatewayEdge, JOBS.glmController, JOBS.octogeeApi] },
   { dir: "design-system/", jobs: [JOBS.app, JOBS.site, JOBS.scripts, JOBS.tests] },
   { dir: ".github/", jobs: [JOBS.scripts, JOBS.tests] },
   { dir: ".github/ISSUE_TEMPLATE/", jobs: [] },
@@ -265,6 +268,14 @@ export const OWNERSHIP: readonly Ownership[] = [
   { dir: ".terraform-version", jobs: [JOBS.tests] },
   { dir: ".dockerignore", jobs: [JOBS.scripts, JOBS.tests] },
   { dir: "platform/.dockerignore", jobs: [JOBS.scripts, JOBS.tests] },
+  { dir: "platform/deploy/", jobs: [JOBS.scripts, JOBS.tests] },
+  { dir: "platform/install.sh", jobs: [JOBS.scripts] },
+  { dir: "platform/.github/", jobs: [JOBS.tests, JOBS.platformTests] },
+  { dir: "platform/.github/ISSUE_TEMPLATE/", jobs: [] },
+  { dir: "platform/.gitattributes", jobs: [] },
+  { dir: "platform/.gitignore", jobs: [] },
+  { dir: "platform/.gitleaks.toml", jobs: [] },
+  { dir: "platform/LICENSE", jobs: [] },
   { dir: "product/", jobs: [JOBS.scripts, JOBS.tests] },
   { dir: ".env.example", jobs: [JOBS.scripts] },
   { dir: ".gitattributes", jobs: [JOBS.scripts] },
@@ -307,6 +318,7 @@ export const EDGES: readonly ScopeEdge[] = [
       JOBS.gatewayEdgeEmulator,
       JOBS.glmController,
       JOBS.tests,
+      JOBS.platformTests,
     ],
     reason:
       "@octogee/core is consumed by scripts + octogee-api (via scripts/lib re-export shims) + gateway-edge + glm-controller (direct package import); tests/specs' readSrc() helpers (model-credential-materializer, byot-sync-apply, gateway-rpc-local-exceptions specs) also fall back to reading core/src directly for logic that moved out of scripts/lib",
@@ -326,13 +338,14 @@ export const EDGES: readonly ScopeEdge[] = [
       JOBS.functions,
       JOBS.functionsEmulator,
       JOBS.tests,
+      JOBS.platformTests,
     ],
     reason:
       "@octogee/test-helpers (firestore-emulator) is consumed by the gateway-edge + octogee-api + functions emulator specs; test-helpers/package.json's firebase-admin range is also swept by tests/specs/firebase-admin-major-alignment.spec.ts",
   },
   {
     when: "platform/gateway-edge/",
-    jobs: [JOBS.octogeeApi, JOBS.octogeeApiEmulator, JOBS.tests],
+    jobs: [JOBS.octogeeApi, JOBS.octogeeApiEmulator, JOBS.tests, JOBS.platformTests],
     reason:
       "octogee-api compiles gateway-edge route Routers (cross-package imports) and its emulator specs mount them via createApp(); tests/specs also imports gateway-edge/src/model-credentials/provider-key-format.js directly (byok-provider-registry-parity.spec.ts) and sweeps gateway-edge/package.json's firebase-admin range (firebase-admin-major-alignment.spec.ts)",
   },
@@ -372,7 +385,7 @@ export const EDGES: readonly ScopeEdge[] = [
   },
   {
     when: "platform/scripts/",
-    jobs: [JOBS.tests],
+    jobs: [JOBS.tests, JOBS.platformTests],
     reason:
       "tests/specs reads scripts/ source directly beyond lib/: scripts/lib/* (byot-sync, auth-profile-sqlite, model-credential-materializer, usage-log-line specs), scripts/secret-resolver.mjs + scripts/entrypoints/fleet-controller.ts (byok-provider-registry-parity, gateway-entrypoint, gateway-rpc-local-exceptions specs), scripts/setup-secrets.sh + scripts/verify-secrets.sh (byot-sync-secret-management, openrouter-platform-secret-management specs), and internal-routing-guard.spec.ts walks the entire scripts/ tree",
   },
@@ -390,15 +403,27 @@ export const EDGES: readonly ScopeEdge[] = [
   },
   {
     when: "platform/octogee-api/",
-    jobs: [JOBS.tests],
+    jobs: [JOBS.tests, JOBS.platformTests],
     reason:
       "tests/specs reads octogee-api/src source directly: routes/byok-broker.ts (byok-provider-registry-parity.spec.ts), src/index.ts (helm-octogee-api-ingress.spec.ts), routes/fleet-broker.ts (model-credential-snapshot-projection.spec.ts); octogee-api/package.json's firebase-admin range is also swept (firebase-admin-major-alignment.spec.ts)",
   },
   {
     when: "platform/glm-controller/",
-    jobs: [JOBS.tests],
+    jobs: [JOBS.tests, JOBS.platformTests],
     reason:
       "tests/specs/firebase-admin-major-alignment.spec.ts sweeps glm-controller/package.json's firebase-admin range — the exact regression (#1521) that spec exists to catch",
+  },
+  {
+    when: "platform/tests/fixtures/",
+    jobs: [JOBS.tests],
+    reason:
+      "tests/specs reads the platform conformance fixtures: openclaw-template-tools.spec.ts imports openclaw-coding-tools.json and third-party-notices.spec.ts pins the attributed agent-conversation references",
+  },
+  {
+    when: "platform/tests/fixtures/agent-conversation/",
+    jobs: [JOBS.app, JOBS.gatewayEdge],
+    reason:
+      "app's chat reference specs import the agent-conversation references and gateway-edge's activity-intake.spec.ts parses agent-activity-envelopes.json",
   },
   {
     when: "acceptance/",
@@ -435,6 +460,7 @@ export const EDGES: readonly ScopeEdge[] = [
       JOBS.userLifecycleEmulator,
       JOBS.site,
       JOBS.tests,
+      JOBS.platformTests,
     ],
     reason:
       "@octogee/shared is imported by acceptance, app, artifact-worker, core, product-core, product-shared, gateway-edge, glm-controller, octogee-api, ops-agent, scripts, site and tests, and installed for functions; desktop, obsidian-connect and the gateway extension packages do not consume it",
@@ -498,7 +524,7 @@ export const GLOBAL_EXACT: ReadonlySet<string> = new Set([
 export const GLOBAL_PREFIX: readonly string[] = [".github/actions/setup-ci/", "platform/scripts/lib/scope/", "platform/scripts/lib/ci-", "platform/scripts/ops/ci-", "platform/scripts/ci/", "ci/"];
 
 export function isInert(path: string): boolean {
-  if (path.startsWith("docs/")) return true;
-  if (/^[^/]+\.md$/.test(path)) return true;
+  if (path.startsWith("docs/") || path.startsWith("platform/docs/")) return true;
+  if (/^(?:platform\/)?[^/]+\.md$/.test(path)) return true;
   return false;
 }

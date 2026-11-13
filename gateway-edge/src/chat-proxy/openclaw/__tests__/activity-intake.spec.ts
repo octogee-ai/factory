@@ -131,7 +131,7 @@ function answerCommittedEnvelope(): AgentActivityEnvelopeV1 {
 describe("normalized Activity intake", () => {
   it("parses every exact W1 envelope fixture without widening its v1 union", () => {
     const fixture = JSON.parse(readFileSync(
-      path.resolve(__dirname, "../../../../../../tests/fixtures/agent-conversation/agent-activity-envelopes.json"),
+      path.resolve(__dirname, "../../../../../tests/fixtures/agent-conversation/agent-activity-envelopes.json"),
       "utf8",
     )) as { envelopes: unknown[] };
     expect(fixture.envelopes.map((value) => parseActivityEnvelope(value).type)).toHaveLength(15);

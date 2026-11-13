@@ -15,4 +15,4 @@ The command, Node version, operating system, and the redacted error.
 
 ## Which file
 
-The path, and the monorepo commit from `.factory-source.json`.
+The path, and the commit you ran.

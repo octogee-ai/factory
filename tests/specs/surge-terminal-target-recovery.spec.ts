@@ -2,9 +2,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createSurgeOpenClawProcessGate } from "../../platform/scripts/lib/surge-openclaw-process-gate.js";
-import { reconcileSurgeUserHandoff, type SurgePod } from "../../platform/glm-controller/src/surge-user-handoff.js";
-import { oldPod, targetPod, assignment, createSurgeHandoffHarness } from "../../platform/glm-controller/src/__tests__/fixtures/surge-user-handoff.js";
+import { createSurgeOpenClawProcessGate } from "../../scripts/lib/surge-openclaw-process-gate.js";
+import { reconcileSurgeUserHandoff, type SurgePod } from "../../glm-controller/src/surge-user-handoff.js";
+import { oldPod, targetPod, assignment, createSurgeHandoffHarness } from "../../glm-controller/src/__tests__/fixtures/surge-user-handoff.js";
 
 const harness = (input: Parameters<typeof createSurgeHandoffHarness>[1] = {}) => createSurgeHandoffHarness(vi.fn, input);
 
@@ -116,10 +116,10 @@ describe("real target reservation inspection during forward retry", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "surge-inspect-target-"));
     vi.stubEnv("POD_UID", targetPod.uid);
     try {
-      const { createHoldSurgeOpenClawHandler } = await import("../../platform/scripts/lib/surge-openclaw-process-http.js");
-      const { signFleetRequest, gatewayScopedJobId } = await import("../../platform/scripts/lib/fleet-signature.js");
-      const { SIGNATURE_HEADER } = await import("../../platform/shared/types/fleet-controller.js");
-      const { FLEET_KEY_PAIR } = await import("../../platform/scripts/__tests__/fixtures/fleet-keys.js");
+      const { createHoldSurgeOpenClawHandler } = await import("../../scripts/lib/surge-openclaw-process-http.js");
+      const { signFleetRequest, gatewayScopedJobId } = await import("../../scripts/lib/fleet-signature.js");
+      const { SIGNATURE_HEADER } = await import("../../shared/types/fleet-controller.js");
+      const { FLEET_KEY_PAIR } = await import("../../scripts/__tests__/fixtures/fleet-keys.js");
       let gate = createSurgeOpenClawProcessGate(root);
       const request = { podUid: targetPod.uid, migrationId: "surge-default-target-uid", slug: "alice", targetPodUid: targetPod.uid };
       await gate.ensure({ podUid: targetPod.uid, readinessReleased: false });

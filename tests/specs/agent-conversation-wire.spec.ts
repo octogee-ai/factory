@@ -10,7 +10,7 @@ import {
   type AgentActivityEnvelopeV1,
   type AgentRunRef,
   type ActivityCreateRef,
-} from "../../platform/shared/types/index.js";
+} from "../../shared/types/index.js";
 
 const FIXTURES = path.resolve(__dirname, "../fixtures/agent-conversation");
 
@@ -51,7 +51,7 @@ describe("agent conversation v3 type contract", () => {
 
   it("publishes the contract from both shared package entrypoints", () => {
     const packageJson = JSON.parse(
-      readFileSync(path.resolve(__dirname, "../../platform/shared/package.json"), "utf8"),
+      readFileSync(path.resolve(__dirname, "../../shared/package.json"), "utf8"),
     ) as {
       exports: Record<string, { types: string; default: string }>;
       typesVersions: Record<string, Record<string, string[]>>;
@@ -68,13 +68,13 @@ describe("agent conversation v3 type contract", () => {
 
   it("keeps the shared contract browser-neutral", () => {
     const source = readFileSync(
-      path.resolve(__dirname, "../../platform/shared/types/agent-conversation.ts"),
+      path.resolve(__dirname, "../../shared/types/agent-conversation.ts"),
       "utf8",
     );
     expect(source).not.toContain("node:crypto");
     expect(source).not.toContain("createHash");
     expect(source).not.toContain("agentActivityEventKey");
-    expect(readFileSync(path.resolve(__dirname, "../../platform/shared/types/index.ts"), "utf8")).not.toContain(
+    expect(readFileSync(path.resolve(__dirname, "../../shared/types/index.ts"), "utf8")).not.toContain(
       "agentActivityEventKey",
     );
   });

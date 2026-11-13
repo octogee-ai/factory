@@ -7,8 +7,8 @@ import { describe, expect, it } from "vitest";
 import openclawCodingTools from "../fixtures/openclaw-coding-tools.json";
 
 const repoRoot = path.resolve(__dirname, "../..");
-const script = path.join(repoRoot, "platform/infra/gateway/quarantine-user-cron-jobs.mjs");
-const template = JSON.parse(readFileSync(path.join(repoRoot, "platform/infra/gateway/openclaw.template.json"), "utf8"));
+const script = path.join(repoRoot, "infra/gateway/quarantine-user-cron-jobs.mjs");
+const template = JSON.parse(readFileSync(path.join(repoRoot, "infra/gateway/openclaw.template.json"), "utf8"));
 const defaultAgentTools = [...new Set([...openclawCodingTools, ...template.tools.alsoAllow])]
   .filter((tool) => !template.tools.deny.includes(tool));
 const storeKey = "/home/node/.openclaw/cron/jobs.json";
@@ -321,7 +321,7 @@ describe("user cron routing quarantine", () => {
     mkdirSync(gateway, { recursive: true });
     writeFileSync(path.join(standalone, "package.json"), JSON.stringify({ type: "module" }));
     for (const name of ["quarantine-user-cron-jobs.mjs", "workflow-tools.mjs"]) {
-      copyFileSync(path.join(repoRoot, "platform", "infra", "gateway", name), path.join(gateway, name));
+      copyFileSync(path.join(repoRoot, "infra", "gateway", name), path.join(gateway, name));
     }
     const { root } = fixture();
     const result = run(root, "shared", path.join(gateway, "quarantine-user-cron-jobs.mjs"));

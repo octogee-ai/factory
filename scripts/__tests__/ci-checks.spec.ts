@@ -70,6 +70,15 @@ describe("portable Linux PR checks", () => {
     expect(checkPlan(["docs/INDEX.md"], "tests")).toEqual([]);
   });
 
+  it("runs the platform suite with the platform packages its specs read", () => {
+    expect(checkPlan(["platform/tests/specs/helm-octogee-api.spec.ts"], "tests")).toEqual([expect.objectContaining({
+      name: "platform-tests",
+      directory: "platform/tests",
+      installs: ["platform/scripts", "platform/shared", "platform/glm-controller", "platform/tests"],
+      commands: ["npm run typecheck", "npm test"],
+    })]);
+  });
+
   it("runs the acceptance specs when the deployment-target registry changes, because acceptance imports it directly", () => {
     expect(checkPlan(["platform/core/src/deployment-targets.json"], "tests").map(job => job.name)).toContain("acceptance");
   });
@@ -176,7 +185,7 @@ describe("portable Linux PR checks", () => {
   it("spreads a partial plan's unit checks across separate lanes", () => {
     const jobs = checkPlan(["platform/glm-controller/src/index.ts"], "tests");
     const occupied = unitLanes.filter(lane => selectCheckLane(jobs, lane).length > 0);
-    expect(occupied).toHaveLength(2);
+    expect(occupied).toHaveLength(3);
   });
 
   it("adds a product check in the overlay that packs the overlay libraries before its commands", () => {

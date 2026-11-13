@@ -44,7 +44,7 @@ case "$check" in
     osv-scanner scan source "${args[@]}"
     ;;
   trivy)
-    args=(config . --skip-dirs '**/node_modules' --skip-dirs '**/dist' --skip-dirs '.claude/worktrees' --skip-dirs '**/.astro' --skip-dirs 'tests/fixtures')
+    args=(config . --skip-dirs '**/node_modules' --skip-dirs '**/dist' --skip-dirs '.claude/worktrees' --skip-dirs '**/.astro' --skip-dirs '**/tests/fixtures')
     trivy "${args[@]}" --severity CRITICAL,HIGH,MEDIUM --exit-code 0
     trivy "${args[@]}" --severity CRITICAL --exit-code 1
     ;;
