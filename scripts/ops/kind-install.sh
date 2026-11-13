@@ -12,7 +12,7 @@ SHA=""
 MANIFEST=""
 CONTEXT_DIR="$ROOT"
 OPENCLAW_DIR=""
-IMAGES="glm-controller,octogee-api,gateway-edge,octogee-gateway,mattermost"
+IMAGES=""
 
 log() { printf '\n== %s\n' "$*"; }
 die() { printf 'kind-install: %s\n' "$*" >&2; exit 1; }
@@ -59,6 +59,11 @@ case "$(uname -m)" in
   arm64|aarch64) PLATFORM=linux/arm64 ;;
   *) PLATFORM=linux/amd64 ;;
 esac
+ISOLATED_SKIPPED=false
+if [[ -z "$IMAGES" ]]; then
+  IMAGES="glm-controller,octogee-api,gateway-edge,octogee-gateway,mattermost"
+  if [[ "$PLATFORM" == linux/amd64 ]]; then IMAGES+=",octogee-gateway-builder"; else ISOLATED_SKIPPED=true; fi
+fi
 
 k() { kubectl --kubeconfig="$KUBECONFIG_FILE" --context="$KUBE_CONTEXT" -n "$NAMESPACE" "$@"; }
 h() { helm --kubeconfig="$KUBECONFIG_FILE" --kube-context="$KUBE_CONTEXT" -n "$NAMESPACE" "$@"; }
@@ -441,6 +446,9 @@ up() {
   log "Cluster $KUBE_CONTEXT (kubeconfig $KUBECONFIG_FILE)"
   ensure_registry
   ensure_cluster
+  if ($PULL || $BUILD) && $ISOLATED_SKIPPED; then
+    printf 'Skipping octogee-gateway-builder: the isolated gateway image is published only for linux/amd64, so isolated gateways will not run on this %s host\n' "$PLATFORM"
+  fi
   if $PULL; then
     log "Copying the $PLATFORM images published at $SHORT"
     pull_images

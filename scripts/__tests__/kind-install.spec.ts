@@ -9,6 +9,7 @@ import { createStubHost, REPO_ROOT, type StubHost } from "./deploy/stub-host";
 const SCRIPT = join(REPO_ROOT, "scripts/ops/kind-install.sh");
 const REGISTRY = "ghcr.io/octogee-ai/octogee-cloud";
 const IMAGES = ["glm-controller", "octogee-api", "gateway-edge", "octogee-gateway", "mattermost"];
+const AMD64_IMAGES = [...IMAGES, "octogee-gateway-builder"];
 const PUBLISHED = "b".repeat(40);
 const CHECKOUT = "c".repeat(40);
 const AMD64 = `sha256:${"1".repeat(64)}`;
@@ -90,6 +91,7 @@ describe("kind-install.sh", () => {
     const result = run(["up", "--pull", `--sha=${PUBLISHED}`]);
     expect(result.stderr).not.toContain("kind-install:");
     expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Skipping octogee-gateway-builder: the isolated gateway image is published only for linux/amd64, so isolated gateways will not run on this linux/arm64 host");
     expect(inspected()).toEqual(IMAGES.map(name => `docker KUBECONFIG=unset buildx imagetools inspect ${REGISTRY}/${name}:${PUBLISHED} --raw`));
     expect(copies()).toEqual(IMAGES.map(name =>
       `docker KUBECONFIG=unset buildx imagetools create --prefer-index=false --tag=localhost:5001/octogee/${name}:bbbbbbb ${REGISTRY}/${name}@${ARM64}`));
@@ -114,24 +116,26 @@ describe("kind-install.sh", () => {
   };
 
   it("installs the exact host digests from Build main without resolving image tags", () => {
-    const result = run(["up", "--pull", `--manifest=${manifest()}`], "x86_64");
+    const result = run(["up", "--pull", `--manifest=${manifest(CHECKOUT, AMD64_IMAGES)}`], "x86_64");
     expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toContain("Skipping");
     expect(inspected()).toEqual([]);
-    expect(copies()).toEqual(IMAGES.map((name, index) =>
+    expect(copies()).toEqual(AMD64_IMAGES.map((name, index) =>
       `docker KUBECONFIG=unset buildx imagetools create --prefer-index=false --tag=localhost:5001/octogee/${name}:ccccccc ${REGISTRY}/${name}@sha256:${String(index + 3).repeat(64)}`));
     expect(json("digests.json").images["glm-controller"]).toBe(`sha256:${"3".repeat(64)}`);
-    expect(json("images.yaml")["glm-controller"].image.digest).toBe(`sha256:${"3".repeat(64)}`);
+    const values = json("images.yaml");
+    expect(values["glm-controller"].image.digest).toBe(`sha256:${"3".repeat(64)}`);
+    expect(values["glm-controller"].platformRelease.builderImageTag).toBe(`ccccccc@sha256:${"8".repeat(64)}`);
+    expect(values.global).toBeUndefined();
   });
 
-  it("copies the isolated gateway and VM bridge images only when asked, and points the release and the VM bridge at them", () => {
-    const extra = [...IMAGES, "octogee-gateway-builder", "vm-bridge"];
+  it("copies the VM bridge image only when asked, and points the VM bridge at it", () => {
+    const extra = [...IMAGES, "vm-bridge"];
     const result = run(["up", "--pull", `--manifest=${manifest(CHECKOUT, extra)}`, `--images=${extra.join(",")}`], "x86_64");
     expect(result.status, result.stderr).toBe(0);
     expect(copies()).toEqual(extra.map((name, index) =>
       `docker KUBECONFIG=unset buildx imagetools create --prefer-index=false --tag=localhost:5001/octogee/${name}:ccccccc ${REGISTRY}/${name}@sha256:${String(index + 3).repeat(64)}`));
-    const values = json("images.yaml");
-    expect(values["glm-controller"].platformRelease.builderImageTag).toBe(`ccccccc@sha256:${"8".repeat(64)}`);
-    expect(values.global.computer.bridge.image).toEqual({ repository: "localhost:5001/octogee/vm-bridge", tag: "ccccccc", digest: `sha256:${"9".repeat(64)}` });
+    expect(json("images.yaml").global.computer.bridge.image).toEqual({ repository: "localhost:5001/octogee/vm-bridge", tag: "ccccccc", digest: `sha256:${"8".repeat(64)}` });
   });
 
   it("refuses the isolated gateway image on an arm64 host before copying any image", () => {
