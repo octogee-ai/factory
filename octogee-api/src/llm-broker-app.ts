@@ -1326,24 +1326,37 @@ async function fetchAndLogUpstream(args: {
 }): Promise<globalThis.Response> {
   const startedAt = args.now();
   args.log?.("llm-broker upstream request", args.fields);
+  let upstream: globalThis.Response;
   try {
-    const upstream = await fetchUpstreamHeaders(args);
-    args.log?.("llm-broker upstream headers", {
-      ...args.fields,
-      upstreamStatus: upstream.status,
-      durationMs: args.now() - startedAt,
-    });
-    return upstream;
+    upstream = await fetchUpstreamHeaders(args);
   } catch (err) {
-    if (err instanceof UpstreamHeaderTimeoutError) {
-      args.log?.("llm-broker upstream timeout", {
-        ...args.fields,
-        timeoutMs: args.timeoutMs,
-        durationMs: args.now() - startedAt,
-      });
-    }
+    args.log?.("llm-broker upstream failed", {
+      ...args.fields,
+      durationMs: args.now() - startedAt,
+      ...thrownUpstreamFailureFields(err, args.timeoutMs),
+    });
     throw err;
   }
+  args.log?.(upstream.ok ? "llm-broker upstream headers" : "llm-broker upstream failed", {
+    ...args.fields,
+    upstreamStatus: upstream.status,
+    durationMs: args.now() - startedAt,
+  });
+  return upstream;
+}
+
+function thrownUpstreamFailureFields(err: unknown, timeoutMs: number): Record<string, unknown> {
+  if (err instanceof UpstreamHeaderTimeoutError) return { errorName: err.name, timeoutMs };
+  const errorCode = stringErrorCode(err) ?? stringErrorCode(err instanceof Error ? err.cause : undefined);
+  return {
+    errorName: err instanceof Error ? err.name : typeof err,
+    ...(errorCode ? { errorCode } : {}),
+  };
+}
+
+function stringErrorCode(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || !("code" in value)) return undefined;
+  return typeof value.code === "string" ? value.code : undefined;
 }
 
 async function fetchUpstreamHeaders(args: {
