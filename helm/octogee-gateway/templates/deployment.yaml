@@ -9,8 +9,26 @@
 {{- $computerDesktop := include "octogee-gateway.computerDesktop" . -}}
 {{- $x11Desktop := and $isolatedClass (eq $computerDesktop "x11") -}}
 {{- $vmRuntime := eq (.Values.runtimeKind | default "cluster") "gce-vm" -}}
-{{- if and $isolatedClass (not $vmRuntime) -}}
-{{- fail (printf "octogee-gateway: a %s Builder renders only as a GCE VM bundle (runtimeKind=gce-vm); Builder gateways never run as Kubernetes Deployments" $computerDesktop) -}}
+{{- $vmIsolated := and $isolatedClass $vmRuntime -}}
+{{- $isolatedPod := and $isolatedClass (not $vmRuntime) -}}
+{{- $isolatedPodNodeSelector := dict -}}
+{{- if $isolatedPod -}}
+{{- if ne $computerDesktop "none" -}}
+{{- fail (printf "octogee-gateway: isolated pod gateway has no desktop; computerDesktop=%s renders only as a GCE VM bundle (runtimeKind=gce-vm)" $computerDesktop) -}}
+{{- end -}}
+{{- $podRollStrategy := .Values.rollStrategy | default "recreate" -}}
+{{- if ne $podRollStrategy "recreate" -}}
+{{- fail (printf "octogee-gateway: isolated pod gateway %s mounts one home claim; rollStrategy must be recreate, not %s" .Values.gatewayId $podRollStrategy) -}}
+{{- end -}}
+{{- $operatorArch := index (.Values.nodeSelector | default dict) "kubernetes.io/arch" | default "amd64" -}}
+{{- if ne $operatorArch "amd64" -}}
+{{- fail (printf "octogee-gateway: isolated gateway image is linux/amd64 only; nodeSelector names kubernetes.io/arch=%s" $operatorArch) -}}
+{{- end -}}
+{{- if $computeClass -}}
+{{- $isolatedPodNodeSelector = dict "cloud.google.com/compute-class" $computeClass "kubernetes.io/arch" "amd64" -}}
+{{- else -}}
+{{- $isolatedPodNodeSelector = merge (dict "kubernetes.io/arch" "amd64") (deepCopy (.Values.nodeSelector | default dict)) -}}
+{{- end -}}
 {{- end -}}
 {{- $gatewayImageLabel := include "octogee-gateway.imageLabel" . -}}
 {{- $gatewayImageTag := .Values.image.tag | default .Values.imageTag -}}
@@ -69,7 +87,10 @@ spec:
         gateway-image: {{ $gatewayImageLabel | quote }}
     spec:
       terminationGracePeriodSeconds: {{ .Values.preStopFlush.terminationGracePeriodSeconds | default 30 }}
-      {{- if and (ne $gatewayClass "shared") $computeClass }}
+      {{- if $isolatedPod }}
+      nodeSelector:
+        {{- toYaml $isolatedPodNodeSelector | nindent 8 }}
+      {{- else if and (ne $gatewayClass "shared") $computeClass }}
       nodeSelector:
         cloud.google.com/compute-class: {{ $computeClass | quote }}
       {{- else if .Values.nodeSelector }}
@@ -148,13 +169,13 @@ spec:
                 set -eu
                 cp -rn /etc/skel/. /home/node/
                 mkdir -p /home/node/.npm-cache
-                {{- if $isolatedClass }}
+                {{- if $vmIsolated }}
                 /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/prepare-project-storage.ts
                 {{- end }}
                 install -m 0500 /octogee/scripts/secret-resolver.mjs /octogee-secret-resolver/secret-resolver.mjs
               '
           env:
-            {{- if $isolatedClass }}
+            {{- if $vmIsolated }}
             - name: GATEWAY_ID
               value: {{ .Values.gatewayId | quote }}
             {{- end }}
@@ -189,7 +210,7 @@ spec:
             - name: builder-cache
               mountPath: /work/cache
             {{- end }}
-            {{- if $isolatedClass }}
+            {{- if $vmIsolated }}
             - name: project-materializations
               mountPath: /work/materialized
             {{- end }}
@@ -256,6 +277,8 @@ spec:
             {{- if $isolatedClass }}
             - name: OCTOGEE_BUILDER_TOOLCHAIN_ROOT
               value: "/work/cache/toolchains"
+            {{- end }}
+            {{- if $vmIsolated }}
             - name: OCTOGEE_PROJECTS_MOUNT
               value: "/work/materialized"
             {{- end }}
@@ -295,6 +318,10 @@ spec:
             {{- end }}
             - name: GATEWAY_PROFILE
               value: {{ $imageProfile | quote }}
+            {{- if $isolatedPod }}
+            - name: GATEWAY_RUNTIME_KIND
+              value: cluster
+            {{- end }}
             {{- if $x11Desktop }}
             - name: GATEWAY_RUNTIME_KIND
               value: {{ ternary "gce-vm" "cluster" $vmRuntime }}
@@ -430,7 +457,7 @@ spec:
             - name: builder-cache
               mountPath: /work/cache
             {{- end }}
-            {{- if $isolatedClass }}
+            {{- if $vmIsolated }}
             - name: project-materializations
               mountPath: /work/materialized
               subPath: projects
@@ -505,7 +532,7 @@ spec:
             timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
             successThreshold: {{ .Values.probes.readiness.successThreshold | default 1 }}
           resources:
-            {{- if $isolatedClass }}
+            {{- if $vmIsolated }}
             {{- toYaml (mergeOverwrite (deepCopy $preset.resources) (dict "requests" (dict "ephemeral-storage" "9Gi") "limits" (dict "ephemeral-storage" "9Gi"))) | nindent 12 }}
             {{- else }}
             {{- toYaml $preset.resources | nindent 12 }}
@@ -533,7 +560,7 @@ spec:
               value: "{{ .Values.gatewayEdge.port }}"
             - name: PUBLIC_APP_ORIGINS
               value: {{ join "," (required "gatewayEdge.publicAppOrigins is required" .Values.gatewayEdge.publicAppOrigins) | quote }}
-            {{- if $isolatedClass }}
+            {{- if $vmIsolated }}
             - name: OCTOGEE_PROJECTS_MOUNT
               value: "/work/materialized"
             {{- end }}
@@ -571,6 +598,10 @@ spec:
               value: {{ $revision | quote }}
             - name: GATEWAY_PROFILE
               value: {{ $imageProfile | quote }}
+            {{- if $isolatedPod }}
+            - name: GATEWAY_RUNTIME_KIND
+              value: cluster
+            {{- end }}
             {{- if $x11Desktop }}
             - name: GATEWAY_RUNTIME_KIND
               value: {{ ternary "gce-vm" "cluster" $vmRuntime }}
@@ -675,7 +706,7 @@ spec:
             - name: builder-cache
               mountPath: /work/cache
             {{- end }}
-            {{- if $isolatedClass }}
+            {{- if $vmIsolated }}
             - name: project-materializations
               mountPath: /work/materialized
               subPath: projects
@@ -727,12 +758,18 @@ spec:
         - name: builder-cache
           emptyDir:
             sizeLimit: 2Gi
+        {{- end }}
+        {{- if $vmIsolated }}
         - name: project-materializations
           emptyDir:
             sizeLimit: 2Gi
         - name: data
           emptyDir:
             sizeLimit: 4Gi
+        {{- else if $isolatedPod }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: octogee-gateway-{{ .Values.gatewayId }}-data
         {{- else }}
         - name: data
           emptyDir: {}
