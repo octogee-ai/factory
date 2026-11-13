@@ -1,3 +1,4 @@
+import { authenticatedRequestLimit } from "../middleware/authenticated-request-limit.js";
 import { Router, type Request, type Response } from "express";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import { AUTOMATION_OPENCLAW_CONNECT_TIMEOUT_MS, AUTOMATION_OPENCLAW_RPC_TIMEOUT_MS } from "@octogee/shared/types/automations";
@@ -67,7 +68,7 @@ function sendNativeError(res: Response, error: NativeAutomationError): void {
 }
 export function createAutomationsRouter(deps: AutomationsRouterDeps): Router {
   const router = Router({ mergeParams: true });
-  router.post("/rpc", async (req, res, next) => {
+  router.post("/rpc", authenticatedRequestLimit(120), async (req, res, next) => {
     try {
       const resolved = await authorize(req, res, deps);
       if (!resolved) return;

@@ -62,6 +62,14 @@ describe("native Automations locality broker", () => {
     expect(authorizeOwner).toHaveBeenCalledWith({ gatewayId: "gw-alice", uid: "builder-uid", authorization: "Bearer caller-token" });
     expect(invoke).not.toHaveBeenCalled();
   });
+  it("bounds repeated broker requests per authenticated owner", async () => {
+    const { app, authorizeOwner } = appForTest();
+    for (let attempt = 0; attempt < 120; attempt++) await rpc(app, "automations.context").expect(200);
+    const limited = await rpc(app, "automations.context").expect(429);
+    expect(limited.body).toEqual({ error: "Too many requests, please try again later." });
+    expect(authorizeOwner).toHaveBeenCalledTimes(120);
+  });
+
   it.each(["forbidden", "not_found", "coach_channel_not_ready", "unauthenticated"] as const)("does not call native RPC after authorization %s", async (kind) => {
     const { app, invoke } = appForTest({ authorizeOwner: async () => ({ kind }) });
     expect((await rpc(app, "cron.list")).status).toBe({ forbidden: 403, not_found: 404, coach_channel_not_ready: 409, unauthenticated: 401 }[kind]);
