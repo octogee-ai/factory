@@ -1,3 +1,4 @@
+import { authenticationFailureLimit } from "../middleware/authenticated-request-limit.js";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { rateLimit } from "express-rate-limit";
 import { requireAuthenticatedUid } from "../middleware/auth.js";
@@ -50,7 +51,7 @@ export function createWorkspaceRolesRouter(deps = { resolveIdentity: resolveWork
     keyGenerator: req => req.uid!,
     message: { error: "Too many workspace role requests, please try again later." },
   });
-  router.use(requireAuthenticatedUid);
+  router.use(authenticationFailureLimit, requireAuthenticatedUid);
   router.use(async (req, res, next) => {
     if (!isIsolatedGatewayClassValue(process.env.GATEWAY_CLASS) || process.env.OPENCLAW_CONTROL_IDENTITY !== "per-user") {
       res.status(404).json({ error: "builder_workspace_required" }); return;

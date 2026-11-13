@@ -1,3 +1,4 @@
+import { authenticatedRequestLimit } from "../middleware/authenticated-request-limit.js";
 /* eslint-disable sonarjs/no-duplicate-string */
 import { parseGoogleGrantApproval } from "../lib/google-grant-approval.js";
 import { approvalDecision, honorNativeDenial, recordApprovalDecision } from "../lib/productivity-approval-decision.js";
@@ -711,7 +712,7 @@ export function createProductivityApprovalRoutes(options: Partial<Deps> = {}): R
 }
 
 const router = Router();
-router.use(requireAuth);
+router.use(requireAuth, authenticatedRequestLimit(120));
 router.use(createProductivityApprovalRoutes());
 
 export default router;

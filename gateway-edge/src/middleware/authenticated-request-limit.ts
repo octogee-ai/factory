@@ -11,6 +11,17 @@ export function authenticatedRequestLimit(limit: number) {
   });
 }
 
+export function clientRequestLimit(limit: number, socketOnly = false) {
+  return rateLimit({
+    windowMs: 60_000,
+    limit,
+    standardHeaders: "draft-7",
+    legacyHeaders: false,
+    keyGenerator: req => ipKeyGenerator((socketOnly ? req.socket.remoteAddress : req.ip) ?? "unknown"),
+    message: { error: "Too many requests, please try again later." },
+  });
+}
+
 export const authenticationFailureLimit = rateLimit({
   windowMs: 60_000,
   limit: 1200,

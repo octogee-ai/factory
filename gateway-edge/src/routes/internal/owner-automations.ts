@@ -1,3 +1,4 @@
+import { clientRequestLimit } from "../../middleware/authenticated-request-limit.js";
 import { Router, type Request, type Response } from "express";
 
 import { logger } from "../../middleware/logging.js";
@@ -45,7 +46,7 @@ function sendError(res: Response, error: unknown): boolean {
 
 export function createOwnerAutomationRouter(deps: OwnerAutomationRouterDeps): Router {
   const router = Router();
-  router.post("/", async (req, res) => {
+  router.post("/", clientRequestLimit(1200, true), async (req, res) => {
     try {
       const { agentId, request } = parseBody(req);
       const outcome = await deps.authorize(req, agentId);

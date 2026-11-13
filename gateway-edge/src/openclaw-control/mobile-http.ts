@@ -1,3 +1,4 @@
+import { authenticationFailureLimit, authenticatedRequestLimit } from "../middleware/authenticated-request-limit.js";
 import http from 'node:http';
 import { Router, type Request, type Response } from 'express';
 import type { NativeMobileBinding } from '@octogee/shared/types/native-mobile';
@@ -24,7 +25,7 @@ export function createMobileHttpRouter(
 ): Router {
   const gatewayId = authority.gatewayId;
   const router = Router({ mergeParams: true });
-  router.post('/:id/setup', authority.options.auth ?? requireAuth, async (req, res, next) => {
+  router.post('/:id/setup', authenticationFailureLimit, authority.options.auth ?? requireAuth, authenticatedRequestLimit(30), async (req, res, next) => {
     try {
       const route = mobileRoute(req.originalUrl.replace(/\/setup$/u, ''), gatewayId);
       if (!authority.enabled() || !route) {

@@ -1,3 +1,4 @@
+import { clientRequestLimit } from "../../middleware/authenticated-request-limit.js";
 import { Router, Request, Response, NextFunction } from "express";
 import { applyConfigPatch } from "@octogee/core/apply-config-patch";
 import {
@@ -58,6 +59,7 @@ function isValidPayload(value: unknown): value is Parameters<typeof syncModelCre
 
 router.post(
   ["/model-credential-sync", "/byot-sync"],
+  clientRequestLimit(1200, true),
   requireByotSyncInternalAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {

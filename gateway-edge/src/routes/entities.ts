@@ -1,3 +1,4 @@
+import { authenticatedRequestLimit } from "../middleware/authenticated-request-limit.js";
 import { Router, Request, Response } from "express";
 import { requireAuth } from "../middleware/auth.js";
 import { db } from "../lib/db.js";
@@ -13,7 +14,7 @@ import { platformStateStore } from "../lib/platform-state.js";
 import { removeWorkspaceChannelMember } from "../lib/workspace-channel-membership.js";
 
 const router = Router();
-router.use(requireAuth);
+router.use(requireAuth, authenticatedRequestLimit(120));
 
 type EntityKind = "workspace" | "project";
 
