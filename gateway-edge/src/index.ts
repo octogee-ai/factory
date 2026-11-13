@@ -315,18 +315,18 @@ function mountSidecarLocalitySurface(app: Express, options: {
   byosubLocality.use(byosubHealthRoutes);
   mountApi(app, "/byosub", byosubLocality);
   const automationsLocality = Router({ mergeParams: true });
-  automationsLocality.use(requireAuthenticatedUid);
+  automationsLocality.use(authenticationFailureLimit, requireAuthenticatedUid);
   automationsLocality.use(automationsRoutes);
   mountApi(app, "/automations", automationsLocality);
   const agentImportsLocality = Router({ mergeParams: true });
-  agentImportsLocality.use(requireAuthenticatedUid);
+  agentImportsLocality.use(authenticationFailureLimit, requireAuthenticatedUid);
   agentImportsLocality.use(createAgentImportsRouter({
     createRuntime: createAgentImportRuntime,
     localGatewayId: () => process.env.GATEWAY_ID ?? null,
   }));
   mountApi(app, "/agent-imports", agentImportsLocality);
   const agentExportsLocality = Router({ mergeParams: true });
-  agentExportsLocality.use(requireAuthenticatedUid);
+  agentExportsLocality.use(authenticationFailureLimit, requireAuthenticatedUid);
   agentExportsLocality.use(createAgentExportsRouter());
   mountApi(app, "/agent-exports", agentExportsLocality);
   mountApi(app, "/workspace-roles", createWorkspaceRolesRouter());
@@ -342,7 +342,7 @@ function mountSidecarLocalitySurface(app: Express, options: {
   mountApi(app, "/computer", vmPasskeyRoutes.router);
   const vmCdpUrl = process.env.GATEWAY_COMPUTER_CDP_URL?.trim() || "http://127.0.0.1:9222";
   const vmSessionsLocality = Router({ mergeParams: true });
-  vmSessionsLocality.use(requireAuthenticatedUid);
+  vmSessionsLocality.use("/sessions/import", authenticationFailureLimit, requireAuthenticatedUid);
   vmSessionsLocality.use(createVmSessionsRouter({
     localGatewayId: () => process.env.GATEWAY_ID ?? null,
     available: isGatewayVm(),
