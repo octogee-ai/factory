@@ -226,7 +226,7 @@ async function assertNoRetainedJournal(destination: string): Promise<void> {
 
 async function readSnapshotManifest(filename: string): Promise<Artifact> {
   const limit = 1024;
-  const file = await fs.open(filename, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  const file = await fs.open(filename, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600);
   try {
     const stat = await file.stat();
     if (!stat.isFile()) throw new Error("optional database manifest is not a regular file");
