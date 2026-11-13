@@ -66,6 +66,7 @@ export declare const PROJECT_AGENT_DENIED_TOOLS: readonly [...("automations" | "
 export declare function platformInvariantTable(context: SystemConfigInvariantContext): readonly PlatformInvariant[];
 export declare function reconcileSharedGatewayAgentEntry(agentId: string, entry: Record<string, unknown>): Record<string, unknown>;
 export declare function reconcileIsolatedGatewayAgentEntry(agentId: string, entry: Record<string, unknown>): Record<string, unknown>;
+export declare function projectIsolatedMattermostRootEndpoint(mattermost: JsonObject): boolean;
 export declare class PlatformInvariantPolicyError extends Error {
     readonly paths: string[];
     readonly code = "platform-invariant-violation";

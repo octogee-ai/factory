@@ -6,5 +6,5 @@
   "openclawSha256": "9c0b7a570a0665dd8523c36ddd70a196705a6cdbee00baf824b37e165413185a",
   "mattermostSha256": "665973752c7b1f71d70cd9bf97e72f3f3184b2f8d864a724c499fc2cd1b25486",
   "releaseRepository": "ceckert/openclaw",
-  "releaseTag": "octogee-d7d29b20"
+  "releaseTag": "gateway-d7d29b20"
 }

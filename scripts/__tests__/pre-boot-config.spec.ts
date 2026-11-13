@@ -526,15 +526,25 @@ describe("applyPreBootPatches — MM env sync", () => {
       baseUrl: "${MM_URL}",
       accounts: { coach: {}, custom: { baseUrl: "${OWNER_MM_URL}" } },
     } } };
-    applyMattermostPreBootPatches(config, { GATEWAY_CLASS: "builder", MM_URL: "https://chat.example.com" }, vi.fn());
+    applyMattermostPreBootPatches(config, { GATEWAY_CLASS: "isolated", MM_URL: "https://chat.example.com" }, vi.fn());
     expect(config.channels.mattermost).not.toHaveProperty("baseUrl");
     expect(config.channels.mattermost.accounts.coach.baseUrl).toBe("${MM_URL}");
     expect(config.channels.mattermost.accounts.custom.baseUrl).toBe("${OWNER_MM_URL}");
   });
 
-  it("does not turn a bare platform endpoint into a Builder default account", () => {
+  it("keeps a root bot token on the platform endpoint", () => {
+    const config: any = { channels: { mattermost: {
+      baseUrl: "https://attacker.example", botToken: "${OWNER_MM_TOKEN}",
+    } } };
+    applyMattermostPreBootPatches(config, { GATEWAY_CLASS: "isolated" }, vi.fn());
+    expect(config.channels.mattermost).toMatchObject({
+      baseUrl: "${MM_URL}", botToken: "${OWNER_MM_TOKEN}",
+    });
+  });
+
+  it("does not turn a bare platform endpoint into an isolated gateway default account", () => {
     const config: any = { channels: { mattermost: { baseUrl: "${MM_URL}", accounts: {} } } };
-    applyPreBootPatches(config, { GATEWAY_CLASS: "builder", MM_URL: "https://chat.example.com" });
+    applyPreBootPatches(config, { GATEWAY_CLASS: "isolated", MM_URL: "https://chat.example.com" });
     expect(config.channels.mattermost).not.toHaveProperty("baseUrl");
     expect(config.channels.mattermost.accounts).toEqual({});
   });

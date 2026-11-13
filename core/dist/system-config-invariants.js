@@ -1,6 +1,6 @@
 import { parseAgentId } from "@octogee/shared/types/identity";
 import { isDeepStrictEqual } from "node:util";
-import { platformAgentMattermostAccountsProjected, projectPlatformAgentMattermostAccounts, } from "@octogee/shared/types/openclaw-mattermost-accounts";
+import { PLATFORM_MATTERMOST_BASE_URL, platformAgentMattermostAccountsProjected, projectPlatformAgentMattermostAccounts, } from "@octogee/shared/types/openclaw-mattermost-accounts";
 import { openClawOperatorRoles, OPENCLAW_TRUSTED_PROXIES, OPENCLAW_TRUSTED_PROXY_AUTH, openClawIdentityScopes, withOpenClawOperatorRoles, } from "@octogee/shared/types/openclaw-proxy-identity";
 const ABSENT = Symbol("absent");
 const REQUIRED_ARRAY = "required-array";
@@ -639,7 +639,30 @@ function mattermostAccounts(config) {
     const value = readPath(config, "channels.mattermost.accounts");
     return value === ABSENT ? ABSENT : asObject(value);
 }
+function mattermostRootEndpointSatisfied(mattermost) {
+    if (!mattermost || !Object.hasOwn(mattermost, "baseUrl"))
+        return true;
+    return Object.hasOwn(mattermost, "botToken") && mattermost.baseUrl === PLATFORM_MATTERMOST_BASE_URL;
+}
+export function projectIsolatedMattermostRootEndpoint(mattermost) {
+    if (mattermostRootEndpointSatisfied(mattermost))
+        return false;
+    if (Object.hasOwn(mattermost, "botToken")) {
+        mattermost.baseUrl = PLATFORM_MATTERMOST_BASE_URL;
+        return true;
+    }
+    for (const value of Object.values(asObject(mattermost.accounts) ?? {})) {
+        const account = asObject(value);
+        if (account && !Object.hasOwn(account, "baseUrl"))
+            account.baseUrl = PLATFORM_MATTERMOST_BASE_URL;
+    }
+    delete mattermost.baseUrl;
+    return true;
+}
 function accountProjectionSatisfied(config, platformOwned) {
+    const mattermost = asObject(readPath(config, "channels.mattermost"));
+    if (!platformOwned && !mattermostRootEndpointSatisfied(mattermost))
+        return false;
     const accounts = mattermostAccounts(config);
     if (accounts === ABSENT)
         return true;
@@ -648,6 +671,9 @@ function accountProjectionSatisfied(config, platformOwned) {
     return platformAgentMattermostAccountsProjected(config, accounts, platformOwned);
 }
 function reconcileMattermostAccounts(config, platformOwned) {
+    const mattermost = asObject(readPath(config, "channels.mattermost"));
+    if (!platformOwned && mattermost)
+        projectIsolatedMattermostRootEndpoint(mattermost);
     const current = mattermostAccounts(config);
     if (current === ABSENT)
         return;

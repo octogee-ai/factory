@@ -568,13 +568,14 @@ Native Proactive check jobs with empty scratch are preserved as requested.
 
 ### Default config writers
 
-Fresh Shared and Builder templates record the native migration decisions for
+Fresh shared and isolated gateway templates record the native migration decisions for
 model policy, utility models, Skill Library and webhook listeners. The isolated
 Doctor comparison uses native update-repair mode, which preserves optional skill
 choices when a test environment lacks their prerequisites.
-The Builder pre-boot writer moves the platform Mattermost URL into configured
-accounts with no endpoint and preserves explicit owner endpoints. Empty Gateway
-configs keep their empty account map.
+The isolated gateway writers remove the channel-level Mattermost endpoint and
+fill missing account endpoints with the platform URL. Explicit account endpoints
+are preserved. A root bot token keeps the platform URL and empty account maps
+stay empty.
 
 ### Retained PostgreSQL transcript readers
 
@@ -670,11 +671,11 @@ Published with generation-zero preconditions and verified by exact-generation SH
 | `openclaw-mattermost-66597375.tgz` | `1794578813588338` | `665973752c7b1f71d70cd9bf97e72f3f3184b2f8d864a724c499fc2cd1b25486` |
 
 The GitHub release mirrors these exact objects under
-[`octogee-d7d29b20`](https://github.com/ceckert/openclaw/releases/tag/octogee-d7d29b20).
+[`gateway-d7d29b20`](https://github.com/ceckert/openclaw/releases/tag/gateway-d7d29b20).
 
 ### Upstream contributions
 
-The November 13 review found no open Octogee contribution fully superseded by
+The November 13 review found no open overlay contribution fully superseded by
 the merged steering, Mattermost preview, or Memory shadow cleanup changes.
 The Talk fixes (#189036 and #189418) still cover worker-backed consult control
 and owner steering. The agent-removal latency change (#191463) still covers

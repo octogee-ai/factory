@@ -21,6 +21,7 @@ import {
 import { applyOpenClawComputerBrowserConfig } from "../lib/openclaw-computer-browser.js";
 import { clusterIsolatedGateway, localStateStoreKind, localStateStorePath, openclawStateRoot, type LocalStateStoreKind } from "../lib/openclaw-state-store.js";
 import { applyConnectorApprovalDelivery } from "../lib/openclaw-connector-approvals.js";
+import { projectIsolatedMattermostRootEndpoint } from "@octogee/core/system-config-invariants";
 import { platformBrokerProviderDeclarations } from "../lib/system-config-invariants.js";
 import { openClawConfigPath } from "../lib/openclaw-config-path.js";
 import {
@@ -73,7 +74,6 @@ export function platformBrokerCatalogOpts(env: NodeJS.ProcessEnv): {
 type OpenClawConfig = Record<string, unknown>;
 
 const MANAGED_AGENT_ID_RE = /^octogee-[a-z0-9][a-z0-9-]{0,62}-coach$/;
-const MM_URL_PLACEHOLDER = "${MM_URL}";
 
 function objectProperty(
   parent: Record<string, unknown> | null,
@@ -270,24 +270,6 @@ function applyMattermostAccountPatches(
   return changed;
 }
 
-function projectMattermostPlatformEndpoint(
-  mattermost: Record<string, unknown>,
-  env: NodeJS.ProcessEnv,
-): boolean {
-  const baseUrl = mattermost.baseUrl;
-  const platformEndpoint = baseUrl === MM_URL_PLACEHOLDER || (env.MM_URL && baseUrl === env.MM_URL);
-  if (!isIsolatedGatewayClassValue(env.GATEWAY_CLASS) || !platformEndpoint ||
-      Object.hasOwn(mattermost, "botToken")) return false;
-
-  for (const account of Object.values(objectProperty(mattermost, "accounts") ?? {})) {
-    if (isPlainObject(account) && !Object.hasOwn(account, "baseUrl")) {
-      account.baseUrl = MM_URL_PLACEHOLDER;
-    }
-  }
-  delete mattermost.baseUrl;
-  return true;
-}
-
 export function applyMattermostPreBootPatches(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -307,9 +289,9 @@ export function applyMattermostPreBootPatches(
   changed = applyMattermostActionDefaults(mattermost, logFn) || changed;
   changed = applyMattermostAckReactionDefaults(config, logFn) || changed;
 
-  if (projectMattermostPlatformEndpoint(mattermost, env)) {
+  if (isIsolatedGatewayClassValue(env.GATEWAY_CLASS) && projectIsolatedMattermostRootEndpoint(mattermost)) {
     changed = true;
-    logFn("removed the root Mattermost endpoint after projecting it into configured accounts");
+    logFn("reconciled platform ownership of the root Mattermost endpoint");
   }
 
   changed = disableMattermostNativeCommands(mattermost, "channels.mattermost", logFn) || changed;
