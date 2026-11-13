@@ -66,7 +66,8 @@ describe("model credential route index", () => {
     const save = (uid: string) => client.post("/api/model-credentials")
       .set("authorization", `Bearer ${uid}`).send({ provider: "anthropic" });
     for (let attempt = 0; attempt < 30; attempt++) await save("owner-a").expect(201);
-    await save("owner-a").expect(429);
+    const rejected = await save("owner-a").expect(429);
+    expect(rejected.body).toEqual({ error: "Too many requests, please try again later." });
     await save("owner-b").expect(201);
     await client.delete("/api/model-credentials").set("authorization", "Bearer owner-a").send({ provider: "anthropic" }).expect(200);
   });
