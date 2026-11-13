@@ -50,7 +50,7 @@ function parseProfile(body) {
         return refusal(400, "sizing-profile-invalid", "the body must be {\"isolation\":\"shared\"} or an isolated profile with sizingTier, computer and fallbackStorageGb, " +
             "with sizes in positive whole numbers and no other fields");
     }
-    if (body.isolation === "isolated" && body.computer.runtime === "gce-vm" && !hasVmShape(body)) {
+    if (body.isolation === "isolated" && !hasVmShape(body)) {
         return refusal(400, "sizing-profile-no-vm", "an isolated sizing profile needs a VM machine type, provisioning model and boot disk");
     }
     return { profile: body };
