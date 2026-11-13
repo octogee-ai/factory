@@ -2,13 +2,20 @@ import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import { SecretNotFoundError } from "@octogee/core/secret-store";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
-import { noUserAccounts } from "@octogee/core/user-account";
+import { noUserAccounts, userAccountFromData, type UserAccountReader } from "@octogee/core/user-account";
 
 import { createModelBrokerTokenStore } from "../lib/model-broker-tokens.js";
 import { InMemoryModelBrokerUsageStore } from "../lib/model-broker-usage.js";
 import { createPlatformLlmBrokerApp, type PlatformLlmBrokerSources } from "../platform-llm-broker.js";
 
 const NOW = 1_800_000_000_000;
+const ENTITLEMENTS = Symbol.for("octogee.userEntitlements");
+
+const platformAccounts: UserAccountReader = {
+  get: async (uid) => userAccountFromData(uid, { username: "lin" }),
+  getMany: async (uids) => new Map(uids.map((uid) => [uid, userAccountFromData(uid, { username: "lin" })])),
+  list: async () => new Map(),
+};
 
 function gatewayRoot(gatewayId: string, gatewayClass: "shared" | "builder"): Record<string, unknown> {
   const isolated = gatewayClass === "builder";
@@ -43,6 +50,7 @@ async function broker(input: {
   gatewayId: "shared-1" | "lin";
   readSecret?: PlatformLlmBrokerSources["readSecret"];
   env?: PlatformLlmBrokerSources["env"];
+  accounts?: UserAccountReader;
 }) {
   const state = platform(input.gatewayId);
   const usageStore = new InMemoryModelBrokerUsageStore();
@@ -51,7 +59,7 @@ async function broker(input: {
   const app = createPlatformLlmBrokerApp({
     env: input.env ?? { ANTHROPIC_API_KEY: "operator-anthropic-key" },
     state,
-    accounts: noUserAccounts,
+    accounts: input.accounts ?? noUserAccounts,
     usageStore,
     readSecret: input.readSecret ?? (async (name) => { throw new SecretNotFoundError(name); }),
     logger: { info: () => undefined, error: (_message, fields) => errors.push(fields?.err) },
@@ -127,6 +135,21 @@ describe("the platform LLM broker", () => {
 
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(errors).toContain(failure);
+  });
+
+  it("installs the platform's user entitlements for the accounts it reads", async () => {
+    const host = globalThis as typeof globalThis & { [ENTITLEMENTS]?: unknown };
+    const installed = host[ENTITLEMENTS];
+    delete host[ENTITLEMENTS];
+    try {
+      const { send, usageStore } = await broker({ gatewayId: "shared-1", accounts: platformAccounts });
+
+      await send().expect(200);
+
+      expect(usageStore.events).toHaveLength(1);
+    } finally {
+      host[ENTITLEMENTS] = installed;
+    }
   });
 
   it("reports which provider keys the operator supplied", async () => {

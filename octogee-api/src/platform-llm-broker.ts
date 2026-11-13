@@ -2,6 +2,7 @@ import type express from "express";
 import type { PlatformStateStore } from "@octogee/core/platform-state";
 import { isSecretNotFound } from "@octogee/core/secret-store";
 import type { UserAccountReader } from "@octogee/core/user-account";
+import { installUserEntitlements, staticUserEntitlements } from "@octogee/shared/types/user-entitlements";
 
 import { createLlmBrokerApp } from "./llm-broker-app.js";
 import {
@@ -62,6 +63,7 @@ function secretStoreOwnerModelCredential(input: {
 
 export function createPlatformLlmBrokerApp(sources: PlatformLlmBrokerSources): express.Express {
   const { env, state, logger } = sources;
+  installUserEntitlements(staticUserEntitlements);
   const rails = operatorRailRegistry();
   const providerKeys = {
     anthropic: env.ANTHROPIC_API_KEY,
