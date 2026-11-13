@@ -65,7 +65,7 @@ export interface VmGatewayRuntimeDeps {
   log: (msg: string) => void;
 }
 
-async function findGatewayVmPolicy(
+export async function findGatewayVmPolicy(
   store: Pick<PlatformStateStore, "config">,
   tier: SizingTier,
 ): Promise<GatewayComputerProfile | null> {

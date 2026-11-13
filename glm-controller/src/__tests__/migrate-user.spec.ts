@@ -2910,6 +2910,22 @@ describe("migrate-customer — input validation", () => {
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/placement rejected for gw-green: revision-not-ready/u);
   });
+
+  it("names what blocks a rejected target", async () => {
+    const { deps, ctx } = mkDeps();
+    (deps.resolveTargetPlacement as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: false,
+      reason: "no-live-revision",
+      blocker: "home claim octogee-gateway-gw-green-data has been pending for 7 minutes",
+    });
+    const handler = createMigrateUserHandler(deps);
+
+    const result = await handler(mkOp({}), ctx);
+
+    expect(result.error).toBe(
+      "placement rejected for gw-green: no-live-revision (home claim octogee-gateway-gw-green-data has been pending for 7 minutes)",
+    );
+  });
 });
 
 describe("migrate-customer — legacy data-plane migration (shared class)", () => {

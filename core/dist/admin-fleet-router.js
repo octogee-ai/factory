@@ -810,8 +810,9 @@ function projectImageTag(data, glmDoc) {
         return data.version;
     return typeof glmDoc?.imageTag === "string" ? glmDoc.imageTag : null;
 }
-function syntheticGatewayDoc(id) {
-    return { id, data: () => ({ gatewayId: id }) };
+function syntheticGatewayDoc(id, glmDoc) {
+    const lastError = isPlainRecord(glmDoc?.lastError) ? glmDoc.lastError : undefined;
+    return { id, data: () => ({ gatewayId: id, ...(lastError ? { lastError } : {}) }) };
 }
 function effectiveHeartbeatDoc(gatewayId, glmDoc) {
     const hb = glmDoc?.heartbeat;
@@ -3295,7 +3296,7 @@ export function addAdminFleetRoutes(router, deps) {
                 const doc = effectiveHeartbeatDoc(gatewayId, glmDoc);
                 if (!doc && !shouldProjectDesiredOnlyGateway(glmDoc) && !retiredButListed)
                     return [];
-                return [{ doc: doc ?? syntheticGatewayDoc(gatewayId), glmDoc }];
+                return [{ doc: doc ?? syntheticGatewayDoc(gatewayId, glmDoc), glmDoc }];
             });
             const summaries = gatewayInputs.map(({ doc, glmDoc }) => projectGatewaySummary(doc, glmDoc, now));
             const readBatch = deps.readGatewayPodDiagnosticsBatch;

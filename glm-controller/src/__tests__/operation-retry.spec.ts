@@ -1193,6 +1193,8 @@ describe("the move an operator's give starts", () => {
   const notReady = `target gateway ${GATEWAY} is not migration-ready ` +
     "(desiredStatus=running, desiredRelease=1, liveRelease=null); requires running with a converged release";
   const noLiveRelease = `placement rejected for ${GATEWAY}: no-live-revision`;
+  const blocked = `placement rejected for ${GATEWAY}: no-live-revision ` +
+    "(the isolated gateway image is linux/amd64 only, and this cluster has no amd64 node)";
   const move = (state: { checks?: number; attempts?: number; source?: string | null } = {}) => ({
     id: "op-give", kind: "migrate-user", attempts: state.attempts ?? 0, startedAt: 1_000,
     input: { uid: "uid-lin", fromGatewayId: "shared-a", toGatewayId: GATEWAY, ...(state.source === null ? {} : { source: state.source ?? "operator-isolated-gateway" }) },
@@ -1202,7 +1204,7 @@ describe("the move an operator's give starts", () => {
   const complete = (op: ReturnType<typeof move>, error = notReady) =>
     buildOperationCompletionUpdate({ op, result: failed(error), steps: [], now: 10_000 });
 
-  it.each([notReady, noLiveRelease, `placement rejected for ${GATEWAY}: revision-not-ready`])(
+  it.each([notReady, noLiveRelease, `placement rejected for ${GATEWAY}: revision-not-ready`, blocked])(
     "checks once a minute while the gateway answers: %s", (error) => {
       const update = complete(move({ checks: 6 }), error);
 
@@ -1240,6 +1242,13 @@ describe("the move an operator's give starts", () => {
     expect(complete(move({ checks: MAX_OPERATOR_ISOLATED_GATEWAY_WAIT_ATTEMPTS - 1 }), noLiveRelease)).toMatchObject({
       status: "failed",
       error: `isolated gateway ${GATEWAY} did not become ready within ${MAX_OPERATOR_ISOLATED_GATEWAY_WAIT_ATTEMPTS} checks; last cause: ${noLiveRelease}`,
+    });
+  });
+
+  it("names what blocks the gateway when the checks run out", () => {
+    expect(complete(move({ checks: MAX_OPERATOR_ISOLATED_GATEWAY_WAIT_ATTEMPTS - 1 }), blocked)).toMatchObject({
+      status: "failed",
+      error: `isolated gateway ${GATEWAY} did not become ready within ${MAX_OPERATOR_ISOLATED_GATEWAY_WAIT_ATTEMPTS} checks; last cause: ${blocked}`,
     });
   });
 

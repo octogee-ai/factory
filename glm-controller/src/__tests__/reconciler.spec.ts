@@ -189,6 +189,7 @@ function reconcilerState(input: ReconcilerRows & { callbacks: MirrorFeeds }) {
 function fixtureStoreOver(collections: {
   roots: Rows; runtimes: Rows; users: Rows; operations: Rows; assignments: Rows;
   releases?: Record<string, Record<number, Record<string, unknown>>>;
+  config?: Rows;
 }): PlatformStateStore {
   const releases: Rows = Object.fromEntries(Object.entries(collections.releases ?? {}).flatMap(([gatewayId, byRelease]) =>
     Object.entries(byRelease).map(([release, row]) => [`${gatewayId}/${release}`, row])));
@@ -202,6 +203,7 @@ function fixtureStoreOver(collections: {
     if (sub === undefined && collection === "glmGateways") return [collections.runtimes, id];
     if (sub === undefined && collection === "users") return [collections.users, id];
     if (sub === undefined && collection === "glmOperations") return [collections.operations, id];
+    if (sub === undefined && collection === "config" && collections.config) return [collections.config, id];
     throw new Error(`unexpected document ${path}`);
   };
   const documents: FixtureDocuments = {
@@ -998,31 +1000,79 @@ describe("gateway convergence pass outcomes", () => {
     return { roots, runtimes, users, operations, deps, helm, stateDeps };
   }
 
+  const POD_PROFILE = { isolation: "isolated", sizingTier: "s", fallbackStorageGb: null, computer: { runtime: "cluster", homeSizeGiB: 10 } };
+  const VM_PROFILE = {
+    isolation: "isolated", sizingTier: "m", fallbackStorageGb: null,
+    computer: { runtime: "gce-vm", desktop: "x11", machineType: "e2-medium", provisioningModel: "STANDARD", bootDisk: { sizeGb: 80, type: "pd-balanced" }, homeSizeGiB: 50 },
+  };
+  const BUILDER_RELEASE = { profileImages: { builder: { imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder", imageTag: `abc1234@sha256:${"b".repeat(64)}` } } };
+
+  function isolatedPodPass(roots: Record<string, Record<string, unknown>>, runtimes: Record<string, Record<string, unknown>>, sizingProfiles: Record<string, unknown>) {
+    const order: string[] = [];
+    const helm = {
+      upsertInstance: vi.fn(async (opts: Record<string, unknown>) => { order.push(`helm ${String(opts.gatewayId)}`); }),
+      readDeployedInstances: vi.fn(async () => ({})),
+    };
+    const ensureIsolatedPodHome = vi.fn(async (input: { gatewayId: string }) => { order.push(`home ${input.gatewayId}`); });
+    const store = fixtureStoreOver({ roots, runtimes, users: { u: {} }, operations: {}, assignments: {},
+      config: { orchestrator: { sizingProfiles } },
+      releases: Object.fromEntries(Object.keys(roots).map(id => [id, { 2: releaseArtifact(id, 2, "abc1234", BUILDER_RELEASE) }])) });
+    const deps = { store, helm: helm as never, kubeOps: {} as never, chartFingerprint: "chart",
+      prepareGatewayConfig: vi.fn(async (config: any) => config), ensureIsolatedPodHome,
+      reconcileSurgeHandoff: vi.fn(async () => ({ ready: true })), log: vi.fn() };
+    const upserted = (gatewayId: string) => (helm.upsertInstance.mock.calls as unknown as Array<[Record<string, unknown>]>)
+      .find(([opts]) => opts.gatewayId === gatewayId)?.[0];
+    return { deps, helm, ensureIsolatedPodHome, order, upserted };
+  }
+
   it("converges an existing cluster user despite retained GCE VM state", async () => {
     const roots = {
       hobby: durableRoot({ gatewayId: "hobby", gatewayClass: "builder", profile: null, imageProfile: "builder", sizingTier: "s", ownerUid: "u", builderSlug: "alice", liveRelease: null }),
       healthy: durableRoot({ gatewayId: "healthy", liveRelease: null }),
     };
     const runtimes: Record<string, Record<string, unknown>> = { hobby: servingRuntime({ gatewayId: "hobby", runtime: "cluster" }) };
-    const users = { u: { provisioning: { computer: { id: "retained-vm" } } } };
-    const helm = { upsertInstance: vi.fn(async () => {}), readDeployedInstances: vi.fn(async () => ({})) };
-    const store = fixtureStoreOver({ roots, runtimes, users, operations: {}, assignments: {},
-      releases: Object.fromEntries(Object.keys(roots).map(id => [id, { 2: releaseArtifact(id, 2, "abc1234", { profileImages: { builder: { imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder", imageTag: `abc1234@sha256:${"b".repeat(64)}` } } }) }])) });
-    const deps = { store, helm: helm as never, kubeOps: {} as never, chartFingerprint: "chart",
-      prepareGatewayConfig: vi.fn(async (config: any) => config),
-      reconcileSurgeHandoff: vi.fn(async () => ({ ready: true })), log: vi.fn() };
+    const h = isolatedPodPass(roots, runtimes, { pod: POD_PROFILE });
 
-    await runGatewayConvergencePass(deps);
+    await runGatewayConvergencePass(h.deps);
     expect(runtimes.hobby).toMatchObject({ runtime: "cluster" });
-    expect(helm.upsertInstance.mock.calls.map(([opts]: any) => opts.gatewayId).sort()).toEqual(["healthy", "hobby"]);
-    const hobby = (helm.upsertInstance.mock.calls as unknown as Array<[Record<string, unknown>]>)
-      .find(([opts]) => opts.gatewayId === "hobby")![0];
+    expect(h.helm.upsertInstance.mock.calls.map(([opts]: any) => opts.gatewayId).sort()).toEqual(["healthy", "hobby"]);
+    const hobby = h.upserted("hobby")!;
     expect(hobby.builderIdentity).toEqual({ ownerUid: "u", builderSlug: "alice" });
     expect(hobby).not.toHaveProperty("ownerUid");
     expect(hobby).not.toHaveProperty("builderSlug");
-    const healthy = (helm.upsertInstance.mock.calls as unknown as Array<[Record<string, unknown>]>)
-      .find(([opts]) => opts.gatewayId === "healthy")![0];
-    expect(healthy).not.toHaveProperty("builderIdentity");
+    expect(h.upserted("healthy")).not.toHaveProperty("builderIdentity");
+  });
+
+  it("gives an isolated gateway that runs as a pod its home claim before Helm, and rolls it by recreate", async () => {
+    const roots = {
+      pod: durableRoot({ gatewayId: "pod", gatewayClass: "builder", profile: null, imageProfile: "builder", sizingTier: "s", ownerUid: "u", builderSlug: "alice", liveRelease: null }),
+      healthy: durableRoot({ gatewayId: "healthy", liveRelease: null }),
+    };
+    const runtimes: Record<string, Record<string, unknown>> = {};
+    const h = isolatedPodPass(roots, runtimes, { pod: POD_PROFILE });
+
+    await runGatewayConvergencePass(h.deps);
+
+    expect(runtimes.pod).toMatchObject({ runtime: "cluster" });
+    expect(h.ensureIsolatedPodHome).toHaveBeenCalledTimes(1);
+    expect(h.ensureIsolatedPodHome).toHaveBeenCalledWith({ gatewayId: "pod", homeSizeGiB: 10, served: false });
+    expect(h.order.indexOf("home pod")).toBeLessThan(h.order.indexOf("helm pod"));
+    expect(h.upserted("pod")).toMatchObject({ rollStrategy: "recreate" });
+    expect(h.upserted("healthy")).toMatchObject({ rollStrategy: "surge" });
+  });
+
+  it.each([
+    ["no profile at its tier", { pod: POD_PROFILE }, "isolated gateway pod runs as a pod, and no isolated sizing profile at tier m describes one"],
+    ["a VM profile at its tier", { vm: VM_PROFILE }, "isolated gateway pod runs as a pod, but the isolated sizing profile at tier m describes a gce-vm computer"],
+  ])("refuses to start a pod gateway with %s", async (_name, sizingProfiles, error) => {
+    const roots = {
+      pod: durableRoot({ gatewayId: "pod", gatewayClass: "builder", profile: null, imageProfile: "builder", sizingTier: "m", ownerUid: "u", builderSlug: "alice", liveRelease: null }),
+    };
+    const h = isolatedPodPass(roots, { pod: servingRuntime({ gatewayId: "pod", runtime: "cluster" }) }, sizingProfiles);
+
+    await expect(runGatewayConvergencePass(h.deps)).rejects.toThrow(error);
+    expect(h.ensureIsolatedPodHome).not.toHaveBeenCalled();
+    expect(h.helm.upsertInstance).not.toHaveBeenCalled();
   });
 
   it("moves past a user whose VM Compute is still creating, so the next converge takes the runtime lock", async () => {

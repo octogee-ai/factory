@@ -11,6 +11,13 @@ import { createUserHomeProvider } from "./lib/user-home-provider.js";
 import { createHomeCopyClient } from "./lib/compute-home-copy.js";
 import type { ComputeRequest } from "./lib/compute-vm.js";
 import { assertIsolatedRuntimeStorage } from "./isolated-runtime-storage.js";
+import {
+  ISOLATED_POD_BLOCKER_OBSERVE_MS,
+  ensureIsolatedPodHome,
+  isolatedPodHomeSizeGiB,
+  readIsolatedPodBlocker,
+  startIsolatedPodBlockerObserver,
+} from "./isolated-pod-home.js";
 import { runNormalFleetMutation } from "@octogee/core/normal-fleet-mutation";
 import { platformStateStoreFromEnvironment, MissingRecordError, type WorkspaceProject, type FleetRegistryRecord, type GatewayRoot, type OpaqueMap, type GatewayRootFields, type GatewayRootPatch, type OperationRecord, type PlatformStateStore, type Stored, type WatchChange, type WatchEvent, type FleetRegistryInventory, type PlacementAdmissionPolicy } from "@octogee/core/platform-state";
 import { restartGatewayProcess, restartGatewayDeployment } from './lib/runtime-restart-transport.js';
@@ -856,6 +863,7 @@ interface GatewayConvergencePassDeps {
     isolatedGateway: boolean;
     ownerlessOperatorPrewarm: boolean;
   }) => Promise<SurgeUserHandoffResult>;
+  ensureIsolatedPodHome: (input: { gatewayId: string; homeSizeGiB: number; served: boolean }) => Promise<void>;
   log: (msg: string) => void;
 }
 
@@ -1201,7 +1209,7 @@ async function upsertGateway(
     existing: runtime ?? null,
     now: Date.now(),
   });
-  await stampGatewayRuntime({
+  const runtimeKind = await stampGatewayRuntime({
     store,
     gatewayId: gateway.gatewayId,
     initial: initialRuntime,
@@ -1224,8 +1232,20 @@ async function upsertGateway(
     });
     await transaction.fleetRegistry.patch(gateway.gatewayId, runtimePatch, { revision: current.revision });
   });
+  const isolatedPod = runtimeKind === "cluster" && gateway.gatewayClass === "builder";
+  if (isolatedPod && replicas > 0) {
+    await passDeps.ensureIsolatedPodHome({
+      gatewayId: gateway.gatewayId,
+      homeSizeGiB: await isolatedPodHomeSizeGiB(store, gateway),
+      served: gateway.liveRelease !== null,
+    });
+  }
   if (!(await gatewayRuntimeMutationAllowed(store, gateway.gatewayId))) return;
-  await helm.upsertInstance({ ...desiredOpts, ...runtimeUserIdentity(gateway) });
+  await helm.upsertInstance({
+    ...desiredOpts,
+    ...(isolatedPod ? { rollStrategy: "recreate" as const } : {}),
+    ...runtimeUserIdentity(gateway),
+  });
 }
 
 function runtimeUserIdentity(gateway: DurableGateway): { builderIdentity?: RuntimeUserIdentity } {
@@ -2334,6 +2354,14 @@ function startControllerBackgroundTasks({
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     log,
   });
+  const stopIsolatedPodBlockerObserver = startIsolatedPodBlockerObserver({
+    store: deps.store,
+    readBlocker: (gatewayId) =>
+      readIsolatedPodBlocker({ runKubectl: spawnKubectl, namespace: NAMESPACE }, { gatewayId, now: Date.now() }),
+    now: () => Date.now(),
+    log,
+    intervalMs: ISOLATED_POD_BLOCKER_OBSERVE_MS,
+  });
   const stopHelmRecoverySweeper = startHelmRecoverySweeper({
     listPending: () => helm.listPendingReleases({ namespace: NAMESPACE }),
     isRecoverableRevision: (gatewayId) => isRecoverableGatewayRelease(deps.store, gatewayId),
@@ -2423,6 +2451,7 @@ function startControllerBackgroundTasks({
     stopNativeReturnHoldReaper,
     stopGiteaGatewayKeyGc,
     stopHelmRecoverySweeper,
+    stopIsolatedPodBlockerObserver,
     stopPlacementPolicyReconciler,
     stopDisruptionObserver,
     stopHttp,
@@ -2752,6 +2781,7 @@ async function createControllerRuntime(
       chartFingerprint,
       prepareGatewayConfig,
       reconcileSurgeHandoff: (input) => reconcileSurgeUserHandoff(surgeHandoffDeps, input),
+      ensureIsolatedPodHome: (input) => ensureIsolatedPodHome({ runKubectl, namespace: NAMESPACE, log }, input),
       log,
     }, gatewayIds);
   const convergeGateways = serializeGatewayConvergence(runGatewayConvergence);
@@ -3306,7 +3336,7 @@ async function buildHandlers(
       if (!placement) return null;
       return placement.ok
         ? { ok: true, release: placement.release, gatewayClass: placement.gatewayClass }
-        : { ok: false, reason: placement.reason };
+        : { ok: false, reason: placement.reason, ...(placement.blocker ? { blocker: placement.blocker } : {}) };
     },
     // The roster quiesce gate: written "quiescing" before the source quiesce
     // RPC, restored "serving" on a pre-cutover rollback (fleet-migration-runner).
@@ -4174,7 +4204,7 @@ export async function resolveGatewayPlacement(
   toGatewayId: string,
 ): Promise<
   | { ok: true; revisionId: string; release: number | null; gatewayClass: GatewayClass }
-  | { ok: false; reason: "no-live-revision" | "revision-not-ready" }
+  | { ok: false; reason: "no-live-revision" | "revision-not-ready"; blocker?: string }
   | null
 > {
   const authorization = await readGatewayAuthorizationInStore(state, toGatewayId);
@@ -4183,9 +4213,12 @@ export async function resolveGatewayPlacement(
   if (gateway.desiredStatus !== "running") {
     return { ok: false, reason: "revision-not-ready" };
   }
-  if (gateway.liveRelease == null) return { ok: false, reason: "no-live-revision" };
-  const ready = await isServingRuntime(state, toGatewayId);
-  if (!ready) return { ok: false, reason: "revision-not-ready" };
+  const runtime = await state.fleetRegistry.get(toGatewayId);
+  const blocker = gateway.gatewayClass === "builder" ? runtime?.lastError?.message : null;
+  const rejected = (reason: "no-live-revision" | "revision-not-ready") =>
+    ({ ok: false as const, reason, ...(blocker ? { blocker } : {}) });
+  if (gateway.liveRelease == null) return rejected("no-live-revision");
+  if (runtime?.lifecycle !== "serving") return rejected("revision-not-ready");
   return {
     ok: true,
     revisionId: toGatewayId,

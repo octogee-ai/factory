@@ -67,10 +67,10 @@ export async function isolatedSizingProfileKeys(reader: Pick<PlatformStateReposi
   return Object.entries(profiles).filter(([, profile]) => profile.isolation === "isolated").map(([key]) => key).sort();
 }
 
-export function hasVmShape(profile: IsolatedSizingProfile): boolean {
+export function hasComputerShape(profile: IsolatedSizingProfile): boolean {
   const { computer } = profile;
-  return computer.runtime === "gce-vm" && computer.machineType !== null &&
-    computer.provisioningModel !== null && computer.bootDisk !== null;
+  return computer.runtime === "cluster" || (computer.machineType !== null &&
+    computer.provisioningModel !== null && computer.bootDisk !== null);
 }
 
 export async function resolveIsolatedSizingProfile(
@@ -87,7 +87,7 @@ export async function resolveIsolatedSizingProfile(
   if (profile.isolation !== "isolated") {
     return refusal(400, "sizing-profile-not-isolated", `sizing profile ${named} is not an isolated profile`, { sizingProfiles });
   }
-  if (!hasVmShape(profile)) {
+  if (!hasComputerShape(profile)) {
     return refusal(400, "sizing-profile-no-vm", `sizing profile ${named} has no VM machine type, provisioning model or boot disk`, { sizingProfiles });
   }
   return { sizingKey: named, sizingTier: profile.sizingTier };

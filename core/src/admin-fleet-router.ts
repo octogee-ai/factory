@@ -1371,8 +1371,9 @@ function projectImageTag(data: GlmDoc, glmDoc: GlmDoc | undefined): string | nul
   return typeof glmDoc?.imageTag === "string" ? glmDoc.imageTag : null;
 }
 
-function syntheticGatewayDoc(id: string): FirestoreDocLike {
-  return { id, data: () => ({ gatewayId: id }) };
+function syntheticGatewayDoc(id: string, glmDoc: GlmDoc | undefined): FirestoreDocLike {
+  const lastError = isPlainRecord(glmDoc?.lastError) ? glmDoc.lastError : undefined;
+  return { id, data: () => ({ gatewayId: id, ...(lastError ? { lastError } : {}) }) };
 }
 
 function effectiveHeartbeatDoc(
@@ -4752,7 +4753,7 @@ router.get(
           if (retired && !retiredButListed) return [];
           const doc = effectiveHeartbeatDoc(gatewayId, glmDoc);
           if (!doc && !shouldProjectDesiredOnlyGateway(glmDoc) && !retiredButListed) return [];
-          return [{ doc: doc ?? syntheticGatewayDoc(gatewayId), glmDoc }];
+          return [{ doc: doc ?? syntheticGatewayDoc(gatewayId, glmDoc), glmDoc }];
         });
         const summaries = gatewayInputs.map(({ doc, glmDoc }) =>
           projectGatewaySummary(doc, glmDoc, now),

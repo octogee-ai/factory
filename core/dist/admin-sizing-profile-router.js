@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { Router } from "express";
 import { admitAdminDryRunMarker } from "./admin-dry-run.js";
 import { ADMIN_FLEET_REQUEST_REASON, createAdminFleetMutationRunner, respondToAdminFleetMutationError, } from "./admin-fleet-router.js";
-import { hasVmShape } from "./operator-isolated-gateway.js";
+import { hasComputerShape } from "./operator-isolated-gateway.js";
 import { isGatewaySizingProfile } from "./platform-state/config.js";
 const SIZING_PROFILE_NAME = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const SET_SIZING_PROFILE_TRANSACTION = "admin.sizing-profiles.set";
@@ -50,7 +50,7 @@ function parseProfile(body) {
         return refusal(400, "sizing-profile-invalid", "the body must be {\"isolation\":\"shared\"} or an isolated profile with sizingTier, computer and fallbackStorageGb, " +
             "with sizes in positive whole numbers and no other fields");
     }
-    if (body.isolation === "isolated" && body.computer.runtime === "gce-vm" && !hasVmShape(body)) {
+    if (body.isolation === "isolated" && !hasComputerShape(body)) {
         return refusal(400, "sizing-profile-no-vm", "an isolated sizing profile needs a VM machine type, provisioning model and boot disk");
     }
     return { profile: body };
