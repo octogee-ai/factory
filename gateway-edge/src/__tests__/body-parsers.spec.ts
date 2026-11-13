@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import express, { type Request } from "express";
+import express from "express";
 import request from "supertest";
 import { installBodyParsers } from "../middleware/body-parsers.js";
 
@@ -23,8 +23,8 @@ function captureRawBodyApp(): { app: express.Express; received: { value: string 
     res.json({ parsedBody: req.body });
   });
   app.post("/api/billing/webhook", (req, res) => {
-    const rawBody = (req as Request & { rawBody?: Buffer }).rawBody;
-    res.json({ rawBodyLength: rawBody ? rawBody.length : -1 });
+    const rawBody: unknown = (req as typeof req & { rawBody?: unknown }).rawBody;
+    res.json({ rawBodyLength: Buffer.isBuffer(rawBody) ? rawBody.byteLength : -1 });
   });
   return { app, received };
 }
