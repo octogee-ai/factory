@@ -26,6 +26,7 @@ import { reconcileSurgeUserHandoff } from "../surge-user-handoff";
 import { assignment, createSurgeHandoffHarness } from "./fixtures/surge-user-handoff";
 import { stubInformer } from "./fixtures/fleet-informer-stub";
 import type { FleetInformer, MirroredAggregate, MirrorDelivery, MirrorSubscriber } from "../fleet-informer";
+import type { AuthSecretEnsurer } from "../auth-secret-ensurer";
 
 function durableRoot(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -183,7 +184,8 @@ function reconcilerState(input: ReconcilerRows & { callbacks: MirrorFeeds }) {
   };
   const store = fixtureStoreOver({ ...rows, releases: input.releases });
   input.callbacks.decodable = () => decodableRecords(store, rows);
-  return { store, informer: feedingInformer(input.callbacks) };
+  const ensureGatewayAuthSecret = vi.fn<AuthSecretEnsurer["ensureAuthSecret"]>(async () => {});
+  return { store, informer: feedingInformer(input.callbacks), ensureGatewayAuthSecret };
 }
 
 function fixtureStoreOver(collections: {

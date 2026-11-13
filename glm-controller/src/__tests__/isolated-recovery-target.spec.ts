@@ -1,25 +1,25 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { prepareIsolatedRecoveryTarget } from "../isolated-recovery-target.js";
-import { createSurgePodTransport } from "../surge-user-handoff-runtime.js";
+import { createSurgePodTransport, type SurgeControlRequest } from "../surge-user-handoff-runtime.js";
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 
 const target = { uid: "vm-current", name: "vm-current", podIP: "10.0.0.2", ready: false, terminating: false, crashLooping: false };
 const input = { recovery: { uid: "alice", sourceGatewayId: "shared-a", operationId: "builder-activate-alice-g1", sourceEpoch: 0, claimStartedAt: 1000 },
   targetGatewayId: "alice-m-target", migrationId: "mig-builder-activate-alice-g1", slug: "alice" };
 
-function controlRequest(reply: (route: string, body: Record<string, unknown>) => { status: number; body: Record<string, unknown> }): typeof import("node:http").request {
-  return ((options: { path: string }, onResponse: (response: EventEmitter) => void) => {
+function controlRequest(reply: (route: string, body: Record<string, unknown>) => { status: number; body: Record<string, unknown> }): SurgeControlRequest {
+  return (options, onResponse) => {
     const req = new EventEmitter() as EventEmitter & { setTimeout: () => void; destroy: () => void; end: (body: string) => void };
     req.setTimeout = () => undefined;
     req.destroy = () => undefined;
     req.end = raw => {
-      const value = reply(options.path, JSON.parse(raw));
+      const value = reply(String(options.path), JSON.parse(raw));
       const response = Object.assign(new EventEmitter(), { statusCode: value.status, setEncoding: () => undefined });
       queueMicrotask(() => { onResponse(response); response.emit("data", JSON.stringify(value.body)); response.emit("end"); });
     };
     return req;
-  }) as typeof import("node:http").request;
+  };
 }
 
 describe("claimed user source recovery target preparation", () => {

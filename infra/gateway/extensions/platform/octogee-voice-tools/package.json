@@ -1,0 +1,16 @@
+{
+  "name": "octogee-voice-tools",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "node ../../../verify-voice-plugin-contract.mjs"
+  },
+  "devDependencies": {
+    "vitest": "^5.1.0"
+  },
+  "overrides": {
+    "postcss": "8.5.25"
+  }
+}

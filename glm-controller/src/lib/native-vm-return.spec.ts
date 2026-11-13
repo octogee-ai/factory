@@ -30,7 +30,7 @@ function harness() {
   };
   const deps = { store, vm: vm as never, now: () => now, wait, timeoutMs: 100 };
   return {
-    deps, docs, update,
+    deps, docs, update, vm,
     get source() { return docs["glmGateways/native"]; },
     get root() { return docs["gateways/native"]; },
     get target() { return docs["gateways/shared"]; },
@@ -195,7 +195,7 @@ describe("native computer return checkpoint", () => {
     await native.releaseWriterHold();
     expect(h.source.vmHome).toEqual({ checkpointAcknowledgedAt: 1000, lastCheckpoint: { completedAt: 1001, instanceId: "vm-id" } });
     expect(h.root.desiredStatus).toBe("running");
-    expect(h.deps.vm.describe).not.toHaveBeenCalled();
+    expect(h.vm.describe).not.toHaveBeenCalled();
     await (await prepareNativeVmReturn(h.deps, input))!.releaseWriterHold();
     expect(h.update).toHaveBeenCalledOnce();
   });

@@ -26,7 +26,7 @@ describe("shared gateways with no product installed", () => {
   });
 
   it("warns about unplaced users before the first shared gateway exists, with the count and uids", async () => {
-    const deps = platformHarness(snapshot({ defaultGatewayId: null, sharedGatewayIds: [], gateways: [], users: [newUser] }));
+    const deps = platformHarness(snapshot({ defaultGatewayId: "", sharedGatewayIds: [], gateways: [], users: [newUser] }));
 
     await expect(reconcilePlacementPolicyOnce(deps)).resolves.toMatchObject({ assigned: 0, blocked: 1 });
 

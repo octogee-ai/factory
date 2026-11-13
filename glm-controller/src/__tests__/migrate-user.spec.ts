@@ -2,6 +2,7 @@ import { migrationSourceReady } from "../migration-root-stability.js";
 import { generateKeyPairSync } from "node:crypto";
 import { describe, it, expect, vi } from "vitest";
 import type { Operation, OperationStep } from "@octogee/shared/types/glm";
+import type { OperationRecord } from "@octogee/core/platform-state";
 import { createMigrateUserHandler, FRESH_TARGET_CONFIG_COMMIT_WAIT_MS } from "../handlers/migrate-user";
 import type { MigrateUserDeps } from "../handlers/migrate-user";
 import type { OperationContext } from "../operation-router";
@@ -68,7 +69,7 @@ function gatewayRootFence(
   };
 }
 
-function mkOp(overrides: Partial<Operation>): Operation {
+function mkOp(overrides: Partial<OperationRecord>): OperationRecord {
   return {
     id: "op-1",
     kind: "migrate-user",
@@ -143,6 +144,7 @@ function mkDeps(options: HarnessOptions = {}) {
   const events: string[] = [];
   const persisted: Array<NonNullable<Operation["customerMigrationV2"]>> = [];
   const transfers = new Map<string, ScheduleTransferDoc>();
+  const setMigrationPhase = vi.fn<NonNullable<MigrateUserDeps["setMigrationPhase"]>>(async () => undefined);
   const deps: MigrateUserDeps = {
     readScheduleTransfer: vi.fn(async (uid: string, migrationId: string) => structuredClone(transfers.get(`${uid}/${migrationId}`)) ?? null),
     saveScheduleTransfer: vi.fn(async (uid: string, doc: ScheduleTransferDoc) => {
@@ -173,7 +175,7 @@ function mkDeps(options: HarnessOptions = {}) {
     buildClient: vi.fn(() => client),
     assertMigrationRecoveryAuthority: vi.fn(async () => undefined),
     assertMigrationSourcePreparationAuthority: vi.fn(async () => undefined),
-    setMigrationPhase: vi.fn(async () => undefined),
+    setMigrationPhase,
     completeMigrationRecovery: vi.fn(async () => undefined),
     prepareIsolatedRecoveryTarget: vi.fn(async () => undefined),
     prepareMigrationAgentStores: vi.fn(async () => undefined),
@@ -214,7 +216,7 @@ function mkDeps(options: HarnessOptions = {}) {
       persisted.push(state);
     }),
   } as unknown as OperationContext;
-  return { deps, ctx, client, events, steps, persisted, transfers };
+  return { deps, ctx, client, events, steps, persisted, transfers, setMigrationPhase };
 }
 
 function tickingClock(h: ReturnType<typeof mkDeps>): void {
@@ -476,7 +478,8 @@ describe("abandoned Shared migration recovery", () => {
       input: { uid: "uid-alice", builderSlug: "alice", fromGatewayId: "shared-blue", toGatewayId: target, source: "builder-activation-lease", recoverSourceOnly: true },
       schedulerHandoff: { migrationId: `mig-${id}:scheduler:1:claim:1000`, fromGatewayId: "shared-blue", toGatewayId: target, uid: "uid-alice", slug: "alice", stageAfterCutover: true },
     });
-    request.schedulerHandoff!.sourceRecovery = { migrationId: request.schedulerHandoff!.migrationId, sourceEpoch: 4, steps: [{ name: "quiesce-source", status: "done" }] };
+    const sourceRecovery: NonNullable<NonNullable<Operation["schedulerHandoff"]>["sourceRecovery"]> = { migrationId: request.schedulerHandoff!.migrationId, sourceEpoch: 4, steps: [{ name: "quiesce-source", status: "done" }] };
+    request.schedulerHandoff!.sourceRecovery = sourceRecovery;
     if (scenario === "controller-restart") {
       delete request.input.recoverSourceOnly;
       delete request.schedulerHandoff!.sourceRecovery;
@@ -488,7 +491,7 @@ describe("abandoned Shared migration recovery", () => {
     if (scenario === "ownership-changed") h.deps.assertMigrationRecoveryAuthority = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValue(new Error("authority changed during target cleanup"));
     if (scenario === "never-quiesced") {
       request.attemptHistory = [{ attempt: 1, startedAt: 1_000, completedAt: 2_000, error: "keys failed", classification: "transient", steps: [{ name: "keys-sync-state", status: "failed" }] }];
-      request.schedulerHandoff!.sourceRecovery.steps = request.attemptHistory[0].steps;
+      sourceRecovery.steps = request.attemptHistory[0].steps;
       h.client.resume = vi.fn().mockRejectedValue(new Error("foreign voice hold"));
     }
     const result = await createMigrateUserHandler(h.deps)(request, h.ctx);
@@ -519,7 +522,7 @@ describe("abandoned Shared migration recovery", () => {
     });
     op.schedulerHandoff!.sourceRecovery = { migrationId: op.schedulerHandoff!.migrationId, sourceEpoch: 4,
       steps: [{ name: "quiesce-source", status: "done" }] };
-    if (scenario.startsWith("scheduler-")) op.schedulerHandoff!.stageAfterCutover = false;
+    if (scenario.startsWith("scheduler-")) delete op.schedulerHandoff!.stageAfterCutover;
     const events: string[] = [];
     h.client.scheduler = vi.fn(async ({ migrationId, phase }) => {
       events.push(`scheduler:${phase}`);
@@ -1370,9 +1373,9 @@ describe("native VM return", () => {
 
     expect(await createMigrateUserHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
     expect(order).toEqual(["request-checkpoint", "cutover", "checkpoint", "park", "verify"]);
-    expect(vi.mocked(h.deps.setMigrationPhase).mock.calls.map(([input]) => input.phase))
+    expect(h.setMigrationPhase.mock.calls.map(([input]) => input.phase))
       .toEqual(["preparing", "waiting", "transferring", "checkpointing"]);
-    expect(vi.mocked(h.deps.setMigrationPhase).mock.invocationCallOrder.at(-1))
+    expect(h.setMigrationPhase.mock.invocationCallOrder.at(-1))
       .toBeLessThan(native.requestCheckpoint.mock.invocationCallOrder[0]!);
     expect(h.deps.recordMigrationProgress).toHaveBeenCalledWith({
       operation: expect.objectContaining({ id: "op-1" }),
@@ -1790,7 +1793,7 @@ describe("native VM return", () => {
       const order: string[] = [];
       vi.mocked(h.client.verifyTarget).mockImplementation(async () => {
         order.push("verify");
-        return { migrationId: "mig-op-1", slug: "alice", ready: true };
+        return { migrationId: "mig-op-1", slug: "alice", ready: true, checks: { customerDir: true, coachWired: true, mountMarked: true } };
       });
       native.acknowledgeCompletedSchedulerHandoff.mockImplementation(async () => { order.push("acknowledge"); });
       native.park.mockImplementation(async () => { order.push("park"); return { parked: "suspended" }; });
@@ -3571,9 +3574,9 @@ describe("migrate-customer — preempted VMs", () => {
 
   function finalTransferFails(): MigrationClient & { calls: string[] } {
     const client = happyClient();
-    const transfer = client.transferState as ReturnType<typeof vi.fn>;
+    const transfer = vi.mocked(client.transferState);
     const happy = transfer.getMockImplementation()!;
-    transfer.mockImplementation(async (request: { mode?: string }) => {
+    transfer.mockImplementation(async (request) => {
       if (request.mode === "final") throw Object.assign(new Error(rsyncReset), { status: 500 });
       return happy(request);
     });

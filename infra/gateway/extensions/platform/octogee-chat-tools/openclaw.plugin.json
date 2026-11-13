@@ -1,0 +1,43 @@
+{
+  "id": "octogee-chat-tools",
+  "name": "Octogee Chat Tools",
+  "version": "0.1.0",
+  "description": "Search and browse the workspace chat from the Coach.",
+  "contracts": {
+    "tools": ["octogee_chat_search", "octogee_chat_history", "octogee_chat_set_identity"]
+  },
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "mattermostUrl": {
+        "type": "string",
+        "description": "RETIRED — MM reads moved server-side (fleet broker chat endpoints). Accepted so configs written before the relocation still validate; ignored."
+      },
+      "siteUrl": {
+        "type": "string",
+        "description": "Public-facing Mattermost URL used to build permalinks, e.g. https://mattermost.octogee.com"
+      },
+      "patCacheTtlSeconds": {
+        "type": "integer",
+        "default": 300,
+        "minimum": 30,
+        "description": "RETIRED — no PAT lives in the extension anymore. Accepted for pre-relocation configs; ignored."
+      },
+      "brokerUrl": {
+        "type": "string",
+        "description": "Base URL of octogee-api/fleet broker. Defaults to FLEET_BROKER_URL, OCTOGEE_API_URL, or in-cluster octogee-api."
+      },
+      "tokenPath": {
+        "type": "string",
+        "description": "Path to the projected gateway service-account token."
+      },
+      "customersRoot": {
+        "type": "string",
+        "description": "Root directory containing mounted user workspaces."
+      }
+    },
+    "required": ["siteUrl"]
+  }
+}

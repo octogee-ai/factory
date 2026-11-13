@@ -44,8 +44,6 @@ function fleet(input: { on: string; held: boolean; given?: PlacementPolicyGatewa
   return {
     defaultGatewayId: SHARED,
     sharedGatewayIds: [SHARED],
-    idleMs: 30 * 60 * 1000,
-    buildersPerGateway: 4,
     sizingProfiles: FIXTURE_SIZING_PROFILES,
     platformCurrentGatewayIds: [],
     sharedPoolReplacements: [],
@@ -59,29 +57,20 @@ function fleet(input: { on: string; held: boolean; given?: PlacementPolicyGatewa
 function harness(state: PlacementPolicySnapshot) {
   const acts = {
     assignInitialPlacement: vi.fn(async () => undefined),
-    allocateDisposableGateway: vi.fn(async () => "run-lin-12345678"),
-    advanceActivationLease: vi.fn(async () => undefined),
-    requestSizingKeyTransition: vi.fn(async () => undefined),
-    completeActivationLease: vi.fn(async () => undefined),
-    failActivationLease: vi.fn(async () => undefined),
     recoverUnavailableGateway: vi.fn(async (request: { operationId: string }) => ({ operationId: request.operationId })),
     recoverDisposableRuntimeReset: vi.fn(async (request: { operationId: string }) => ({ operationId: request.operationId })),
-    recoverUnreachableDisposableGateway: vi.fn(async () => ({ recovered: false, operationId: "recover-1" })),
+    supersedeRollingSharedGateway: vi.fn(async () => ({ kind: "scheduled" as const, release: 2, operationId: "roll-1" })),
     enqueueMigration: vi.fn(async () => "op-placement-1"),
-    supersedePendingSharedDrainMove: vi.fn(async () => true),
-    retireOwnedGateway: vi.fn(async () => true),
   };
-  const deps = {
+  const deps: PlacementPolicyReconcilerDeps = {
     now: vi.fn(() => 10 * 60 * 60 * 1000),
     log: vi.fn(),
     debug: vi.fn(),
     readSnapshot: vi.fn(async () => state),
     decidePlacementAdmission: vi.fn(async () => ({ kind: "admitted" as const })),
-    supersedeRollingSharedGateway: vi.fn(async () => ({ kind: "scheduled" as const, release: 2, operationId: "roll-1" })),
-    readUserActivity: vi.fn(async () => ({ lastActiveAt: 1 })),
     deleteRetiredDisposableGateway: vi.fn(async () => false),
     ...acts,
-  } as unknown as PlacementPolicyReconcilerDeps;
+  };
   return { deps, acts };
 }
 
@@ -100,7 +89,6 @@ describe("a user an operator gave an isolated gateway", () => {
     const result = await reconcilePlacementPolicyOnce(deps);
 
     for (const [name, act] of Object.entries(acts)) expect(act, name).not.toHaveBeenCalled();
-    expect(deps.readUserActivity).not.toHaveBeenCalled();
     expect(result).toEqual({ assigned: 0, enqueued: 0, adopted: 0, retired: 0, swept: 0, blocked: 0 });
   });
 
