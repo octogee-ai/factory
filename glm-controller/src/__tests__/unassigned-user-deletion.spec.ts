@@ -102,6 +102,8 @@ async function suspend(records: Records, suspensionOperationId: string): Promise
       store.jobs.deletions.patch(id, { cleanupContext: cleanup as unknown as OpaqueMap, status: "suspending", updatedAt: Date.now() }),
     markSuspended: (id) => markSuspendedAndReleaseErasure(store, id, Date.now()),
     assertRestoreNotInProgress: done,
+    blockChatSignIn: done,
+    blockGitSignIn: done,
     cancelUserMigrations: vi.fn(async () => false),
     deactivateUserVisibility: done,
     unmountFromGateway: vi.fn(async () => "unmounted" as const),

@@ -85,6 +85,7 @@ export interface GitHostErasure {
 
 export interface GitHostSignIn {
   setUserPassword(workspaceSlug: string, password: string): Promise<string>;
+  blockSignIn(workspaceSlug: string): Promise<void>;
 }
 
 export interface ManagedGitHost extends GitHostProvisioning, GitHostSshKeys, GitHostErasure, GitHostSignIn {

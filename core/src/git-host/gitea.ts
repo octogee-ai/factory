@@ -460,6 +460,21 @@ async function eraseWorkspaceOwner(
   await tolerantDelete(api, `/admin/users/${username}`, `user ${username}`, `deleteGiteaUser ${username}`);
 }
 
+async function blockGiteaSignIn(api: GiteaAdmin, workspaceSlug: string): Promise<void> {
+  const username = giteaUsername(workspaceSlug);
+  const updated = await api.request("PATCH", `/admin/users/${username}`, {
+    login_name: username,
+    source_id: 0,
+    prohibit_login: true,
+  });
+  if (updated.status === 404) {
+    api.log(`[gitea] user ${username} is gone, so it cannot sign in`);
+    return;
+  }
+  if (!ok(updated.status)) fail("block-sign-in", updated);
+  api.log(`[gitea] user ${username} prohibited from signing in`);
+}
+
 export function createGiteaGitHost(config: GiteaGitHostConfig): GiteaGitHost {
   const api = createGiteaAdmin(config);
 
@@ -529,5 +544,7 @@ export function createGiteaGitHost(config: GiteaGitHostConfig): GiteaGitHost {
       if (!ok(updated.status)) fail("set-password", updated);
       return username;
     },
+
+    blockSignIn: (workspaceSlug) => blockGiteaSignIn(api, workspaceSlug),
   };
 }

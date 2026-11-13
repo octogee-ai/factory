@@ -30,6 +30,8 @@ export interface UserSuspensionDeps {
     cleanup: UserCleanupContext,
   ) => Promise<void>;
   assertRestoreNotInProgress: (uid: string) => Promise<void>;
+  blockChatSignIn: (mmUserId: string) => Promise<void>;
+  blockGitSignIn: (workspaceSlug: string) => Promise<void>;
   cancelUserMigrations: (uid: string, deletionId: string) => Promise<boolean>;
   deactivateUserVisibility: (uid: string) => Promise<void>;
   unmountFromGateway: (
@@ -91,6 +93,16 @@ function suspendSignIn(steps: SuspensionStepRunner, product: ProductUserSuspensi
   return product ? steps.run("suspend-auth", () => product.suspendSignIn(uid)) : steps.skip("suspend-auth");
 }
 
+async function suspendPlatformSignIn(
+  steps: SuspensionStepRunner,
+  deps: Pick<UserSuspensionDeps, "blockChatSignIn" | "blockGitSignIn">,
+  cleanup: UserCleanupContext,
+): Promise<void> {
+  const { mmUserId, slug } = cleanup;
+  await (mmUserId ? steps.run("suspend-chat-sign-in", () => deps.blockChatSignIn(mmUserId)) : steps.skip("suspend-chat-sign-in"));
+  await (slug ? steps.run("suspend-git-sign-in", () => deps.blockGitSignIn(slug)) : steps.skip("suspend-git-sign-in"));
+}
+
 function pendingMigrationRetry(deletionId: string, pending: boolean, failures: string[], previousFailures: number): OperationResult | null {
   if (pending) return { steps: [], success: false, error: "user migration is still settling", output: { deletionCleanupRetry: { deletionId } } };
   if (failures.length > previousFailures) return { steps: [], success: false, error: failures.join("; "), output: { deletionCleanupRetry: { deletionId } } };
@@ -145,6 +157,7 @@ export function createSuspendUserHandler(
 
     const product = deps.product;
     await suspendSignIn(steps, product, uid);
+    await suspendPlatformSignIn(steps, deps, cleanup);
     let migrationPending = false;
     const failuresBeforeCancellation = failures.length;
     await run("cancel-customer-migrations", async () => {

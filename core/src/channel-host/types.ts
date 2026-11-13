@@ -53,6 +53,7 @@ export interface ManagedChannelHost {
   ensureChannel(spec: ChannelSpec): Promise<ChannelHostEntity | null>;
   findUser(username: string): Promise<ChannelHostEntity | null>;
   setUserPassword(username: string, password: string): Promise<void>;
+  blockSignIn(userId: string): Promise<void>;
   addMember(target: ChannelMembershipTarget, userId: string, roles?: string): Promise<void>;
   removeMember(target: ChannelMembershipTarget, userId: string): Promise<void>;
   archiveChannel(ref: ChannelRef): Promise<string | null>;

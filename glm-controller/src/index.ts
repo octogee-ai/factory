@@ -200,7 +200,7 @@ import {
 import { createSuspendUserHandler } from "./handlers/suspend-user.js";
 import { createEraseUserHandler } from "./handlers/erase-user.js";
 import { loadUserCleanupContext } from "./lib/user-ops/cleanup-context.js";
-import type { UserAccounts, UserSignInHosts } from "@octogee/core/admin-user-router";
+import type { UserAccounts } from "@octogee/core/admin-user-router";
 import {
   noAdminUserDirectorySource,
   type AdminUserDirectorySource,
@@ -3846,8 +3846,11 @@ function buildEraseUserHandler({ documents, store, logFn, kubeOps, privateKey, d
 
 function buildSuspendUserHandler({ store, privateKey, logFn, kubeOps, userLifecycle, accounts }: UserRemovalOptions) {
   const decryptConnectorSecret = createConnectorSecretDecryptor();
+  const signIn = buildUserSignInHosts(logFn);
   return createSuspendUserHandler({
     assertRestoreNotInProgress: (uid) => assertUserRestoreNotInProgress(store, uid),
+    blockChatSignIn: (mmUserId) => signIn.channels.blockSignIn(mmUserId),
+    blockGitSignIn: (workspaceSlug) => signIn.git.blockSignIn(workspaceSlug),
     loadDeletionJob: async (deletionId) => {
       const job = await store.jobs.deletions.get(deletionId);
       if (job === null) return null;
@@ -3978,8 +3981,8 @@ function createUserHomeServices(store: PlatformStateStore, log: (message: string
   };
 }
 
-function buildUserSignInHosts(log: (message: string) => void): UserSignInHosts {
-  const signInEnv = (name: string) => requireEnv(name, "issuing one-time passwords requires it");
+function buildUserSignInHosts(log: (message: string) => void) {
+  const signInEnv = (name: string) => requireEnv(name, "managing user sign-in to chat and git requires it");
   const gitApiToken = signInEnv("GIT_API_TOKEN");
   return {
     channels: createMattermostChannelHost({
