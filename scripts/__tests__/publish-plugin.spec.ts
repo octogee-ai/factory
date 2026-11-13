@@ -55,6 +55,15 @@ describe("publish-plugin.sh", () => {
     expect(shipped).not.toHaveProperty("devDependencies");
   }, 60_000);
 
+  it("waits for ClawHub to accept a real release", () => {
+    const result = run({ EXPECTED_VERSION: committed("package.json").version, SOURCE_REF: "refs/heads/main" });
+    expect(result.status, result.stderr).toBe(0);
+
+    const args = readFileSync(join(root, "args"), "utf8").trim().split("\n");
+    expect(args.slice(-3)).toEqual(["--source-ref", "refs/heads/main", "--wait"]);
+    expect(args).not.toContain("--dry-run");
+  }, 60_000);
+
   it("refuses a release tag whose version the plugin does not declare", () => {
     const result = run({ EXPECTED_VERSION: "0.0.0-not-declared" });
     expect(result.status).toBe(1);
