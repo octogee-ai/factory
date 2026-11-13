@@ -1,3 +1,4 @@
+import type { KmsClient } from "@octogee/core/cloud-kms-encryptor";
 import { createRootKeyEncryptor } from "@octogee/core/encryptor";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -11,7 +12,7 @@ describe("createConnectorSecretDecryptor", () => {
       "OCTOGEE_KMS_KEY_NAME",
       "projects/test/locations/us/keyRings/creds/cryptoKeys/integrations",
     );
-    const decrypt = vi.fn(async () => [{ plaintext: Buffer.from("refresh-token") }]);
+    const decrypt = vi.fn<KmsClient["decrypt"]>(async () => [{ plaintext: Buffer.from("refresh-token") }]);
     const decryptSecret = createConnectorSecretDecryptor({ decrypt });
 
     await expect(decryptSecret(Buffer.from("ciphertext").toString("base64"))).resolves.toBe(

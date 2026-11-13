@@ -8,7 +8,7 @@ type Start = (work: () => Promise<void>, log: (message: string) => void) => () =
 const loops: Array<[string, Start]> = [
   ["gateway heartbeat", (work, log) => startGatewayHeartbeatPoller({
     listGatewayIds: async () => { await work(); return []; },
-    fetchFleetState: vi.fn(), readAssignedSlugs: vi.fn(), writeHeartbeat: vi.fn(), log,
+    fetchFleetState: vi.fn(), readAssignedSlugs: vi.fn(), writeHeartbeat: vi.fn(), listActiveMigrations: vi.fn(), log,
   }, 100)],
   ["stuck operation reaper", (work, log) => startStuckOpReaper({
     store: {} as Parameters<typeof startStuckOpReaper>[0]["store"],
@@ -18,6 +18,7 @@ const loops: Array<[string, Start]> = [
   ["native return hold reaper", (work, log) => startNativeReturnHoldReaper({
     store: {} as Parameters<typeof startNativeReturnHoldReaper>[0]["store"],
     informer: { fleetRegistry: () => null },
+    vm: { describe: vi.fn() },
     now: Date.now, intervalMs: 100, log,
     runTick: async () => { await work(); return { scanned: 0, released: 0 }; },
   })],

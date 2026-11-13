@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MigrationDrainPendingError } from "@octogee/core/fleet-migration-client";
 import { reconcileSurgeUserHandoff, assertSurgeAssignmentCoverage,
-  type SurgeAssignment, type SurgePod, type SurgePodHealth } from "../surge-user-handoff.js";
+  type SurgeAssignment, type SurgePod, type SurgePodHealth, type SurgeUserHandoffDeps } from "../surge-user-handoff.js";
 import { oldPod, targetPod, abandonedPodUid, abandonedOperationId,
   otherGatewayOperationId, assignment, createSurgeHandoffHarness } from "./fixtures/surge-user-handoff.js";
 
@@ -1052,7 +1052,7 @@ describe("surge user handoff", () => {
     });
 
     const readHealth = h.deps.readPodHealth;
-    h.deps.readPodHealth = vi.fn(async (...args) => {
+    h.deps.readPodHealth = vi.fn<SurgeUserHandoffDeps["readPodHealth"]>(async (...args) => {
       const health = (await readHealth(...args))!;
       return args[0].uid === targetPod.uid ? health : { ...health, handoffReleased: true, prelaunchState: "serving" };
     });
@@ -1092,7 +1092,7 @@ describe("surge user handoff", () => {
     });
 
     const readHealth = h.deps.readPodHealth;
-    h.deps.readPodHealth = vi.fn(async (...args) => {
+    h.deps.readPodHealth = vi.fn<SurgeUserHandoffDeps["readPodHealth"]>(async (...args) => {
       const health = (await readHealth(...args))!;
       return args[0].uid === targetPod.uid ? health : { ...health, handoffReleased: true, prelaunchState: "serving" };
     });
@@ -1125,7 +1125,7 @@ describe("surge user handoff", () => {
     });
 
     const readHealth = h.deps.readPodHealth;
-    h.deps.readPodHealth = vi.fn(async (...args) => ({ ...(await readHealth(...args))!, handoffReleased: true, prelaunchState: "serving" }));
+    h.deps.readPodHealth = vi.fn<SurgeUserHandoffDeps["readPodHealth"]>(async (...args) => ({ ...(await readHealth(...args))!, handoffReleased: true, prelaunchState: "serving" }));
     await expect(reconcileSurgeUserHandoff(h.deps, {
       gatewayId: "default",
       desiredImageTag: "new-sha",
@@ -1764,7 +1764,7 @@ describe("surge user handoff", () => {
   });
 
   it("confirms a isolated target release that commits during the retry delay", async () => {
-    const target = { release: () => undefined };
+    const target: { release: () => void } = { release: () => {} };
     const wait = vi.fn(async () => {
       target.release();
     });

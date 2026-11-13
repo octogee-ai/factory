@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, type Mock } from "vitest";
 import {
   buildUpgradeArgs,
   createHelmSubprocessRunner,
@@ -10,10 +10,10 @@ import {
 
 function mockSubprocess(
   responses: Array<{ stdout?: string; stderr?: string; code?: number }>,
-): { runHelm: HelmSubprocess; calls: string[][] } {
+): { runHelm: Mock<HelmSubprocess>; calls: string[][] } {
   const calls: string[][] = [];
   let i = 0;
-  const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+  const runHelm = vi.fn<HelmSubprocess>(async (args) => {
     calls.push(args);
     const r = responses[Math.min(i, responses.length - 1)];
     i++;
@@ -80,7 +80,7 @@ describe("helm-runner helpers", () => {
   });
 
   it("drops a residual computeClassOverride left in a deployed release's values", () => {
-    const residue = { computeClassOverride: "octogee-gateway-spot" };
+    const residue = { gatewayId: "walter", computeClassOverride: "octogee-gateway-spot" };
     expect(readPersonalKnobs(residue)).toEqual({});
   });
 
@@ -104,7 +104,7 @@ describe("helm-runner helpers", () => {
       serviceAccountName: "octogee-gateway-walter",
       serviceAccount: { annotations: { "iam.gke.io/gcp-service-account": "gw@example.iam.gserviceaccount.com" } },
       gatewayContainerSecurityContext: { allowPrivilegeEscalation: false },
-      builderAccess: { enabled: true },
+      builderAccess: { controlUiEnabled: true },
       gcpProject: "builder-walter",
       kmsKeyName: "projects/octogee/locations/us-central1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest",
       deploymentTargetId: "prod-central",
@@ -142,7 +142,7 @@ describe("helm-runner helpers", () => {
     expect(args).toContain(
       'serviceAccount={"annotations":{"iam.gke.io/gcp-service-account":"gw@example.iam.gserviceaccount.com"}}',
     );
-    expect(args).toContain('builderAccess={"enabled":true}');
+    expect(args).toContain('builderAccess={"controlUiEnabled":true}');
     expect(args).toContain("-f");
     expect(args).toContain("/charts/octogee-gateway/values.prod.yaml");
     expect(args).toContain("--take-ownership");

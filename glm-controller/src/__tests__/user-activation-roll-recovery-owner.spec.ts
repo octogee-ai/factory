@@ -4,7 +4,7 @@ import type { Operation } from '@octogee/shared/types/glm';
 import type { ReleasePayload } from '@octogee/shared/types/gateway-releases';
 import { createUserActivationRollRecoveryOwner } from '../user-activation-roll-recovery-owner.js';
 import { readUserActivationRollRecovery, hasUserActivationTargetRollback } from '../user-activation-roll-recovery.js';
-import { createSurgePodTransport } from '../surge-user-handoff-runtime.js';
+import { createSurgePodTransport, type SurgeControlRequest } from '../surge-user-handoff-runtime.js';
 import { FLEET_KEY_PAIR } from './fixtures/fleet-keys.js';
 import { buildOperationCompletionUpdate, classifyOperationFailure } from '../operation-retry.js';
 import { rearmOwnedLegacyMigration } from '../legacy-migration-recovery.js';
@@ -116,17 +116,17 @@ describe('rollout owner settles a held abandoned activation', () => {
   });
 });
 
-function requestThroughHandler(handle: (path: string, body: string) => Promise<{ status: number; body: unknown }>): typeof import('node:http').request {
-  return ((options: { path: string }, onResponse: (response: EventEmitter) => void) => {
+function requestThroughHandler(handle: (path: string, body: string) => Promise<{ status: number; body: unknown }>): SurgeControlRequest {
+  return (options, onResponse) => {
     const request = new EventEmitter() as EventEmitter & { setTimeout: () => void; destroy: () => void; end: (body: string) => void };
     request.setTimeout = () => undefined; request.destroy = () => undefined;
-    request.end = body => { void handle(options.path, body).then(response => {
+    request.end = body => { void handle(String(options.path), body).then(response => {
       const incoming = new EventEmitter() as EventEmitter & { statusCode: number; setEncoding: () => void };
       incoming.statusCode = response.status; incoming.setEncoding = () => undefined; onResponse(incoming);
       incoming.emit('data', JSON.stringify(response.body)); incoming.emit('end');
     }).catch(error => request.emit('error', error)); };
     return request;
-  }) as unknown as typeof import('node:http').request;
+  };
 }
 
 describe('retained predecessor recovery after a post-Helm crash', () => {
@@ -159,19 +159,19 @@ describe('retained rollback proof fences the entire source-recovery custody peri
     const { readUserActivationRollRecoveryCustody } = await import('../user-activation-roll-recovery.js');
     const h = fixture(); await h.run();
     const pending = await readUserActivationRollRecoveryCustody({ state: h.store, gatewayId: 'builder-a' });
-    expect(hasUserActivationTargetRollback({ id: h.operationId, ...pending!.operation }, pending!.recovery)).toBe(true);
+    expect(hasUserActivationTargetRollback(pending!.operation, pending!.recovery)).toBe(true);
     Object.assign(h.documents.get(`glmOperations/${h.operationId}`) as object, { status: 'running', startedAt: 6000 });
     expect(await readUserActivationRollRecovery({ state: h.store, gatewayId: 'builder-a' })).toBeNull();
     const claimed = await readUserActivationRollRecoveryCustody({ state: h.store, gatewayId: 'builder-a' });
-    expect(hasUserActivationTargetRollback({ id: h.operationId, ...claimed!.operation }, claimed!.recovery)).toBe(true);
+    expect(hasUserActivationTargetRollback(claimed!.operation, claimed!.recovery)).toBe(true);
     Object.assign(h.documents.get(`glmOperations/${h.operationId}`) as object, { steps: [{ name: 'recover-source', status: 'running' }] });
     (h.documents.get(`glmOperations/${h.operationId}`) as typeof h.recovery).schedulerHandoff.sourceRecovery.steps.push({ name: 'rollback:unmount-target', status: 'done' });
     const cleaning = await readUserActivationRollRecoveryCustody({ state: h.store, gatewayId: 'builder-a' });
-    expect(hasUserActivationTargetRollback({ id: h.operationId, ...cleaning!.operation }, cleaning!.recovery)).toBe(true);
+    expect(hasUserActivationTargetRollback(cleaning!.operation, cleaning!.recovery)).toBe(true);
     Object.assign(h.documents.get(`glmOperations/${h.operationId}`) as object, { status: 'failed', error: 'target cleanup transport interrupted' });
     const retrying = await readUserActivationRollRecoveryCustody({ state: h.store, gatewayId: 'builder-a' });
     expect(retrying).not.toBeNull();
-    expect(hasUserActivationTargetRollback({ id: h.operationId, ...retrying!.operation }, retrying!.recovery)).toBe(true);
+    expect(hasUserActivationTargetRollback(retrying!.operation, retrying!.recovery)).toBe(true);
     Object.assign(h.documents.get(`glmOperations/${h.operationId}`) as object, { schedulerHandoffReleased: true });
     h.assignment.state = 'serving';
     delete (h.user.provisioning.openclaw as { migration?: unknown }).migration;
@@ -179,16 +179,16 @@ describe('retained rollback proof fences the entire source-recovery custody peri
   });
   it('retains the custody proof through normal failed completion and the existing source-recovery rearm owner', async () => {
     const h = fixture(); await h.run();
-    const operation = h.documents.get(`glmOperations/${h.operationId}`) as Operation;
-    Object.assign(operation, { status: 'running', startedAt: 6000 });
+    Object.assign(h.documents.get(`glmOperations/${h.operationId}`) as object, { status: 'running', startedAt: 6000 });
+    const operation = (await h.store.journal.operations.get(h.operationId))!;
     await h.store.journal.operations.patch(h.operationId, buildOperationCompletionUpdate({ op: operation, result: { success: false, steps: [], error: 'target cleanup refused' }, steps: [], now: 7000 }));
-    const failed = h.documents.get(`glmOperations/${h.operationId}`) as Operation;
+    const failed = (await h.store.journal.operations.get(h.operationId))!;
     expect(failed.status).toBe('failed');
     expect(hasUserActivationTargetRollback(failed)).toBe(true);
     expect(await rearmOwnedLegacyMigration({ store: h.store, operationId: h.operationId, now: 8000, admitted: () => true })).toBe(true);
     const current = await readUserActivationRollRecovery({ state: h.store, gatewayId: 'builder-a' });
     expect(current!.operation).toMatchObject({ status: 'pending', startedAt: null });
-    expect(hasUserActivationTargetRollback({ id: h.operationId, ...current!.operation }, current!.recovery)).toBe(true);
+    expect(hasUserActivationTargetRollback(current!.operation, current!.recovery)).toBe(true);
   });
   it.each(['lease', 'generation', 'epoch'])('does not consume a rollback proof for another %s', async field => {
     const h = fixture(); await h.run();
@@ -197,6 +197,6 @@ describe('retained rollback proof fences the entire source-recovery custody peri
     if (field === 'lease') expected.leaseId = 'different';
     if (field === 'generation') expected.generation++;
     if (field === 'epoch') expected.sourceEpoch++;
-    expect(hasUserActivationTargetRollback({ id: h.operationId, ...current!.operation }, expected)).toBe(false);
+    expect(hasUserActivationTargetRollback(current!.operation, expected)).toBe(false);
   });
 });

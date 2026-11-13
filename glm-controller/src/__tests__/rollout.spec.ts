@@ -16,19 +16,6 @@ function mkPayload(overrides: Partial<ReleasePayload> = {}): ReleasePayload {
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge",
       imageTag: "cafe123-ocbeta2",
     },
-    profile: null,
-    gatewayClass: "shared",
-    imageProfile: "standard",
-    sizingTier: null,
-    gcpProject: null,
-    gatewayContainerSecurityContext: null,
-    serviceAccountName: null,
-    serviceAccount: null,
-    builderAccess: null,
-    ownerUid: null,
-    builderSlug: null,
-    modelBrokerLimits: null,
-    preemption: null,
     ...overrides,
   };
 }
@@ -43,10 +30,7 @@ function mkGateway(overrides: Partial<GatewayDoc> = {}): GatewayDoc {
     latestRelease: 2,
     desiredRelease: 2,
     liveRelease: 1,
-    liveRevisionId: "default-r1",
-    trafficRevisionId: "default-r1",
     desiredStatus: "running",
-    roll: null,
     ...overrides,
   };
 }
@@ -65,7 +49,7 @@ function mkOp(input: Record<string, unknown>): Operation {
   };
 }
 
-const ctx: OperationContext = { reportStep: vi.fn(async () => undefined) };
+const ctx: OperationContext = { reportStep: vi.fn<OperationContext["reportStep"]>(async () => undefined) };
 
 function mkDeps(overrides: Partial<RolloutDeps> = {}): RolloutDeps & { logs: string[] } {
   const logs: string[] = [];
@@ -200,14 +184,13 @@ describe("rollout op — awaits the roll arm's convergence", () => {
       activated = true;
       return { success: true as const };
     });
-    const reportStep = vi.fn(async () => undefined);
+    const reportStep = vi.fn<OperationContext["reportStep"]>(async () => undefined);
     const deps = mkDeps({
       readGatewayDoc: async () => activated
         ? mkGateway({
             latestRelease: 3,
             desiredRelease: 3,
             liveRelease: 3,
-            liveRevisionId: "default-r3",
           })
         : mkGateway({
             latestRelease: 3,
@@ -308,26 +291,12 @@ describe("rollout op — awaits the roll arm's convergence", () => {
 
   it("refreshes operation liveness on every convergence poll", async () => {
     let polls = 0;
-    const reportStep = vi.fn(async () => undefined);
+    const reportStep = vi.fn<OperationContext["reportStep"]>(async () => undefined);
     const deps = mkDeps({
       readGatewayDoc: async () =>
         polls >= 3
-          ? mkGateway({ liveRelease: 2, liveRevisionId: "default-r2" })
-          : mkGateway({
-              roll: {
-                operationId: "roll-x",
-                status: "migrating",
-                fromRelease: 1,
-                toRelease: 2,
-                sourceRevisionId: "default-r1",
-                targetRevisionId: "default-r2",
-                acceptingNewAssignments: true,
-                startedAt: 0,
-                updatedAt: 0,
-                error: null,
-                flippedAt: null,
-              },
-            }),
+          ? mkGateway({ liveRelease: 2 })
+          : mkGateway(),
       wait: async () => {
         polls += 1;
       },
@@ -344,27 +313,13 @@ describe("rollout op — awaits the roll arm's convergence", () => {
     ).toHaveLength(4);
   });
 
-  it("kicks a reconcile tick and succeeds once liveRelease reaches desiredRelease with no roll block", async () => {
+  it("kicks a reconcile tick and succeeds once liveRelease reaches desiredRelease", async () => {
     let converged = false;
     const deps = mkDeps({
       readGatewayDoc: async () =>
         converged
-          ? mkGateway({ liveRelease: 2, liveRevisionId: "default-r2", trafficRevisionId: "default-r2" })
-          : mkGateway({
-              roll: {
-                operationId: "roll-x",
-                status: "migrating",
-                fromRelease: 1,
-                toRelease: 2,
-                sourceRevisionId: "default-r1",
-                targetRevisionId: "default-r2",
-                acceptingNewAssignments: true,
-                startedAt: 0,
-                updatedAt: 0,
-                error: null,
-                flippedAt: null,
-              },
-            }),
+          ? mkGateway({ liveRelease: 2 })
+          : mkGateway(),
       wait: async () => {
         converged = true;
       },
@@ -439,7 +394,7 @@ describe("rollout op — awaits the roll arm's convergence", () => {
     const deps = mkDeps({
       readReleasePayload: async () => (recorded ? mkPayload() : mkPayload({ imageTag: "stale" })),
       readGatewayDoc: async () =>
-        recorded ? mkGateway({ liveRelease: 2, liveRevisionId: "default-r2" }) : mkGateway(),
+        recorded ? mkGateway({ liveRelease: 2 }) : mkGateway(),
       wait: async () => {
         recorded = true;
       },
@@ -465,9 +420,9 @@ describe("rollout op — awaits the roll arm's convergence", () => {
     expect(res.error).toContain("converging r1 → r2");
   });
 
-  it("no-op rollout (already live on the requested release, no roll) succeeds immediately", async () => {
+  it("no-op rollout (already live on the requested release) succeeds immediately", async () => {
     const deps = mkDeps({
-      readGatewayDoc: async () => mkGateway({ liveRelease: 2, liveRevisionId: "default-r2" }),
+      readGatewayDoc: async () => mkGateway({ liveRelease: 2 }),
       readDeploymentPrerequisiteError: vi.fn(async () => "existing identity needs repair"),
     });
     const res = await createRolloutHandler(deps)(
@@ -517,7 +472,7 @@ describe("rollout deployment prerequisites", () => {
     const deps = mkDeps({
       readGatewayDoc: async () => mkGateway({ desiredRelease: activated ? 2 : 1, liveRelease: activated ? 2 : 1 }),
       readDeploymentPrerequisiteError,
-      activateDesiredRelease: vi.fn(async () => { activated = true; return { success: true }; }),
+      activateDesiredRelease: vi.fn(async () => { activated = true; return { success: true as const }; }),
     });
     const result = await createRolloutHandler(deps)(mkOp(input), ctx);
 
@@ -560,7 +515,7 @@ it("permits a paused rollout without requiring the running VM's identity to be r
     readDeploymentPrerequisiteError: vi.fn(async () => "identity scopes are outdated"),
     activateDesiredRelease: vi.fn(async () => {
       deps.readGatewayDoc = async () => mkGateway({ desiredStatus: "paused", liveRelease: 2 });
-      return { success: true };
+      return { success: true as const };
     }),
   });
   const result = await createRolloutHandler(deps)(mkOp({ gatewayId: "default", targetRelease: 2, imageTag: "cafe123-ocbeta2" }), ctx);

@@ -1,6 +1,6 @@
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { describe, expect, it, vi } from "vitest";
-import type { ReleasePayload } from "@octogee/shared/types/gateway-releases";
+import { dualReadIsolatedProfileImage, type ReleasePayload } from "@octogee/shared/types/gateway-releases";
 import { refineGatewayConvergenceAction } from "../index.js";
 import type { DurableGateway } from "../converge-gateway.js";
 import {
@@ -86,7 +86,7 @@ describe("createVmReadinessProbe", () => {
   });
 
   it("reports an unreachable VM as not ready, once per outcome change", async () => {
-    const fetchImpl = vi.fn(async () => { throw new Error("ECONNREFUSED"); });
+    const fetchImpl = vi.fn<typeof fetch>(async () => { throw new Error("ECONNREFUSED"); });
     const log = vi.fn();
     const probe = createVmReadinessProbe({ port: 3003, timeoutMs: 5_000, fetchImpl: fetchImpl as unknown as typeof fetch, log });
     expect(await probe(endpoint, "b-x")).toBe(false);
@@ -119,7 +119,18 @@ describe("first-boot VM gateway handoff", () => {
 
   function handoffDeps(input: { ready: boolean; health: SurgePodHealth }) {
     const listPods = vi.fn(async () => { throw new Error("kubectl must not run for a VM gateway"); });
+    const unused = (name: string) => vi.fn(() => { throw new Error(`the VM handoff must not call ${name}`); });
     const deps: SurgeUserHandoffDeps = {
+      reportMigrationProgress: unused("reportMigrationProgress"),
+      deleteCancelledTarget: unused("deleteCancelledTarget"),
+      deleteCrashLoopingPod: unused("deleteCrashLoopingPod"),
+      claimCrashLoopEviction: unused("claimCrashLoopEviction"),
+      markSharedSurgeForwardRecovery: unused("markSharedSurgeForwardRecovery"),
+      rebindSharedSurgeForwardRecovery: unused("rebindSharedSurgeForwardRecovery"),
+      waitForSourceIdle: unused("waitForSourceIdle"),
+      resumeSourceIngress: unused("resumeSourceIngress"),
+      readSystemConfigCommit: unused("readSystemConfigCommit"),
+      recheckGatewayLater: unused("recheckGatewayLater"),
       recordMigrationProgress: vi.fn(async () => undefined),
       listPods: createSurgeEndpointLister({
         readRuntimeDoc: async () => ({ runtime: "gce-vm", vm }),
@@ -156,13 +167,13 @@ describe("first-boot VM gateway handoff", () => {
 
     await expect(refineGatewayConvergenceAction({
       passDeps: {
-        store: createDocumentFixtureStore({ [`gateways/${gateway.gatewayId}`]: gateway }),
+        store: createDocumentFixtureStore({ [`gateways/${gateway.gatewayId}`]: { ...gateway } }),
         reconcileSurgeHandoff,
       },
       gateway,
       artifact,
       runtime: undefined,
-      helmObserved: { imageRepository: artifact.profileImages!.builder!.imageRepository, imageTag, replicas: 1 },
+      helmObserved: { imageRepository: dualReadIsolatedProfileImage(artifact.profileImages!).imageRepository, imageTag, replicas: 1 },
       action: { kind: "steady" },
     })).resolves.toEqual({ kind: "mark-live" });
   });
