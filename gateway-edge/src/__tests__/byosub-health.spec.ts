@@ -137,6 +137,15 @@ function fakeDeps(over: Partial<ByosubHealthDeps> = {}): ByosubHealthDeps {
 }
 
 describe("GET /byosub/health route glue", () => {
+  it("limits broker and filesystem checks for repeated health polling", async () => {
+    const resolveUserGateway = vi.fn(async () => null);
+    const client = request(appWith(fakeDeps({ resolveUserGateway })));
+    for (let attempt = 0; attempt < 120; attempt++) await client.get(healthPath()).expect(422);
+    const limited = await client.get(healthPath()).expect(429);
+    expect(limited.body).toEqual({ error: "Too many requests, please try again later." });
+    expect(resolveUserGateway).toHaveBeenCalledTimes(120);
+  });
+
   it("200 not_on_this_pod on the unscoped alias — no gateway-local proof without /api/g/<gatewayId>", async () => {
     const resolve = vi.fn(async () => ({
       slug: "smile-wring-011b",
