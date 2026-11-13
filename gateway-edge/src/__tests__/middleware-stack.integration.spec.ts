@@ -21,15 +21,6 @@ vi.mock('../../../gateway-edge/src/lib/db', () => ({
   },
 }));
 
-vi.mock('../../../gateway-edge/src/lib/stripe', () => ({
-  getStripe: () => ({
-    webhooks: {
-      constructEvent: vi.fn((_body: any, _sig: string, _secret: string) => ({ type: 'noop', data: { object: {} } })),
-    },
-  }),
-  getWebhookSecret: () => 'whsec_test',
-}));
-
 import { createApp } from '../index.js';
 
 const createSidecarApp = () => createApp({ surface: 'sidecar' });

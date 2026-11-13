@@ -248,7 +248,6 @@ describe("model credential sync trigger", () => {
   it.each([
     "routes/billing/byot.ts",
     "routes/byosub.ts",
-    "routes/internal/billing.ts",
   ])("%s imports the model credential trigger name", (relativePath) => {
     const src = readFileSync(join(import.meta.dirname, "..", relativePath), "utf8");
     expect(src).toContain("triggerGatewayModelCredentialSync");

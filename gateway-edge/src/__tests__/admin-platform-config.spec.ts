@@ -1,5 +1,4 @@
 import { DEFAULT_OPS_AGENT_MODEL_REF } from "@octogee/shared/types/platform-config";
-import { DEFAULT_PLATFORM_TRIAL_CONFIG } from "@octogee/product-shared/types/signup-offer-config";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -82,13 +81,11 @@ vi.mock("../middleware/auth", () => ({
 
 import express from "express";
 import adminRouter from "../routes/admin.js";
-import productAdminRouter from "../routes/product-admin.js";
 
 function buildApp() {
   const app = express();
   app.use(express.json());
   app.use("/api/admin", adminRouter);
-  app.use("/api/admin", productAdminRouter);
   return app;
 }
 
@@ -386,142 +383,5 @@ describe("admin platform-connect-config — stage-only updates", () => {
     expect(res.status).toBe(200);
     expect(res.body.googleAllowlistUids).toEqual([]);
     expect(platformDocs["platformConfig/connect"]).toMatchObject({ googleAllowlistUids: [] });
-  });
-});
-
-describe("admin platform-trial-config", () => {
-  let app: express.Express;
-
-  beforeEach(() => {
-    app = buildApp();
-    for (const key of Object.keys(platformDocs)) delete platformDocs[key];
-    for (const key of Object.keys(queryDocs)) delete queryDocs[key];
-    setCalls.length = 0;
-  });
-
-  it("GET returns strict location-free defaults including no Builder plan", async () => {
-    platformDocs["platformConfig/trial"] = {
-      schemaVersion: 2,
-      offerId: "builder-signup",
-      offerVersion: 1,
-      durationDays: 7,
-      defaultPersonalTier: "personal",
-      defaultBuilderTier: "hobby",
-      budgetPolicy: DEFAULT_PLATFORM_TRIAL_CONFIG.budgetPolicy,
-    };
-    const res = await request(app).get("/api/admin/platform-trial-config");
-
-    expect(res.status).toBe(200);
-    expect(res.body.config).toEqual({
-      schemaVersion: 2,
-      offerId: "builder-signup",
-      offerVersion: 1,
-      durationDays: 7,
-      defaultPersonalTier: "personal",
-      defaultBuilderTier: "hobby",
-      budgetPolicy: DEFAULT_PLATFORM_TRIAL_CONFIG.budgetPolicy,
-    });
-    expect(res.body.personalPlans).toContainEqual({ name: "personal_pro", displayName: "Personal Pro" });
-    expect(res.body.builderPlans).toContainEqual({
-      name: "pro",
-      displayName: "Builder Pro",
-      sizingTier: "m",
-    });
-    expect(res.body.builderPlans).toContainEqual({
-      name: null,
-      displayName: "No",
-      sizingTier: null,
-    });
-    expect(res.body.builderPlans.map((plan: { name: string | null }) => plan.name)).not.toContain("enterprise");
-    expect(res.body).not.toHaveProperty("provisioning");
-    expect(aggregateCalls).toEqual([]);
-  });
-
-  it("GET reports missing configuration instead of silently granting a compiled tier", async () => {
-    const res = await request(app).get("/api/admin/platform-trial-config");
-    expect(res.status).toBe(409);
-    expect(res.body.error).toBe("trial_config_invalid");
-  });
-
-  it("GET rejects stored configuration without a budget policy", async () => {
-    platformDocs["platformConfig/trial"] = { ...DEFAULT_PLATFORM_TRIAL_CONFIG, budgetPolicy: undefined };
-    await request(app).get("/api/admin/platform-trial-config")
-      .expect(409, { error: "trial_config_invalid" });
-  });
-
-  it("PUT rejects configuration without a budget policy without writing", async () => {
-    await request(app).put("/api/admin/platform-trial-config")
-      .send({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, budgetPolicy: undefined })
-      .expect(400, { error: "invalid_trial_config" });
-    expect(setCalls).toHaveLength(0);
-  });
-
-  it("PUT writes validated defaults with audit fields", async () => {
-    const res = await request(app)
-      .put("/api/admin/platform-trial-config")
-      .send({
-        schemaVersion: 2,
-        offerId: "builder-signup",
-        offerVersion: 2,
-        durationDays: 14,
-        defaultPersonalTier: "personal_pro_max",
-        defaultBuilderTier: "team",
-        budgetPolicy: DEFAULT_PLATFORM_TRIAL_CONFIG.budgetPolicy,
-      });
-
-    expect(res.status).toBe(200);
-    expect(setCalls).toHaveLength(1);
-    expect(setCalls[0]).toMatchObject({
-      path: "platformConfig/trial",
-      data: {
-        schemaVersion: 2,
-        offerId: "builder-signup",
-        offerVersion: 2,
-        durationDays: 14,
-        defaultPersonalTier: "personal_pro_max",
-        defaultBuilderTier: "team",
-        budgetPolicy: DEFAULT_PLATFORM_TRIAL_CONFIG.budgetPolicy,
-        updatedAt: "server-now",
-        updatedBy: "admin-user",
-      },
-    });
-  });
-
-  it("PUT writes a Personal-only default with no isolated gateway plan", async () => {
-    const res = await request(app)
-      .put("/api/admin/platform-trial-config")
-      .send({
-        schemaVersion: 2,
-        offerId: "builder-signup",
-        offerVersion: 2,
-        durationDays: 7,
-        defaultPersonalTier: "personal",
-        defaultBuilderTier: null,
-        budgetPolicy: DEFAULT_PLATFORM_TRIAL_CONFIG.budgetPolicy,
-      });
-
-    expect(res.status).toBe(200);
-    expect(setCalls[0].data).toMatchObject({
-      defaultPersonalTier: "personal",
-      defaultBuilderTier: null,
-    });
-  });
-
-  it("PUT rejects enterprise", async () => {
-    const enterprise = await request(app)
-      .put("/api/admin/platform-trial-config")
-      .send({
-        schemaVersion: 2,
-        offerId: "builder-signup",
-        offerVersion: 1,
-        durationDays: 7,
-        defaultPersonalTier: "personal_pro",
-        defaultBuilderTier: "enterprise",
-        budgetPolicy: DEFAULT_PLATFORM_TRIAL_CONFIG.budgetPolicy,
-      });
-    expect(enterprise.status).toBe(400);
-    expect(enterprise.body.error).toBe("invalid_trial_config");
-
-    expect(setCalls).toHaveLength(0);
   });
 });

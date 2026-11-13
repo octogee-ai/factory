@@ -10,7 +10,7 @@ describe("gateway-edge sidecar without platform database settings", () => {
   });
 
   it("loads its entry module graph", async () => {
-    await expect(import("../product-main.js")).resolves.toBeDefined();
+    await expect(import("../main.js")).resolves.toBeDefined();
   });
 
   it("fails loudly at the first platform-state use", async () => {

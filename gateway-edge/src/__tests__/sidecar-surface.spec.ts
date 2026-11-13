@@ -36,20 +36,7 @@ vi.mock("../lib/db", () => ({
   Timestamp: { fromDate: (d: Date) => ({ toDate: () => d }) },
 }));
 
-vi.mock("../lib/stripe", () => ({
-  getStripe: () => ({
-    webhooks: {
-      constructEvent: vi.fn((_body: unknown, _sig: string, _secret: string) => ({
-        type: "noop",
-        data: { object: {} },
-      })),
-    },
-  }),
-  getWebhookSecret: () => "whsec_test",
-}));
-
 import { createApp } from "../index.js";
-import { productClusterRoutes } from "../routes/product-cluster-routes.js";
 import { _setGatewayTokenReviewerForTests } from "../middleware/gateway-internal-auth.js";
 
 let projectedTokenDir: string | null = null;
@@ -199,7 +186,7 @@ describe("gateway-edge sidecar surface", () => {
     const sidecar = await request(createApp({ surface: "sidecar" })).post("/internal/owner-automations").send(invalid);
     expect(sidecar.status).toBe(400);
     expect(sidecar.body).toEqual({ error: "invalid_owner_automation" });
-    expect((await request(createApp({ surface: "cluster", productRoutes: productClusterRoutes() })).post("/internal/owner-automations").send(invalid)).status).toBe(404);
+    expect((await request(createApp({ surface: "cluster" })).post("/internal/owner-automations").send(invalid)).status).toBe(404);
   });
 
   it("fronts the gateway VM's style and Desk note for the gateway's own identity only, on the sidecar alone", async () => {
@@ -209,7 +196,7 @@ describe("gateway-edge sidecar surface", () => {
     const noVm = await request(sidecar).post("/internal/computer/desk/note").set("x-k8s-sa-token", "valid-ksa-token").send({ note: "hi" });
     expect(noVm.status).toBe(404);
     expect(noVm.body).toEqual({ error: "computer_unavailable" });
-    expect((await request(createApp({ surface: "cluster", productRoutes: productClusterRoutes() })).post("/internal/computer/style").send({ style: "familiar" })).status).toBe(404);
+    expect((await request(createApp({ surface: "cluster" })).post("/internal/computer/style").send({ style: "familiar" })).status).toBe(404);
   });
 
   it("requires valid gateway KSA auth on sidecar connector materialization", async () => {
@@ -231,7 +218,7 @@ describe("gateway-edge sidecar surface", () => {
 
   it("does not mount connector materialization on the cluster surface", async () => {
     const reviewer = configureGatewayServiceAccountAuth();
-    const app = createApp({ surface: "cluster", productRoutes: productClusterRoutes() });
+    const app = createApp({ surface: "cluster" });
 
     const res = await request(app)
       .get("/internal/connectors/cloudflare/materialize")

@@ -57,8 +57,6 @@ vi.mock('../lib/gitea.js', () => ({ giteaWriteFiles: h.seed }));
 vi.mock('../lib/fileTarget.js', () => ({ resolveFileTarget: async () => ({ ok: true, target: {} }) }));
 vi.mock('../lib/workspace-blob.js', () => ({ storeWorkspaceBlob: h.blob }));
 import { parseProjectHandoff, queueProjectHandoff, deliverProjectAgentOnboarding } from '../lib/project-agent-onboarding.js';
-import { syncProjectAgentIdentity } from '../lib/project-agent-identity.js';
-import { parseManifest } from '@octogee/core/workspace-manifest';
 import { projectAgentSecretDocId } from '@octogee/core/mattermost/project-agent';
 const projectPath = 'workspaces/alice/projects/golf';
 const handoff = { name: 'Chip', emoji: '⛳', persona: 'A calm golf caddie, with Piper’s practical style.', message: 'Build Chris and Robert a shared golf dashboard. Chris prefers simple controls.' };
@@ -250,46 +248,6 @@ it('starts UI-created projects with their own agent in project general', async (
   await deliverProjectAgentOnboarding('u', 'alice', 'golf');
   expect(h.mm).toHaveBeenCalledWith('/posts', 'POST', expect.objectContaining({ channel_id: 'general', message: expect.stringContaining('A shared golf dashboard') }), 'coach-token');
 });
-it('stores the project avatar at a path the workspace manifest actually accepts', async () => {
-  await syncProjectAgentIdentity('u', 'alice', 'golf', { avatarPng: Buffer.from('png') });
-
-  const [, avatarPath] = h.blob.mock.calls.at(-1)!;
-  // storeWorkspaceBlob is mocked here, so run the real manifest guard the live
-  // write hits: a dot-prefixed segment is refused and surfaces as a 502.
-  expect(() =>
-    parseManifest('customers/alice/projects/golf/.files/manifest.json', JSON.stringify({
-      [avatarPath]: {
-        type: 'blob',
-        gcsPath: `customers/alice/projects/golf/${avatarPath}`,
-        size: 3,
-        mimeType: 'image/png',
-        uploadedAt: '2026-09-17T00:00:00.000Z',
-      },
-    })),
-  ).not.toThrow();
-});
-
-it('updates only the project bot, including its avatar and emoji', async () => {
-  await expect(syncProjectAgentIdentity('u', 'alice', 'golf', { name: 'Chip', emoji: '⛳', avatarPng: Buffer.from('png') })).resolves.toEqual(['name', 'emoji', 'avatar']);
-  expect(h.mm).toHaveBeenCalledWith('/bots/chip', 'PUT', { display_name: 'Chip' });
-  expect(h.avatar).toHaveBeenCalledWith('chip', Buffer.from('png'));
-  expect(h.docs.get('agents/u').name).toBe('Piper');
-  expect(h.docs.get(projectPath).agent.identity.emoji).toBe('⛳');
-  await expect(syncProjectAgentIdentity('other', 'alice', 'golf', { name: 'No' })).rejects.toThrow('unavailable');
-});
-it('does not claim that a rejected avatar upload succeeded', async () => {
-  delete h.docs.get(projectPath).agent.identity;
-  h.avatar.mockResolvedValueOnce(false);
-  await expect(syncProjectAgentIdentity('u', 'alice', 'golf', { avatarPng: Buffer.from('png') })).rejects.toThrow('could not');
-  expect(h.docs.get(projectPath).agent.identity).toBeUndefined();
-});
-
-it('initializes a complete independent identity when customizing a project that has not been named yet', async () => {
-  delete h.docs.get(projectPath).agent.identity;
-  await syncProjectAgentIdentity('u', 'alice', 'golf', { emoji: '⛳' });
-  expect(h.docs.get(projectPath).agent.identity).toEqual({ name: 'Fairway Partners', emoji: '⛳', persona: '' });
-});
-
 it('refuses corrections after delivery or while a delivery owns the lease', async () => {
   await queueProjectHandoff('u', 'alice', 'golf', handoff);
   h.docs.get(projectPath).agent.deliveryLeaseUntil = Date.now() + 120_000;

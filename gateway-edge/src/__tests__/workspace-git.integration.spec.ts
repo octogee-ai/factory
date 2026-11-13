@@ -107,11 +107,6 @@ vi.mock("../lib/gitea", () => ({
   getToken: vi.fn(() => "gitea-token"),
 }));
 
-vi.mock("../lib/stripe", () => ({
-  getStripe: () => ({ webhooks: { constructEvent: vi.fn() } }),
-  getWebhookSecret: () => "whsec_test",
-}));
-
 import { createApp } from "../index.js";
 import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
 import { workspaceMutationLeaseGitDir } from "../lib/workspace-git.js";
