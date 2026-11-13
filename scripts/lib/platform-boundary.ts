@@ -240,7 +240,7 @@ export function productAssetEntries(manifest: PlatformBoundaryManifest): string[
 }
 
 export function platformFiles(manifest: PlatformBoundaryManifest, repoRoot: string): string[] {
-  const listed = execFileSync(GIT_BINARY, ["ls-files", "-z", "--", ...manifest.platformRoots], { cwd: repoRoot, encoding: "utf8" });
+  const listed = execFileSync(GIT_BINARY, ["ls-files", "--recurse-submodules", "-z", "--", ...manifest.platformRoots], { cwd: repoRoot, encoding: "utf8" });
   return listed
     .split("\0")
     .filter((file) => file.length > 0 && existsSync(join(repoRoot, file)))
@@ -351,7 +351,7 @@ export function outsideDependenciesOf(file: string, source: string, repoRoot: st
 }
 
 export function platformDependencyReport(manifest: PlatformBoundaryManifest, repoRoot: string): ReferenceReport {
-  const listed = execFileSync(GIT_BINARY, ["ls-files", "-z", "--", PLATFORM_DIR], { cwd: repoRoot, encoding: "utf8" });
+  const listed = execFileSync(GIT_BINARY, ["ls-files", "--recurse-submodules", "-z", "--", PLATFORM_DIR], { cwd: repoRoot, encoding: "utf8" });
   const references = listed
     .split("\0")
     .filter((file) => PACKAGE_FILES.has(file.slice(file.lastIndexOf("/") + 1)) && existsSync(join(repoRoot, file)))

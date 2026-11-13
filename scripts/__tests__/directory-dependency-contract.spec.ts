@@ -22,7 +22,7 @@ const directoryDependencies = [
   ["scripts", "@octogee/shared", "dependencies", "file:../shared"],
 ] as const;
 
-const trackedNpmrcFiles = execFileSync("git", ["ls-files", "*.npmrc"], { cwd: repoRoot, encoding: "utf8" })
+const trackedNpmrcFiles = execFileSync("git", ["ls-files", "--recurse-submodules", "*.npmrc"], { cwd: repoRoot, encoding: "utf8" })
   .split("\n")
   .filter(Boolean);
 
