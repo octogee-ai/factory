@@ -31,6 +31,12 @@ account, so there is no production install of it yet. Users on a shared
 gateway work through Mattermost and Gitea; the OpenClaw Control UI is for
 isolated gateways only.
 
+Some features start switched off, among them agent import and export, the
+OpenClaw dashboard, project repository sources and voice. List the ones you
+want in the chart value `octogee-api.featureFlags.enabled`, using the keys in
+[`shared/types/feature-flags.ts`](shared/types/feature-flags.ts). An unknown
+key stops the platform API at startup.
+
 ## What you need to sign up for
 
 For `install.sh` on your own machine, one model key; Gemini's free tier works
