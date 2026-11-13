@@ -270,6 +270,24 @@ function applyMattermostAccountPatches(
   return changed;
 }
 
+function projectMattermostPlatformEndpoint(
+  mattermost: Record<string, unknown>,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const baseUrl = mattermost.baseUrl;
+  const platformEndpoint = baseUrl === MM_URL_PLACEHOLDER || (env.MM_URL && baseUrl === env.MM_URL);
+  if (!isIsolatedGatewayClassValue(env.GATEWAY_CLASS) || !platformEndpoint ||
+      Object.hasOwn(mattermost, "botToken")) return false;
+
+  for (const account of Object.values(objectProperty(mattermost, "accounts") ?? {})) {
+    if (isPlainObject(account) && !Object.hasOwn(account, "baseUrl")) {
+      account.baseUrl = MM_URL_PLACEHOLDER;
+    }
+  }
+  delete mattermost.baseUrl;
+  return true;
+}
+
 export function applyMattermostPreBootPatches(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -289,10 +307,9 @@ export function applyMattermostPreBootPatches(
   changed = applyMattermostActionDefaults(mattermost, logFn) || changed;
   changed = applyMattermostAckReactionDefaults(config, logFn) || changed;
 
-  if (env.MM_URL && mattermost.baseUrl !== MM_URL_PLACEHOLDER) {
-    mattermost.baseUrl = MM_URL_PLACEHOLDER;
+  if (projectMattermostPlatformEndpoint(mattermost, env)) {
     changed = true;
-    logFn(`restored channels.mattermost.baseUrl to the MM_URL placeholder`);
+    logFn("removed the root Mattermost endpoint after projecting it into configured accounts");
   }
 
   changed = disableMattermostNativeCommands(mattermost, "channels.mattermost", logFn) || changed;

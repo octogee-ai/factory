@@ -308,7 +308,7 @@ describe("system_config restore", () => {
       evaluateEnabled: true,
       executablePath: "/usr/bin/chromium",
     });
-    expect(seeded.channels.mattermost.baseUrl).toBe("${MM_URL}");
+    expect(seeded.channels.mattermost).not.toHaveProperty("baseUrl");
     expect(seeded.gateway.controlUi.basePath).toBe("/g/robert-xs-bd6a8f5a/openclaw");
   });
 

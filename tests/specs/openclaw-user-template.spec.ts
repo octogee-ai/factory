@@ -40,6 +40,20 @@ describe("infra/gateway/openclaw.isolated.template.json — the user seed boots 
     }
   });
 
+  it("seeds both Gateway classes with current migration decisions", () => {
+    for (const template of [shared, user]) {
+      expect(template.meta).toMatchObject({
+        migrations: {
+          modelPolicyAllowlist: true,
+          skillLibraryToolSplit: true,
+          skillWorkshopPlugin: true,
+          utilityModelSeparation: true,
+          webhookListeners: true,
+        },
+      });
+    }
+  });
+
   it("shares every platform wiring section byte-for-byte with the shared template", () => {
     for (const key of Object.keys(shared)) {
       if (USER_OWNED_TOP_LEVEL.has(key)) continue;

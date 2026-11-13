@@ -403,7 +403,7 @@ export function platformInvariantTable(context) {
             },
         },
         { kind: "exact", path: "channels.mattermost.enabled", value: true },
-        { kind: "exact", path: "channels.mattermost.baseUrl", value: isolated ? "${MM_URL}" : ABSENT, project: isolated },
+        ...(!isolated ? [{ kind: "exact", path: "channels.mattermost.baseUrl", value: ABSENT }] : []),
         { kind: "exact", path: "channels.mattermost.network.dangerouslyAllowPrivateNetwork", value: true },
         {
             kind: "exact",

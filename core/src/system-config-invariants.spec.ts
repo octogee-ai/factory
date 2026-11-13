@@ -1025,7 +1025,6 @@ describe("system config platform invariants", () => {
         "logging.redactSensitive",
         "secrets.providers.octogee-mattermost",
         "channels.mattermost.enabled",
-        "channels.mattermost.baseUrl",
         "channels.mattermost.network.dangerouslyAllowPrivateNetwork",
         "channels.mattermost.interactions.callbackBaseUrl",
         "channels.mattermost.interactions.allowedSourceIps",

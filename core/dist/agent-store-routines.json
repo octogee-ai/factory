@@ -1,5 +1,5 @@
 {
-    "sourceSha": "92373b3ca5fdcd653840df733dbf3d7759ee504c",
+    "sourceSha": "d7d29b20f700ba1aea25faa34d427d9e5203533c",
     "routines": {
         "memory_index_chunks_search_sync": [
             "2d8d1fc22ff8f8d631ea85fa92758c3ce290f085bac3ded62f2995fe1361d9cd"
@@ -90,6 +90,12 @@
         ],
         "constraint:acp_parent_stream_events:acp_parent_stream_events_session_id_fkey": [
             "1f7a6e73b9865e62bcde9d52dda98b585c1934ce8ea1912d148fc6ab609bf805"
+        ],
+        "constraint:agent_tool_usage:agent_tool_usage_pkey": [
+            "959bbb8204c1245f335ac1ec74b35b56871c635012fc21740542f296e2a8dd8f"
+        ],
+        "constraint:agent_tool_usage:agent_tool_usage_score_check": [
+            "262b2431f2c86b1a2e100ce3ec5eb8e129058a555ccb2bdf8a286b8545c3dcaa"
         ],
         "constraint:auth_profile_state:auth_profile_state_pkey": [
             "f93d9c8d904f51b6f3bd8116efccef2a25cbe1b608af661d69be373e10da214f"
@@ -668,6 +674,9 @@
         "index:acp_parent_stream_events:idx_agent_acp_parent_stream_run": [
             "60c65d763d9adcfe44f80abff36ce0396a3a51642c5b6eead9e59042ee5bf756",
             "cae238f5062f70208e0ac3dfeeafb6b66d725e0c7a70e2af34d60cf410341b04"
+        ],
+        "index:agent_tool_usage:agent_tool_usage_pkey": [
+            "78dc26dbc5eec2728149b25291deceb800d466b8036b9c1b83288d3933a46bc2"
         ],
         "index:auth_profile_state:auth_profile_state_pkey": [
             "60b28b60200abd8c8e0926ea749359a2a4c8f5430b807f504df3fbfdb8ea8489"
