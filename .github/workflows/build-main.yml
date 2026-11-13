@@ -11,61 +11,16 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
-      packages: write
+      packages: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
-        with:
-          node-version: 24.22.1
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
-      - uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Stage the pinned OpenClaw build
-        run: |
-          node infra/gateway/openclaw-tarball/fetch-release.mjs --to=infra/gateway/openclaw-tarball
-          bash infra/gateway/openclaw-tarball/extract-npm.sh infra/gateway/openclaw-tarball/openclaw-fork.tgz
-      - name: Build and publish the isolated Builder
-        run: |
-          node --input-type=module - <<'JS' > "$RUNNER_TEMP/builder-bake.json"
-          import { createHash } from 'node:crypto';
-          import { readFileSync } from 'node:fs';
-          import { gatewayBakePlan } from './scripts/ci/gateway-bake.mjs';
-          const sha = process.env.GITHUB_SHA;
-          const repository = 'ghcr.io/octogee-ai/octogee-cloud';
-          const hash = file => createHash('sha256').update(readFileSync(file)).digest('hex');
-          const base = `inputs-${'0'.repeat(64)}`;
-          const builder = 'octogee-gateway-builder';
-          const plan = gatewayBakePlan({repository, sha, base,
-            isolatedBase: `${base}-builder-${'0'.repeat(12)}`,
-            toolchain: {
-              lockSha256: hash('infra/gateway/isolated-toolchain/package-lock.json'),
-              groupsSha256: hash('infra/gateway/isolated-toolchain/groups.json'),
-            },
-            build: {base: true, isolatedBase: true, images: [builder]},
-          });
-          for (const [name, target] of Object.entries(plan.target)) {
-            target.context = '.';
-            delete target.tags;
-            target.output = name === builder
-              ? [`type=image,name=${repository}/${builder},push-by-digest=true,name-canonical=true,push=true`]
-              : ['type=cacheonly'];
-            target['cache-from'] = [`type=gha,scope=octogee-cloud-${name}-linux-amd64`];
-            delete target['cache-to'];
-          }
-          console.log(JSON.stringify(plan));
-          JS
-          docker buildx bake --file="$RUNNER_TEMP/builder-bake.json" --metadata-file="$RUNNER_TEMP/metadata.json"
-          digest=$(jq -er '."octogee-gateway-builder"."containerimage.digest" | select(test("^sha256:[0-9a-f]{64}$"))' "$RUNNER_TEMP/metadata.json")
-          image="ghcr.io/octogee-ai/octogee-cloud/octogee-gateway-builder@$digest"
-          echo "BUILDER_IMAGE=$image" >> "$GITHUB_ENV"
-          echo "Isolated Builder image: $image" >> "$GITHUB_STEP_SUMMARY"
       - name: Check patched packages in the exact isolated Builder digest
+        env:
+          BUILDER_IMAGE: ghcr.io/octogee-ai/octogee-cloud/octogee-gateway-builder@sha256:eb3b1e7f406dbaadafb8a424534ac33ead1c9cb90a89652dd28f94a1f3a4951d
         run: |
           docker run --rm -i --network none --entrypoint /bin/bash "$BUILDER_IMAGE" -seuo pipefail <<'SH'
           verify-runtime-image builder
@@ -74,7 +29,11 @@ jobs:
             [[ "$version" == *+octogee1 ]]
             printf '%s %s\n' "$package" "$version"
           done
-          [[ -z "$(dpkg -V libxml2 openssh-client)" ]]
+          differences=$(dpkg -V libxml2 openssh-client)
+          if [[ -n "$differences" ]]; then
+            printf '%s\n' "$differences"
+            printf '%s\n' "$differences" | awk 'NF && $2 != "c" { failed = 1 } END { exit failed }'
+          fi
           ldd /usr/bin/ffmpeg | grep 'libxml2.so.2 => /'
           ssh -V
           work=$(mktemp -d)
