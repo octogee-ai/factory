@@ -25,6 +25,8 @@ export interface BlobSignRequest {
 
 export interface BlobStore {
   save(key: string, bytes: Buffer | string, options: BlobWriteOptions): Promise<void>;
+  saveStream(key: string, source: AsyncIterable<Uint8Array>, options: { contentType: string }): Promise<void>;
+  move(from: string, to: string): Promise<void>;
   download(key: string): Promise<{ bytes: Buffer; revision: string } | null>;
   delete(key: string, generation?: string): Promise<void>;
   deletePrefix(prefix: string): Promise<void>;

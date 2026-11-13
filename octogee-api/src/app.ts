@@ -406,17 +406,6 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
 
   const app = express();
   if (process.env.BLOB_STORE_BACKEND !== "gcs") app.locals.workspaceBlobStore = runtimeBlobStore;
-  let agentImportBucket: ReturnType<typeof storage.bucket> | undefined;
-  const importBucket = {
-    file(path: string) {
-      agentImportBucket ??= storage.bucket();
-      return agentImportBucket.file(path);
-    },
-    deleteFiles(options: { prefix: string }) {
-      agentImportBucket ??= storage.bucket();
-      return agentImportBucket.deleteFiles(options);
-    },
-  };
   // client → GCLB (appends client-ip, lb-ip) → this app
   app.set("trust proxy", 2);
   const metricsRegistry = new Registry();
@@ -616,8 +605,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
     createAgentImportBrokerRoutes({
       store: platformStateStore,
       accounts: brokerRecords.accounts,
-      bucket: importBucket,
-      exportBlobs: app.locals.workspaceBlobStore,
+      blobs: runtimeBlobStore,
       readGithubToken: readFreshGithubToken,
       listGithubRepos: githubListRepos,
       readGithubRepoSize: async (owner, repo, token) => {
