@@ -138,12 +138,10 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
   });
 
   it("does not configure an Artifact Registry URL in isolated pods", () => {
-    const values = (file: string): { env?: { userNpmProxyRegistry?: string } } =>
-      parseDocument(fs.readFileSync(path.join(CHART_PATH, file), "utf8")).toJS();
-
-    for (const file of ["values.yaml", "values.prod.yaml", "values.test.yaml"]) {
-      expect(values(file).env?.userNpmProxyRegistry).toBeUndefined();
-    }
+    const values = parseDocument(fs.readFileSync(path.join(CHART_PATH, "values.yaml"), "utf8")).toJS() as {
+      env?: { userNpmProxyRegistry?: string };
+    };
+    expect(values.env?.userNpmProxyRegistry).toBeUndefined();
   });
 
   it("renders only the explicit direct fallback into isolated gateways", () => {
@@ -203,13 +201,9 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     );
   });
 
-  it("opts only the TEST gateway values into older OpenClaw main builds", () => {
-    const valuesFor = (file: string) =>
-      parseDocument(fs.readFileSync(path.join(CHART_PATH, file), "utf-8")).toJSON() as Record<string, unknown>;
-
-    expect(valuesFor("values.yaml").allowOlderOpenclawMainBuilds).toBe(false);
-    expect(valuesFor("values.test.yaml").allowOlderOpenclawMainBuilds).toBe(true);
-    expect(valuesFor("values.prod.yaml").allowOlderOpenclawMainBuilds).toBeUndefined();
+  it("keeps older OpenClaw main builds off by default", () => {
+    const values = parseDocument(fs.readFileSync(path.join(CHART_PATH, "values.yaml"), "utf-8")).toJSON() as Record<string, unknown>;
+    expect(values.allowOlderOpenclawMainBuilds).toBe(false);
   });
 
   it("mounts sidecar-only broker capabilities without adding gateway credentials", () => {

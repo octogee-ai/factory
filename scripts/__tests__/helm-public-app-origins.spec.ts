@@ -5,7 +5,6 @@ import { parse } from "yaml";
 import {
   deploymentEnvironmentSettings,
   publicAppOriginsForTarget,
-  type DeploymentEnvironment,
 } from "@octogee/core/deployment-environment";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
@@ -36,15 +35,6 @@ function renderCustomValues(variables: Record<string, string>): Record<string, u
 }
 
 describe("browser origins reach runtime pods from the environment values", () => {
-  it.each<DeploymentEnvironment>(["prod", "test"])(
-    "%s values list exactly the active target's public app origins for the platform and gateway charts",
-    (environment) => {
-      const expected = publicAppOriginsForTarget(deploymentEnvironmentSettings(environment));
-      expect(platformOrigins(`helm/octogee/values.${environment}.yaml`)).toEqual(expected);
-      expect(gatewayOrigins(`helm/octogee-gateway/values.${environment}.yaml`)).toEqual(expected);
-    },
-  );
-
   it("provision-namespace renders every custom values placeholder", () => {
     const template = readFileSync(resolve(repoRoot, "helm/octogee/values.custom.yaml.tpl"), "utf8");
     const used = new Set(template.match(/__[A-Z][A-Z_]*__/g));

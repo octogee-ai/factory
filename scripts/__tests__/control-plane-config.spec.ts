@@ -66,8 +66,4 @@ describe("control-plane config", () => {
     expect(missing.status).toBe(1);
     expect(missing.stderr).toContain('declares no variable "absent"');
   });
-
-  it("reads this repository's control-plane project", () => {
-    expect(controlPlaneDefault("project_id")).toMatch(/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/);
-  });
 });

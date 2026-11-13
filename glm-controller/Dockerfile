@@ -1,6 +1,13 @@
 FROM scratch AS overlay
 COPY glm-controller/src/main.ts /src/main.ts
 
+# A product build replaces this stage with `--build-context product=<product dir>`:
+# its helm/octogee and helm/octogee-gateway values files join the baked charts.
+# Without one, the platform values stand in as their own product.
+FROM scratch AS product
+COPY helm/octogee/values*.yaml /helm/octogee/
+COPY helm/octogee-gateway/values*.yaml /helm/octogee-gateway/
+
 FROM node:26.13.0-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS platform-npm
 ARG NPM_VERSION=12.2.1
 RUN apt-get update && apt-get install -y --no-install-recommends patch && rm -rf /var/lib/apt/lists/*
@@ -101,6 +108,8 @@ COPY --from=overlay / ./
 # the fleet controller renders against.
 COPY helm/octogee         /charts/octogee
 COPY helm/octogee-gateway /charts/octogee-gateway
+COPY --from=product helm/octogee/values*.yaml         /charts/octogee/
+COPY --from=product helm/octogee-gateway/values*.yaml /charts/octogee-gateway/
 
 USER 1000:1000
 ENTRYPOINT ["/usr/bin/tini", "--", "node", "dist/glm-controller/src/main.js"]

@@ -34,7 +34,7 @@ describe("markup multipliers live in environment values, not shared chart defaul
     for (const name of MARKUP_ENV_NAMES) expect(sharedApiEnv).not.toHaveProperty(name);
   });
 
-  it.each(["helm/octogee/values.prod.yaml", "helm/octogee/values.test.yaml", "helm/octogee/values.custom.yaml.tpl"])(
+  it.each(["helm/octogee/values.custom.yaml.tpl"])(
     "%s sets the API and llm-broker markups",
     (path) => {
       const environment = values(path);

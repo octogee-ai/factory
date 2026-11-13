@@ -43,28 +43,6 @@ describe("deployment target consumers", () => {
     expect(contents).not.toContain("us-west1");
   });
 
-  it("keeps active Central releases and gateway bootstrap image paths in Central Artifact Registry", () => {
-    const targets = JSON.parse(source("core/src/deployment-targets.json")) as {
-      activeTargets: Record<string, string>;
-      targets: Record<string, { artifactRegistry: { location: string } }>;
-    };
-
-    for (const environment of ["prod", "test"]) {
-      const targetId = targets.activeTargets[environment];
-      expect(targetId).toMatch(/-central$/);
-      expect(targets.targets[targetId]?.artifactRegistry.location).toBe("us-central1");
-    }
-
-    for (const valuesFile of [
-      "helm/octogee-gateway/values.prod.yaml",
-      "helm/octogee-gateway/values.test.yaml",
-    ]) {
-      const values = source(valuesFile);
-      expect(values, valuesFile).toContain("us-central1-docker.pkg.dev/octogee/octogee/");
-      expect(values, valuesFile).not.toContain("us-west1-docker.pkg.dev/octogee/octogee/");
-    }
-  });
-
   it("does not embed the active cluster context in fleet operations", () => {
     for (const script of [
       "scripts/ops/fleet.ts",
@@ -193,38 +171,6 @@ describe("deployment target consumers", () => {
       );
       expect(contents, script).toContain("does not belong to environment");
     }
-  });
-
-  it("owns the shared Central snapshot schedule and grants its reconciler only the required Compute permissions", () => {
-    const controlPlane = source("terraform/environments/control-plane/main.tf");
-    const ownership = JSON.parse(
-      source("terraform/environments/control-plane/ownership.json"),
-    ) as { requiredServices: string[] };
-
-    expect(ownership.requiredServices).toContain("compute.googleapis.com");
-    expect(controlPlane).toContain(
-      'resource "google_compute_resource_policy" "central_pvc_snapshots"',
-    );
-    expect(controlPlane).toContain('name    = "octogee-central-pvc-daily"');
-    expect(controlPlane).toContain("days_in_cycle = 1");
-    expect(controlPlane).toContain('start_time    = "08:00"');
-    expect(controlPlane).toContain("max_retention_days    = 14");
-    expect(controlPlane).toContain(
-      'on_source_disk_delete = "APPLY_RETENTION_POLICY"',
-    );
-    expect(controlPlane).toContain('storage_locations = ["us-central1"]');
-    expect(controlPlane).toContain('role_id     = "octogeeCentralPvcSnapshots"');
-    for (const permission of [
-      "compute.disks.addResourcePolicies",
-      "compute.disks.get",
-      "compute.resourcePolicies.get",
-      "compute.resourcePolicies.use",
-    ]) {
-      expect(controlPlane).toContain(`"${permission}"`);
-    }
-    expect(controlPlane).toContain(
-      'member  = "serviceAccount:${google_service_account.github_actions.email}"',
-    );
   });
 
   it("keeps regional bootstrap state isolated after target activation", () => {

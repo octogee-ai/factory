@@ -6,14 +6,25 @@ import * as fs from "node:fs";
 
 const REPO_ROOT = path.resolve(__dirname, "../../..");
 const UMBRELLA_PATH = path.join(REPO_ROOT, "helm/octogee");
-
-const VALUES_FILES = {
-  test: path.join(UMBRELLA_PATH, "values.test.yaml"),
-  prod: path.join(UMBRELLA_PATH, "values.prod.yaml"),
-} as const;
+export const INSTALLATION_VALUES = path.join(REPO_ROOT, "scripts/ops/kind/values.yaml");
+const DIGEST = `sha256:${"0".repeat(64)}`;
+export const INSTALLATION_SETS: Record<string, string> = {
+  ...Object.fromEntries(
+    ["octogee-api", "gateway-edge", "glm-controller", "mattermost"].flatMap((chart) => [
+      [`${chart}.image.repository`, `registry.example/${chart}`],
+      [`${chart}.image.tag`, "aaaaaaa"],
+      [`${chart}.image.digest`, DIGEST],
+    ]),
+  ),
+  "glm-controller.platformRelease.sourceSha": "a".repeat(40),
+  "glm-controller.platformRelease.gatewayImageRepository": "registry.example/octogee-gateway",
+  "glm-controller.platformRelease.gatewayImageTag": `aaaaaaa@${DIGEST}`,
+  "glm-controller.platformRelease.gatewayEdgeImageRepository": "registry.example/gateway-edge",
+  "glm-controller.platformRelease.gatewayEdgeImageTag": `aaaaaaa@${DIGEST}`,
+  "glm-controller.platformRelease.builderImageTag": `${"a".repeat(7)}-oc2026.7.2@sha256:${"b".repeat(64)}`,
+};
 
 export interface HelmTemplateOptions {
-  values?: keyof typeof VALUES_FILES;
   extraValues?: string;
   namespace?: string;
   sets?: Record<string, string>;
@@ -60,9 +71,9 @@ export function useUmbrellaChart(tempPrefix = "octogee-umbrella-chart-"): Umbrel
         "octogee",
         chartUnderTest,
         "-f",
-        VALUES_FILES[opts.values ?? "test"],
+        INSTALLATION_VALUES,
         "-n",
-        opts.namespace ?? "octogee-test",
+        opts.namespace ?? "octogee-local",
       ];
       if (opts.extraValues) {
         if (!tempChartRoot) throw new Error("umbrella chart is not initialized");
@@ -73,11 +84,7 @@ export function useUmbrellaChart(tempPrefix = "octogee-umbrella-chart-"): Umbrel
         fs.writeFileSync(extraValuesFile, opts.extraValues);
         args.push("-f", extraValuesFile);
       }
-      for (const [k, v] of Object.entries({
-        "glm-controller.platformRelease.sourceSha": "a".repeat(40),
-        "glm-controller.platformRelease.builderImageTag": `${"a".repeat(7)}-oc2026.7.2@sha256:${"b".repeat(64)}`,
-        ...opts.sets,
-      })) {
+      for (const [k, v] of Object.entries({ ...INSTALLATION_SETS, ...opts.sets })) {
         args.push("--set", `${k}=${v}`);
       }
       if (opts.isUpgrade) args.push("--is-upgrade");

@@ -7,7 +7,7 @@ const chart = useUmbrellaChart("octogee-glm-probes-");
 type Probe = { timeoutSeconds?: number; periodSeconds?: number; failureThreshold?: number };
 
 function probes(): Record<string, Probe> {
-  const rendered = findDoc(chart.helmTemplate({ values: "test" }), "Deployment", "glm-controller");
+  const rendered = findDoc(chart.helmTemplate(), "Deployment", "glm-controller");
   if (!rendered) throw new Error("glm-controller Deployment not found in rendered chart");
   const doc = parse(rendered) as {
     spec: {

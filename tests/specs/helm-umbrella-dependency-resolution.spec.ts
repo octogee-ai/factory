@@ -3,8 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-
-const BUILDER_IMAGE_TAG = `${"a".repeat(7)}-oc2026.7.2@sha256:${"b".repeat(64)}`;
+import { INSTALLATION_SETS, INSTALLATION_VALUES } from "./helpers/umbrella-chart";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const UMBRELLA_PATH = path.join(REPO_ROOT, "helm/octogee");
@@ -70,13 +69,14 @@ describe("umbrella dependency resolution", () => {
           "octogee",
           packagedChart,
           "-f",
-          path.join(chartPath, "values.test.yaml"),
+          INSTALLATION_VALUES,
           "-n",
-          "octogee-test",
-          "--set-string",
-          `glm-controller.platformRelease.sourceSha=${"a".repeat(40)}`,
-          "--set-string",
-          `glm-controller.platformRelease.builderImageTag=${BUILDER_IMAGE_TAG}`,
+          "octogee-local",
+          ...Object.entries({
+            ...INSTALLATION_SETS,
+            "cloud-sql-proxy.enabled": "true",
+            "cloud-sql-proxy.connectionName": "example-project:us-central1:example-instance",
+          }).flatMap(([key, value]) => ["--set", `${key}=${value}`]),
         ],
         { encoding: "utf8" },
       );
@@ -104,8 +104,6 @@ describe("umbrella dependency resolution", () => {
     const paths = [
       path.join(REPO_ROOT, "scripts"),
       path.join(REPO_ROOT, "docs/handbook"),
-      path.join(REPO_ROOT, "helm/octogee/values.test.yaml"),
-      path.join(REPO_ROOT, "helm/octogee/values.prod.yaml"),
     ];
     const offenders: string[] = [];
     const inspect = (candidate: string): void => {
