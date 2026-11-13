@@ -20,7 +20,10 @@ two installers.
 
 On the full platform, users on a shared gateway reach their agent through
 Mattermost and Gitea. The OpenClaw Control UI is for users on an isolated
-gateway only.
+gateway only. Such a user types `/ui` in Mattermost. The reply, which only they
+can see, holds a link to their Control UI that works once and expires after two
+minutes. Anyone else who types `/ui` is told the Control UI is for isolated
+gateways only.
 
 ## What you need to sign up for
 
