@@ -40,6 +40,7 @@ const KUBECTL = `case " $* " in
 esac`;
 
 const KIND = `case "$1 $2" in
+  "get clusters") printf '%s\\n' "\${CLUSTERS:-}" ;;
   "get nodes") echo octogee-control-plane ;;
   "create cluster") cat >/dev/null ;;
 esac`;
@@ -72,7 +73,7 @@ describe("kind-install.sh", () => {
 
   const run = (args: string[], machine = "arm64") => {
     host.stub("uname", `echo ${machine}`);
-    return host.run(SCRIPT, args, { env: { OCTOGEE_KIND_STATE: state, INDEX } });
+    return host.run(SCRIPT, args, { env: { OCTOGEE_KIND_STATE: state, INDEX, OPENROUTER_API_KEY: "sk-or-kind-test" } });
   };
   const copies = () => host.calls().filter(call => call.includes(" imagetools create "));
   const inspected = () => host.calls().filter(call => call.includes(" imagetools inspect "));
@@ -192,14 +193,39 @@ ${KUBECTL}`);
     rmSync(stored, { recursive: true, force: true });
   });
 
-  it("warns that agents cannot reply when no provider key is supplied or stored", () => {
+  const upWithoutExportedKey = (env: Record<string, string> = {}) => {
+    host.stub("uname", "echo arm64");
+    return host.run(SCRIPT, ["up", "--pull", `--sha=${PUBLISHED}`], { env: { OCTOGEE_KIND_STATE: state, INDEX, ...env } });
+  };
+  const startedInstalling = () => host.calls().filter(call =>
+    call.startsWith("docker ") || call.startsWith("kubectl ") || call.startsWith("helm ") || / (create|export) /.test(call));
+
+  it("refuses to install without a model provider key, before it starts the registry, creates the cluster or copies images", () => {
+    const result = upWithoutExportedKey();
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("https://openrouter.ai/keys");
+    for (const variable of ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]) expect(result.stderr).toContain(variable);
+    expect(startedInstalling()).toEqual([]);
+  });
+
+  it("refuses a rerun when the existing cluster stores no provider key", () => {
     host.stub("kubectl", `if [[ " $* " == *" get secret octogee-"* ]]; then exit 1; fi
 ${KUBECTL}`);
-    const result = run(["up", "--pull", `--sha=${PUBLISHED}`]);
+    const result = upWithoutExportedKey({ CLUSTERS: "octogee" });
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).toContain("no model provider key");
+    expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("OPENROUTER_API_KEY");
+    expect(startedInstalling().filter(call => !call.includes(" get secret octogee-"))).toEqual([]);
+  });
+
+  it("accepts a provider key the existing cluster already stores, so a rerun need not export it", () => {
+    host.stub("kubectl", `if [[ " $* " == *" get secret octogee-"* ]]; then [[ " $* " == *" get secret octogee-anthropic "* ]]; exit; fi
+${KUBECTL}`);
+    const result = upWithoutExportedKey({ CLUSTERS: "octogee" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).not.toContain("kind-install:");
   });
 
   describe("agent models", () => {
@@ -231,7 +257,7 @@ fi
 ${KUBECTL}`);
     const up = (env: Record<string, string> = {}, owner = "") => {
       host.stub("uname", "echo arm64");
-      return host.run(SCRIPT, ["up", "--pull", `--sha=${PUBLISHED}`], { env: { OCTOGEE_KIND_STATE: state, INDEX, SQL_DIR: sqlDir, OWNER: owner, ...env } });
+      return host.run(SCRIPT, ["up", "--pull", `--sha=${PUBLISHED}`], { env: { OCTOGEE_KIND_STATE: state, INDEX, CLUSTERS: "octogee", SQL_DIR: sqlDir, OWNER: owner, ...env } });
     };
     const statements = () => {
       const count = existsSync(join(sqlDir, "count")) ? Number(readFileSync(join(sqlDir, "count"), "utf8")) : 0;
@@ -277,13 +303,12 @@ ${KUBECTL}`);
       expect(Object.values(written()[0].value)).not.toContain("platform-openrouter/z-ai/glm-5.2");
     });
 
-    it("leaves the agent models alone when no provider key is stored", () => {
+    it("sets no agent models when the install has no provider key", () => {
       withStoredKeys([]);
       const result = up();
 
-      expect(result.status).toBe(0);
+      expect(result.status).not.toBe(0);
       expect(statements()).toEqual([]);
-      expect(result.stderr).toContain("no model provider key");
     });
 
     it("keeps agent models that someone else set", () => {
