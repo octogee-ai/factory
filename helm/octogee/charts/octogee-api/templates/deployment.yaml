@@ -1,3 +1,8 @@
+{{- $productPod := dict }}
+{{- with .Files.Get "product/pod.yaml" }}
+{{- $productPod = tpl . $ | fromYaml }}
+{{- with $productPod.Error }}{{ fail (printf "product/pod.yaml: %s" .) }}{{ end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -92,14 +97,9 @@ spec:
             - name: GATEWAY_COMPUTER_PROJECT_ID
               value: {{ required "global.computer.projectId is required" $computer.projectId | quote }}
             {{- end }}
-            - name: PROJECT_RUNNER_IMAGE
-              value: "{{ required "global.projectRunnerImage.repository is required" (.Values.global).projectRunnerImage.repository }}:{{ required "global.projectRunnerImage.tag is required" (.Values.global).projectRunnerImage.tag }}@{{ required "global.projectRunnerImage.digest is required" (.Values.global).projectRunnerImage.digest }}"
-            - name: PROJECT_RUN_BROKER_URL
-              value: "http://octogee-project-run-broker.{{ .Release.Namespace }}.svc.cluster.local:3002"
-            - name: PROJECT_RUN_CONTROLLER_URL
-              value: "http://octogee-project-run-controller.{{ .Release.Namespace }}.svc.cluster.local:3003"
-            - name: PROJECT_PUBLISHER_URL
-              value: "http://octogee-project-publisher.{{ .Release.Namespace }}.svc.cluster.local:3005"
+            {{- with $productPod.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
             {{- if .Values.gatewayServiceAccount }}
             # Admin fleet fulfillment provisions per-gateway auth-token
             # Secret Manager shells for gateway pods. This is the cattle
@@ -163,12 +163,9 @@ spec:
             - name: kubernetes-api-identity
               mountPath: /var/run/secrets/kubernetes-api
               readOnly: true
-            - name: project-run-control
-              mountPath: /var/run/secrets/project-run-control
-              readOnly: true
-            - name: project-publisher
-              mountPath: /var/run/secrets/project-publisher
-              readOnly: true
+            {{- with $productPod.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: octogee-api-sa-token
           projected:
@@ -188,17 +185,6 @@ spec:
                   items:
                     - key: ca.crt
                       path: ca.crt
-        - name: project-run-control
-          projected:
-            sources:
-              - serviceAccountToken:
-                  path: token
-                  audience: octogee-project-runs
-                  expirationSeconds: 3600
-        - name: project-publisher
-          projected:
-            sources:
-              - serviceAccountToken:
-                  path: token
-                  audience: octogee-project-publisher
-                  expirationSeconds: 3600
+        {{- with $productPod.volumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}

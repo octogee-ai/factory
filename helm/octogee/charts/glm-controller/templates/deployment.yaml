@@ -4,6 +4,11 @@
 {{- if not (regexMatch "^[a-f0-9]{40}$" $sourceSha) -}}
 {{- fail "glm-controller.platformRelease.sourceSha must be the selected full 40-character immutable build SHA" -}}
 {{- end -}}
+{{- $productPod := dict -}}
+{{- with .Files.Get "product/pod.yaml" -}}
+{{- $productPod = tpl . $ | fromYaml -}}
+{{- with $productPod.Error }}{{ fail (printf "product/pod.yaml: %s" .) }}{{ end -}}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -154,8 +159,9 @@ spec:
                 secretKeyRef:
                   name: mattermost-gateway
                   key: admin_token
-            - name: PROJECT_HOSTING_RETIREMENT_URL
-              value: {{ printf "http://octogee-api.%s.svc.cluster.local:3001/internal/project-hosting" .Release.Namespace | quote }}
+            {{- with $productPod.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
             {{- range $path, $_ := .Files.Glob "**/secret-env.yaml" }}
             {{- range ($.Files.Get $path | fromYamlArray) }}
             - name: {{ .envName }}
@@ -282,15 +288,11 @@ spec:
             failureThreshold: 5
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          {{- with $productPod.volumeMounts }}
           volumeMounts:
-            - name: project-hosting-retirement
-              mountPath: /var/run/secrets/project-hosting-retirement
-              readOnly: true
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with $productPod.volumes }}
       volumes:
-        - name: project-hosting-retirement
-          projected:
-            sources:
-              - serviceAccountToken:
-                  path: token
-                  audience: octogee-project-hosting-retirement
-                  expirationSeconds: 3600
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
