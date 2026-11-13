@@ -416,6 +416,8 @@ describe("user Git metadata refresh", () => {
     fs.chmodSync(receipt, 0o600);
     fs.writeFileSync(receipt, "attacker receipt\n");
     expect(userRepositoryHasCanonicalRemote(repoDir)).toBe(false);
+    fs.writeFileSync(receipt, Buffer.alloc(1025));
+    expect(userRepositoryHasCanonicalRemote(repoDir)).toBe(false);
     expect(externalizeUserGitDir(repoDir, {
       fetchCanonical: fetchCanonicalFrom(canonical.bare, () => fetches++),
     })).toBe(metadataDir);
