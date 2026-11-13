@@ -593,7 +593,7 @@ export async function writeActivationManifest(rootDir, manifest) {
 }
 export async function readActivationManifest(openclawDir, slug) {
     const manifestPath = activationManifestDiskPath(openclawDir, slug);
-    const file = await fs.open(manifestPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const file = await fs.open(manifestPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600);
     try {
         const before = await file.stat();
         if (!before.isFile())
