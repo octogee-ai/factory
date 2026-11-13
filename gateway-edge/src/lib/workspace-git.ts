@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
-import { lstatSync, promises as fs, readFileSync } from "node:fs";
+import { lstatSync, promises as fs } from "node:fs";
 import * as path from "node:path";
 
 import { acquireWorkspaceMutationLeaseSync, projectMutationLeaseGitDir } from "@octogee/core/workspace-mutation-lease";
 import { PROJECT_AGENT_WORKSPACE_PARTS } from "@octogee/shared/types/project";
-import { findUnsafeGitMetadataEntry } from "@octogee/core/git-metadata";
+import { findUnsafeGitMetadataEntry, readGitMetadataText } from "@octogee/core/git-metadata";
 import { isDuplicateAssetUpload } from "./workspace-manifest-conflict.js";
 
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
@@ -879,14 +879,10 @@ export function isTrustedGithubUserCheckout(cwd: string): boolean {
   const receipt = `${identity.metadataDir}.octogee-trusted-v3`;
   try {
     const metadataStat = lstatSync(identity.metadataDir);
-    const receiptStat = lstatSync(receipt);
-    if (
-      !metadataStat.isDirectory()
-      || metadataStat.isSymbolicLink()
-      || !receiptStat.isFile()
-      || receiptStat.isSymbolicLink()
-    ) return false;
-    return expectedUserRemoteUrl(cwd, readFileSync(receipt, "utf8"))
+    if (!metadataStat.isDirectory()) return false;
+    const receiptContents = readGitMetadataText(receipt, 1024);
+    if (receiptContents === null) return false;
+    return expectedUserRemoteUrl(cwd, receiptContents)
       ?.startsWith("https://github.com/") === true;
   } catch {
     return false;
@@ -897,7 +893,7 @@ export function isTrustedGiteaUserCheckout(cwd: string, repoName: string): boole
   const identity = userGitIdentity(cwd);
   if (!identity || !isSafeSlug(repoName)) return false;
   try {
-    return readFileSync(`${identity.metadataDir}.octogee-trusted-v3`, "utf8") ===
+    return readGitMetadataText(`${identity.metadataDir}.octogee-trusted-v3`, 1024) ===
       `octogee-customer-git-v3\ngitea:${repoName}\n`;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
@@ -946,11 +942,8 @@ async function validateTrustedMetadata(
   try {
     const unsafeEntry = findUnsafeGitMetadataEntry(gitDir, metadataRoot);
     if (unsafeEntry) return { error: `<unsafe-metadata:${unsafeEntry}>`, receiptContents: "" };
-    const receiptStat = await fs.lstat(receipt);
-    if (!receiptStat.isFile() || receiptStat.isSymbolicLink()) {
-      return { error: "<untrusted-metadata>", receiptContents: "" };
-    }
-    const receiptContents = await fs.readFile(receipt, "utf8");
+    const receiptContents = readGitMetadataText(receipt, 1024);
+    if (receiptContents === null) return { error: "<untrusted-metadata>", receiptContents: "" };
     const objects = await fs.lstat(path.join(gitDir, "objects"));
     return {
       error: objects.isDirectory() && !objects.isSymbolicLink()

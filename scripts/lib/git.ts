@@ -15,7 +15,7 @@ import { replaceFileAtomically, seedFileAtomically } from "./atomic-file.js";
 import { notesWelcomeSeed } from "@octogee/core/templates/project-seeds";
 
 import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
-import { findUnsafeGitMetadataEntry } from "@octogee/core/git-metadata";
+import { findUnsafeGitMetadataEntry, readGitMetadataText } from "@octogee/core/git-metadata";
 import type { ProjectRepoSource } from "@octogee/shared/types/project";
 import { ADD_USER_DEADLINE_MS } from "../../shared/types/fleet-controller.js";
 
@@ -410,10 +410,9 @@ function trustedUserGitSource(identity: UserGitIdentity): CanonicalUserGitSource
   const receipt = userGitTrustReceipt(identity.metadataDir);
   try {
     const targetStat = fs.lstatSync(identity.metadataDir);
-    const receiptStat = fs.lstatSync(receipt);
-    if (!targetStat.isDirectory() || targetStat.isSymbolicLink()
-      || !receiptStat.isFile() || receiptStat.isSymbolicLink()) return null;
-    return sourceFromReceipt(identity, fs.readFileSync(receipt, "utf8"));
+    if (!targetStat.isDirectory()) return null;
+    const contents = readGitMetadataText(receipt, 1024);
+    return contents === null ? null : sourceFromReceipt(identity, contents);
   } catch {
     return null;
   }
@@ -428,11 +427,9 @@ export function userRepositoryHasCanonicalRemote(repoDir: string): boolean {
   const configPath = path.join(identity.metadataDir, "config");
   try {
     if (findUnsafeGitMetadataEntry(identity.metadataDir, USER_GIT_METADATA_ROOT)) return false;
-    const localGitStat = fs.lstatSync(localGit);
-    const configStat = fs.lstatSync(configPath);
-    if (!localGitStat.isFile() || localGitStat.isSymbolicLink()
-      || !configStat.isFile() || configStat.isSymbolicLink()) return false;
-    if (fs.readFileSync(localGit, "utf8") !== `gitdir: ${identity.metadataDir}\n`) return false;
+    const pointer = `gitdir: ${identity.metadataDir}\n`;
+    if (readGitMetadataText(localGit, Buffer.byteLength(pointer)) !== pointer) return false;
+    if (!fs.lstatSync(configPath).isFile()) return false;
     const remoteUrl = execFileSync(
       GIT_BINARY,
       ["config", "--file", configPath, "--get", "remote.origin.url"],
@@ -456,14 +453,7 @@ export function userRepositoryHasCanonicalRemote(repoDir: string): boolean {
 }
 
 function currentUserGitPointer(filename: string, pointer: string): boolean {
-  try {
-    const stat = fs.lstatSync(filename);
-    return stat.isFile() && stat.nlink === 1 && (stat.mode & 0o400) !== 0 && (stat.mode & 0o333) === 0 &&
-      stat.size === Buffer.byteLength(pointer) && fs.readFileSync(filename, "utf8") === pointer;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw error;
-  }
+  return readGitMetadataText(filename, Buffer.byteLength(pointer), { requireReadOnly: true }) === pointer;
 }
 
 export function externalizeUserGitDir(

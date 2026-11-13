@@ -1,4 +1,4 @@
-import { lstatSync, readdirSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync } from "node:fs";
 import * as path from "node:path";
 const GIT_INDIRECTIONS = new Set([
     "commondir",
@@ -54,4 +54,35 @@ export function findUnsafeUserGitMetadataEntry(userMetadataDir) {
         }
         return false;
     });
+}
+export function readGitMetadataText(file, limit, { requireReadOnly = false } = {}) {
+    let fd;
+    try {
+        fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600);
+    }
+    catch (error) {
+        const code = error.code;
+        if (code === "ENOENT" || code === "ELOOP")
+            return null;
+        throw error;
+    }
+    try {
+        const stat = fstatSync(fd);
+        if (!stat.isFile() || stat.nlink !== 1 || stat.size > limit)
+            return null;
+        if (requireReadOnly && ((stat.mode & 0o400) === 0 || (stat.mode & 0o333) !== 0))
+            return null;
+        const bytes = Buffer.alloc(stat.size + 1);
+        let size = 0;
+        while (size < bytes.length) {
+            const read = readSync(fd, bytes, size, bytes.length - size, size);
+            if (read === 0)
+                break;
+            size += read;
+        }
+        return size === stat.size ? bytes.toString("utf8", 0, size) : null;
+    }
+    finally {
+        closeSync(fd);
+    }
 }
