@@ -76,7 +76,9 @@ describe("isDivertablePath", () => {
 });
 
 describe("divertWorktreeBinaries", () => {
-  it("does not reread unchanged retained binaries, but saves timestamp-preserving edits and deletions", async () => {
+  const linuxTest = it.skipIf(process.platform !== "linux");
+
+  linuxTest("does not reread unchanged retained binaries, but saves timestamp-preserving edits and deletions", async () => {
     const dir = await workspace();
     const binary = path.join(dir, "asset.png");
     await writeFile(binary, Buffer.from([0, 1]));
@@ -111,7 +113,7 @@ describe("divertWorktreeBinaries", () => {
     await divertWorktreeBinaries(dir, target, d, { retainLocalFiles: true });
     expect(JSON.parse(await readFile(path.join(dir, ".files/manifest.json"), "utf8"))).toEqual({});
   });
-  it("saves edits to materialized assets even when Git ignores their paths, and versions conversion to text", async () => {
+  linuxTest("saves edits to materialized assets even when Git ignores their paths, and versions conversion to text", async () => {
     const dir = await workspace();
     const binary = path.join(dir, "asset.png");
     const store = vi.fn(async (_target, _name, body: Buffer) => {
@@ -130,7 +132,7 @@ describe("divertWorktreeBinaries", () => {
     expect(JSON.parse(await readFile(path.join(dir, ".files/manifest.json"), "utf8"))["asset.png"].sha256).toBe(createHash("sha256").update("now text").digest("hex"));
     expect(store).toHaveBeenCalledTimes(3);
   });
-  it("keeps active project assets in place during autosave and reports changed files as unsaved", async () => {
+  linuxTest("keeps active project assets in place during autosave and reports changed files as unsaved", async () => {
     const dir = await workspace();
     const binary = path.join(dir, "asset.png");
     const bytes = Buffer.from([0, 1, 2, 3]);
@@ -148,7 +150,7 @@ describe("divertWorktreeBinaries", () => {
     expect((await divertWorktreeBinaries(dir, target, d, { retainLocalFiles: true })).failedPaths).toEqual(["asset.png"]);
     expect(await readFile(binary)).toEqual(Buffer.from([0, 4, 5]));
   });
-  it("uploads a binary and removes it so the commit never sees it", async () => {
+  linuxTest("uploads a binary and removes it so the commit never sees it", async () => {
     const dir = await workspace();
     await mkdir(path.join(dir, "notes"), { recursive: true });
     const binary = path.join(dir, "notes/diagram.png");
@@ -210,7 +212,7 @@ describe("divertWorktreeBinaries", () => {
     expect(result).toEqual({ diverted: [], failures: [], failedPaths: [] });
   });
 
-  it("reports an upload failure instead of deleting the file", async () => {
+  linuxTest("reports an upload failure instead of deleting the file", async () => {
     const dir = await workspace();
     const binary = path.join(dir, "logo.png");
     await writeFile(binary, Buffer.from([0x00, 0x01]));
@@ -241,7 +243,7 @@ describe("divertWorktreeBinaries", () => {
     expect(result.failures).toEqual(["git status failed: GIT_FAILED"]);
   });
 
-  it("rejects an oversize blob without reading it into memory", async () => {
+  linuxTest("rejects an oversize blob without reading it into memory", async () => {
     const dir = await workspace();
     const big = path.join(dir, "huge.bin");
     await writeFile(big, Buffer.from([0x00]));
@@ -259,7 +261,7 @@ describe("divertWorktreeBinaries", () => {
     expect(existsSync(big)).toBe(true);
   });
 
-  it("refuses a symlink instead of reading and publishing whatever it points at", async () => {
+  linuxTest("refuses a symlink instead of reading and publishing whatever it points at", async () => {
     const dir = await workspace();
     const outside = path.join(dir, "..", `octogee-outside-${process.pid}.bin`);
     await writeFile(outside, Buffer.from([0x00, 0x01, 0x02]));
@@ -279,7 +281,7 @@ describe("divertWorktreeBinaries", () => {
     expect(existsSync(outside)).toBe(true);
   });
 
-  it("never reads an outside secret through a symlinked workspace directory", async () => {
+  linuxTest("never reads an outside secret through a symlinked workspace directory", async () => {
     const dir = await workspace();
     const outside = await workspace();
     const secret = Buffer.from([0x00, 0x73, 0x65, 0x63, 0x72, 0x65, 0x74]);
@@ -299,7 +301,7 @@ describe("divertWorktreeBinaries", () => {
     expect(await readFile(path.join(outside, "secret.bin"))).toEqual(secret);
   });
 
-  it("does not remove a path replaced while the staged binary uploads", async () => {
+  linuxTest("does not remove a path replaced while the staged binary uploads", async () => {
     const dir = await workspace();
     const binary = path.join(dir, "logo.bin");
     const original = Buffer.from([0x00, 0x01, 0x02]);
@@ -325,7 +327,7 @@ describe("divertWorktreeBinaries", () => {
     expect(await readFile(outside)).toEqual(Buffer.from([0x00, 0x03]));
   });
 
-  it("leaves a regular file replacement created during upload", async () => {
+  linuxTest("leaves a regular file replacement created during upload", async () => {
     const dir = await workspace();
     const binary = path.join(dir, "logo.bin");
     const original = Buffer.from([0x00, 0x01, 0x02]);
@@ -348,7 +350,7 @@ describe("divertWorktreeBinaries", () => {
     expect(await readFile(binary)).toEqual(replacement);
   });
 
-  it("finds a binary inside a brand-new directory, which git collapses by default", async () => {
+  linuxTest("finds a binary inside a brand-new directory, which git collapses by default", async () => {
     const dir = await workspace();
     execFileSync("git", ["init", "-b", "main", dir]);
     execFileSync("git", ["-C", dir, "config", "user.email", "t@t.t"]);
@@ -370,7 +372,7 @@ describe("divertWorktreeBinaries", () => {
     expect(existsSync(path.join(dir, "images/logo.png"))).toBe(false);
   });
 
-  it("reads the file it uploads", async () => {
+  linuxTest("reads the file it uploads", async () => {
     const dir = await workspace();
     const bytes = Buffer.from([0x00, 0x11, 0x22]);
     await writeFile(path.join(dir, "a.bin"), bytes);

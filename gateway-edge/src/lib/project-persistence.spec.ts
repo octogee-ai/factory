@@ -9,12 +9,6 @@ import type { FleetBrokerProjectRestore } from "@octogee/shared/types/fleet-brok
 vi.mock("./connector-tokens.js", () => ({ readOwnerRuntimeConnectorAccessToken: vi.fn() }));
 
 let root: string;
-beforeEach(async () => {
-  root = await mkdtemp(path.join(tmpdir(), "projects-save-"));
-  await mkdir(path.join(root, "builder", "projects", "demo"), { recursive: true });
-  await writeProjectRestoreReady(path.join(root, "builder/projects/demo"), "builder", "demo");
-});
-afterEach(async () => { vi.useRealTimers(); await rm(root, { recursive: true, force: true }); });
 function deps() {
   return { readUser: vi.fn(async (slug: string) => ({ uid: `uid-${slug}`, slug, gatewayId: "builder-one", status: "complete" as const,
       checkpointEpoch: 1, projects: [{ projectSlug: "demo", giteaRepoName: "demo", provisioningState: "active" }] as FleetBrokerProjectRestore[] })),
@@ -27,7 +21,14 @@ function deps() {
       return prepared.ok ? { ok: true, result: { pushed: true } } : prepared;
     }) };
 }
-describe("User project persistence", () => {
+describe.skipIf(process.platform !== "linux")("User project persistence", () => {
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), "projects-save-"));
+    await mkdir(path.join(root, "builder", "projects", "demo"), { recursive: true });
+    await writeProjectRestoreReady(path.join(root, "builder/projects/demo"), "builder", "demo");
+  });
+  afterEach(async () => { vi.useRealTimers(); await rm(root, { recursive: true, force: true }); });
+
   it.each(["gitea", "github"])("does not restore, save or commit a disabled %s checkout recreated by Native agent bootstrap", async provider => {
     const disabled = path.join(root, "builder/projects/octogee");
     await mkdir(path.join(disabled, ".git"), { recursive: true });
