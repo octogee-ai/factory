@@ -71,10 +71,6 @@ COPY core/package.json /app/core/package.json
 COPY core/dist /app/core/dist
 COPY shared/package.json /app/shared/package.json
 COPY shared/dist /app/shared/dist
-COPY --from=product core/package.json /product/core/package.json
-COPY --from=product core/dist /product/core/dist
-COPY --from=product shared/package.json /product/shared/package.json
-COPY --from=product shared/dist /product/shared/dist
 
 # Two-stage install: dev deps for the build (typescript), then prune to
 # runtime-only after `tsc` finishes. Avoids `npx tsc` falling back to a
@@ -92,6 +88,7 @@ COPY --from=overlay / ./
 
 RUN npx tsc \
   && npm prune --omit=dev
+COPY --from=overlay / ./
 
 # Bake both helm charts into the image:
 #   - /charts/octogee         — umbrella (mattermost, gitea, glm-controller,
