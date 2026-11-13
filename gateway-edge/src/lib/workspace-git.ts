@@ -52,8 +52,7 @@ export async function resolveUserDir(
   slug: string,
 ): Promise<string | null> {
   if (!isSafeSlug(slug)) return null;
-  const dir = path.join(usersRoot, slug);
-  return verifyGitDir(dir);
+  return verifyGitDir(usersRoot, [slug]);
 }
 
 export async function resolveProjectDir(
@@ -62,22 +61,19 @@ export async function resolveProjectDir(
   projectSlug: string,
 ): Promise<string | null> {
   if (!isSafeSlug(slug) || !isSafeSlug(projectSlug)) return null;
-  const dir = path.join(usersRoot, slug, "projects", projectSlug);
-  return verifyGitDir(dir);
+  return verifyGitDir(usersRoot, [slug, "projects", projectSlug]);
 }
 
-async function verifyGitDir(dir: string): Promise<string | null> {
+async function verifyGitDir(usersRoot: string, parts: readonly string[]): Promise<string | null> {
   try {
-    const stat = await fs.stat(dir);
-    if (!stat.isDirectory()) return null;
-    const gitDir = path.join(dir, ".git");
-    try {
-      const gs = await fs.stat(gitDir);
-      if (!gs.isDirectory() && !gs.isFile()) return null;
-    } catch {
-      return null;
+    let dir = usersRoot;
+    if (!(await fs.lstat(dir)).isDirectory()) return null;
+    for (const part of parts) {
+      dir = path.join(dir, part);
+      if (!(await fs.lstat(dir)).isDirectory()) return null;
     }
-    return dir;
+    const metadata = await fs.lstat(path.join(dir, ".git"));
+    return metadata.isDirectory() || metadata.isFile() ? dir : null;
   } catch {
     return null;
   }

@@ -53,7 +53,7 @@ export async function cloneGithubProjectCheckout(
   const destination = path.join(parent, input.projectSlug);
   if (!isContained(root, destination)) throw new Error("invalid GitHub project clone target");
   await ensureDirectoryPath(root, parent);
-  if (await hasGitMetadata(destination)) return "exists";
+  if (await inspectCheckout(destination) === "ready") return "exists";
 
   const staging = await fs.mkdtemp(path.join(parent, `.${input.projectSlug}-clone-`));
   try {
@@ -64,8 +64,9 @@ export async function cloneGithubProjectCheckout(
     );
     await runGit(staging, ["config", "user.email", `${input.builderSlug}@octogee.com`]);
     await runGit(staging, ["config", "user.name", `Octo (${input.builderSlug})`]);
-    await installCheckout(staging, destination, root, input.builderSlug, input.projectSlug);
-    return "cloned";
+    const result = await installCheckout(staging, destination, root, input.builderSlug, input.projectSlug);
+    if (result === "exists") await fs.rm(staging, { recursive: true, force: true });
+    return result;
   } catch (error) {
     await fs.rm(staging, { recursive: true, force: true });
     throw error;
@@ -78,6 +79,7 @@ function isContained(root: string, target: string): boolean {
 }
 
 async function ensureDirectoryPath(root: string, target: string): Promise<void> {
+  if (!(await fs.lstat(root)).isDirectory()) throw new Error("GitHub project clone parent is not a directory");
   const relative = path.relative(root, target);
   let current = root;
   for (const part of relative.split(path.sep)) {
@@ -93,22 +95,9 @@ async function ensureDirectoryPath(root: string, target: string): Promise<void> 
         await fs.mkdir(current, { mode: 0o700 });
       } catch (mkdirError) {
         if ((mkdirError as NodeJS.ErrnoException).code !== "EEXIST") throw mkdirError;
+        if (!(await fs.lstat(current)).isDirectory()) throw new Error("GitHub project clone parent is not a directory");
       }
     }
-  }
-}
-
-async function hasGitMetadata(destination: string): Promise<boolean> {
-  try {
-    const destinationStat = await fs.lstat(destination);
-    if (destinationStat.isSymbolicLink() || !destinationStat.isDirectory()) {
-      throw new Error("GitHub project clone target is not a directory");
-    }
-    const metadata = await fs.lstat(path.join(destination, ".git"));
-    return metadata.isDirectory() || metadata.isFile();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw error;
   }
 }
 
@@ -118,38 +107,42 @@ async function installCheckout(
   usersRoot: string,
   builderSlug: string,
   projectSlug: string,
-): Promise<void> {
-  let destinationStat: Awaited<ReturnType<typeof fs.lstat>>;
-  try {
-    destinationStat = await fs.lstat(destination);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      await fs.rename(staging, destination);
-      return;
-    }
-    throw error;
-  }
-  if (destinationStat.isSymbolicLink() || !destinationStat.isDirectory()) {
-    throw new Error("GitHub project clone target is not a directory");
-  }
-
+): Promise<"cloned" | "exists"> {
   const lease = acquireWorkspaceMutationLeaseSync({
     workspaceDir: destination,
     gitDir: workspaceMutationLeaseGitDir(destination),
   });
   if (!lease) throw new Error("workspace mutation lease unavailable");
-  const quarantine = path.join(
-    path.dirname(usersRoot),
-    "git-worktree-quarantine",
-    builderSlug,
-    `${projectSlug}-${randomUUID()}`,
-  );
   try {
+    const existing = await inspectCheckout(destination);
+    if (existing === "ready") return "exists";
+    if (existing === "missing") {
+      await fs.rename(staging, destination);
+      return "cloned";
+    }
+    const quarantine = path.join(path.dirname(usersRoot), "git-worktree-quarantine", builderSlug, `${projectSlug}-${randomUUID()}`);
     await fs.mkdir(path.dirname(quarantine), { recursive: true, mode: 0o700 });
     await quarantineCheckout(destination, quarantine);
     await fs.rename(staging, destination);
+    return "cloned";
   } finally {
     lease.release();
+  }
+}
+
+async function inspectCheckout(destination: string): Promise<"missing" | "placeholder" | "ready"> {
+  try {
+    if (!(await fs.lstat(destination)).isDirectory()) throw new Error("GitHub project clone target is not a directory");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+    throw error;
+  }
+  try {
+    const metadata = await fs.lstat(path.join(destination, ".git"));
+    return metadata.isDirectory() || metadata.isFile() ? "ready" : "placeholder";
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "placeholder";
+    throw error;
   }
 }
 
