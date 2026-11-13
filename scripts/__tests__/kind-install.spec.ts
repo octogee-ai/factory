@@ -142,6 +142,10 @@ ${KUBECTL}`);
 
     expect(result.status).toBe(0);
     expect(host.calls().join("\n")).not.toMatch(/sk-(or|ant)-kind-test/);
+    expect(result.stdout + result.stderr).not.toMatch(/sk-(or|ant)-kind-test/);
+    expect(result.stdout).toContain("Stored ANTHROPIC_API_KEY in Secret octogee-anthropic");
+    expect(result.stdout).toContain("Stored OPENROUTER_API_KEY in Secret octogee-openrouter");
+    expect(result.stdout).not.toContain("OPENAI_API_KEY");
     expect(readFileSync(join(stored, "octogee-openrouter"), "utf8")).toBe("sk-or-kind-test");
     expect(readFileSync(join(stored, "octogee-anthropic"), "utf8")).toBe("sk-ant-kind-test");
     expect(existsSync(join(stored, "octogee-openai"))).toBe(false);

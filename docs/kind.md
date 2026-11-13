@@ -43,7 +43,9 @@ cd octogee-cloud
 
 Export your model provider key in the same terminal. The script reads
 `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`; set any of them.
-`read -s` keeps the key out of your shell history:
+It stores any of these your shell already exports, and names each one it stores,
+so unset a key you do not want in the cluster. `read -s` keeps the key out of
+your shell history:
 
 ```bash
 read -rs OPENROUTER_API_KEY && export OPENROUTER_API_KEY

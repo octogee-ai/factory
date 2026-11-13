@@ -275,6 +275,7 @@ apply_provider_keys() {
     variable="${pair#*:}"
     if [[ -n "${!variable:-}" ]]; then
       apply_secret "octogee-$provider" --from-file=api_key=<(printf '%s' "${!variable}")
+      printf 'Stored %s in Secret octogee-%s\n' "$variable" "$provider"
       stored=true
     elif k get secret "octogee-$provider" >/dev/null 2>&1; then
       stored=true
