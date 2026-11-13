@@ -4,6 +4,12 @@ import {
   workspaceGeneralChannelName,
 } from "@octogee/shared/types/identity";
 
+interface MattermostBody {
+  name?: string;
+  purpose?: string;
+  [field: string]: unknown;
+}
+
 const h = vi.hoisted(() => {
   const docs: Record<string, Record<string, unknown>> = {};
   const setSpy = vi.fn(async () => {});
@@ -21,7 +27,7 @@ const h = vi.hoisted(() => {
       for (const key of Object.keys(docs)) delete docs[key];
       Object.assign(docs, d);
     },
-    mmApiCall: vi.fn(),
+    mmApiCall: vi.fn<(method: string, endpoint: string, body?: MattermostBody) => Promise<unknown>>(),
     mintAndPersistDefaultAgentToken: vi.fn(),
     mmUploadAvatar: vi.fn(),
   };
@@ -102,11 +108,11 @@ const HAPPY: ProvisionInput = {
   photoURL: "",
 };
 
-const seq = () => h.mmApiCall.mock.calls.map(([m, e]: [string, string]) => `${m} ${e}`);
+const seq = () => h.mmApiCall.mock.calls.map(([m, e]) => `${m} ${e}`);
 const createdChannelNames = () =>
   h.mmApiCall.mock.calls
-    .filter(([m, e]: [string, string]) => m === "POST" && e === "/channels")
-    .map(([, , body]: [string, string, { name: string }]) => body.name);
+    .filter(([m, e]) => m === "POST" && e === "/channels")
+    .map(([, , body]) => body?.name);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -150,8 +156,8 @@ describe("provisionMattermostUser — new user (happy path)", () => {
     await call(HAPPY);
 
     const purposes = Object.fromEntries(h.mmApiCall.mock.calls
-      .filter(([m, e]: [string, string]) => m === "POST" && e === "/channels")
-      .map(([, , body]: [string, string, { name: string; purpose: string }]) => [body.name, body.purpose]));
+      .filter(([m, e]) => m === "POST" && e === "/channels")
+      .map(([, , body]) => [String(body?.name), body?.purpose]));
     expect(purposes).toEqual({
       [workspaceDefaultAgentChannelName("acme")]: "Ada's private channel with their agent",
       [workspaceGeneralChannelName("acme")]: "Ada's workspace — general discussion",
@@ -176,7 +182,7 @@ describe("provisionMattermostUser — new user (happy path)", () => {
       vi.unstubAllEnvs();
     }
 
-    const create = h.mmApiCall.mock.calls.find(([m, e]: [string, string]) => m === "POST" && e === "/commands");
+    const create = h.mmApiCall.mock.calls.find(([m, e]) => m === "POST" && e === "/commands");
     expect(create?.[2]).toMatchObject({
       team_id: "team-1",
       trigger: "ui",
@@ -202,7 +208,7 @@ describe("provisionMattermostUser — new user (happy path)", () => {
   it("creates the user MM user with the least-privilege system_user role", async () => {
     await call(HAPPY);
     const userCreate = h.mmApiCall.mock.calls.find(
-      ([m, e]: [string, string]) => m === "POST" && e === "/users",
+      ([m, e]) => m === "POST" && e === "/users",
     );
     expect(userCreate?.[2]).toMatchObject({ username: "acme", roles: "system_user" });
   });
