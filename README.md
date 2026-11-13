@@ -15,6 +15,8 @@ curl -fsSL https://raw.githubusercontent.com/octogee-ai/octogee-cloud/main/insta
 ```
 
 [Try it locally](docs/getting-started.md), or [run it in production](docs/running-in-the-cloud.md) on GKE or EKS.
+To run the full platform, with the fleet controller, users and shared gateways,
+on a local kind cluster, see [The full platform on kind](docs/kind.md).
 
 ## What you need to sign up for
 
