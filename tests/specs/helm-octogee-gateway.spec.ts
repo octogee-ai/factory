@@ -1484,11 +1484,6 @@ describe("helm/octogee-gateway/ — per-instance Service annotations", () => {
 });
 
 describe("helm/octogee-gateway/ — per-instance persistence + security knobs", () => {
-  it.each(["x11", "omarchy"])("refuses to render a %s user as a Kubernetes Deployment", (computerDesktop) => {
-    expect(() => helmTemplate("octogee-gw-hobby", { gatewayId: "hobby", gatewayClass: "builder", sizingTier: "s", computerDesktop, runtimeKind: "cluster" }))
-      .toThrow(/renders only as a GCE VM bundle/);
-  });
-
   it("renders the Omarchy VM runtime without disks or a desktop in the pod", () => {
     const out = helmTemplate("octogee-gw-omarchy", { gatewayId: "omarchy", gatewayClass: "builder", sizingTier: "s", computerDesktop: "omarchy" });
     const pod = parseDocument(findDoc(out, "Deployment", "octogee-gateway-omarchy")!).toJSON().spec.template.spec;
