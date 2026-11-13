@@ -11,7 +11,7 @@ import {
 } from "./gitea-naming.js";
 import { brokeredGitHost } from "./gitea-admin-broker-client.js";
 import { cloneGithubProjectViaBroker } from "./github-project-clone-broker.js";
-import { replaceFileAtomically } from "./atomic-file.js";
+import { replaceFileAtomically, seedFileAtomically } from "./atomic-file.js";
 import { notesWelcomeSeed } from "@octogee/core/templates/project-seeds";
 
 import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
@@ -1747,11 +1747,7 @@ export async function initWorkspaceRepo(
   const welcome = notesWelcomeSeed("this workspace");
   const welcomeDest = path.join(defaultAgentDir, welcome.relPath);
   fs.mkdirSync(path.dirname(welcomeDest), { recursive: true });
-  try {
-    fs.writeFileSync(welcomeDest, welcome.content, { encoding: "utf8", flag: "wx", mode: 0o644 });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
+  seedFileAtomically(welcomeDest, welcome.content, 0o644);
 
   try {
     await deps.ensureWorkspaceRepo(slug);

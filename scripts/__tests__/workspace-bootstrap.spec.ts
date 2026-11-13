@@ -99,8 +99,11 @@ describe("fresh workspace bootstrap", () => {
     expect(fs.existsSync(path.join(TEST_ROOT, "git-metadata", slug, "workspace.git")))
       .toBe(false);
 
+    const welcomePath = path.join(defaultAgentDir, "notes", "welcome.md");
+    fs.writeFileSync(welcomePath, "my existing note\n");
     git(remoteRoot, ["init", "--bare", "--initial-branch=main", remote]);
     await expect(initWorkspaceRepo(defaultAgentDir, slug, deps)).resolves.not.toBeNull();
+    expect(fs.readFileSync(welcomePath, "utf8")).toBe("my existing note\n");
     expect(git(remote, ["--git-dir", remote, "log", "-1", "--format=%s"]))
       .toBe("initial workspace skeleton");
   });
