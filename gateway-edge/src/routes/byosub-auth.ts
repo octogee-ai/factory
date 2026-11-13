@@ -150,12 +150,12 @@ export function createByosubAuthRouter(): Router {
     requireAuthenticatedUid,
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const b = (req.body || {}) as { flowId?: string; code?: string };
-        if (!b.flowId || typeof b.code !== "string" || !b.code) {
+        const { flowId, code } = (req.body ?? {}) as { flowId?: unknown; code?: unknown };
+        if (typeof flowId !== "string" || !flowId || typeof code !== "string" || !code) {
           res.status(400).json({ error: "flowId and code required" });
           return;
         }
-        const flow = await readByosubFlow(b.flowId);
+        const flow = await readByosubFlow(flowId);
         if (!flow || flow.uid !== req.uid!) {
           res.status(404).json({ error: "flow not found" });
           return;
@@ -173,8 +173,8 @@ export function createByosubAuthRouter(): Router {
           res.json(
             await gatewayClaudeSsoClient().submit({
               gatewayId: flow.gatewayId,
-              flowId: b.flowId,
-              code: b.code,
+              flowId,
+              code,
             }),
           );
         } catch (e) {

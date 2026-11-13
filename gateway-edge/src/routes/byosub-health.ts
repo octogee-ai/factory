@@ -72,7 +72,7 @@ export function createByosubHealthRouter(deps: ByosubHealthDeps): Router {
           res.status(422).json({ connected: false, status: "not_provisioned" });
           return;
         }
-        if (resolved.gatewayId !== pathGatewayId) {
+        if (resolved.gatewayId !== localGatewayId) {
           notOnThisPod(res);
           return;
         }

@@ -183,6 +183,12 @@ describe("byosub-auth sidecar router", () => {
     expect(ssoSubmit).toHaveBeenCalledWith({ gatewayId: "walter", flowId: "f1", code: "abc" });
   });
 
+  it.each([42, ["f1"], { id: "f1" }])("sso/submit: rejects a non-string flow id before broker lookup", async flowId => {
+    await request(app()).post("/byosub/sso/submit").send({ flowId, code: "abc" }).expect(400);
+    expect(readByosubFlow).not.toHaveBeenCalled();
+    expect(ssoSubmit).not.toHaveBeenCalled();
+  });
+
   it("sso/submit: 409 when the flow belongs to a different pod", async () => {
     readByosubFlow.mockResolvedValue({ uid: TEST_UID, gatewayId: "other-gw", agentId: AGENT, provider: "anthropic" });
     const res = await request(app()).post("/byosub/sso/submit").send({ flowId: "f1", code: "abc" });
