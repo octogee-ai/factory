@@ -238,14 +238,6 @@ gateway-edge:
   replicas: 1
   port: 3001
   serviceAccountName: octogee-gateway
-  env:
-    GITEA_ORG: "octogee"
-    FIREBASE_PROJECT_ID: ""
-    GCLOUD_PROJECT: ""
-    APP_URL: "https://app.example.com"
-    API_PUBLIC_URL: "https://api.example.com"
-    SITE_URL: "https://example.com"
-    K8S_NAMESPACE: "octogee"
   resources:
     requests:
       cpu: 50m

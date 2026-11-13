@@ -25,18 +25,6 @@ router:
 # so the crons no longer depend on the shared internal-service-key.
 cronServiceAccountName: octogee-cron
 
-env:
-  # K8s DNS — no hardcoded IPs
-  GITEA_URL: ""  # leave empty to auto-compute from K8S_NAMESPACE
-  GITEA_ORG: "octogee"
-  MM_URL: ""  # leave empty to auto-compute from K8S_NAMESPACE
-  FIREBASE_PROJECT_ID: ""
-  GCLOUD_PROJECT: ""
-  APP_URL: "https://app.example.com"
-  API_PUBLIC_URL: "https://api.example.com"
-  SITE_URL: "https://example.com"
-  K8S_NAMESPACE: "octogee"
-
 # The standalone gateway-edge Deployment is retired; gateway-edge now runs as
 # a sidecar in helm/octogee-gateway, where platform secrets are deliberately
 # omitted from gateway pods. Keep platform-secret env wiring out of this values
