@@ -264,8 +264,8 @@ path on `localhost` with that service's port.
 
 ## Talk to the agent
 
-Open the Coach channel in Mattermost and send a message. The agent answers
-there.
+Open the Coach channel in Mattermost and send a message. The agent answers in
+a thread under it, so the channel shows `1 reply` below your message.
 
 `kubectl port-forward` stops when a forwarded connection resets, which
 Mattermost's websocket can do, and prints `lost connection to pod`. Start the
