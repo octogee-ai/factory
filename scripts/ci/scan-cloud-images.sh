@@ -9,7 +9,7 @@ registry=ghcr.io/octogee-ai/octogee-cloud
 
 targets="$(node --input-type=module - "$manifest" "$source_sha" "$platform" "$registry" <<'JS'
 import { readFileSync } from "node:fs";
-import { PLATFORMS, PLATFORM_IMAGES } from "./scripts/ci/cloud-build.mjs";
+import { PLATFORMS, imagesFor } from "./scripts/ci/cloud-build.mjs";
 
 const [file, sha, platform, registry] = process.argv.slice(2);
 const manifest = JSON.parse(readFileSync(file, "utf8"));
@@ -17,7 +17,7 @@ if (!/^[a-f0-9]{40}$/.test(sha) || manifest?.sha !== sha || manifest.registry !=
   throw new Error(`Image manifest does not match ${registry} at ${sha}`);
 }
 if (!PLATFORMS.includes(platform)) throw new Error(`Unsupported platform: ${platform}`);
-for (const name of PLATFORM_IMAGES) {
+for (const name of imagesFor(platform)) {
   const digest = manifest.images?.[name]?.platforms?.[platform];
   if (typeof digest !== "string" || !/^sha256:[a-f0-9]{64}$/.test(digest)) {
     throw new Error(`Image manifest: ${name} has no valid ${platform} digest`);
