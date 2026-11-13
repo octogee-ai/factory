@@ -687,7 +687,7 @@ export async function writeActivationManifest(
     try { await file.writeFile(contents, "utf-8"); await file.sync(); }
     finally { await file.close(); }
     await fs.rename(temporary, fullPath);
-    const directory = await fs.open(path.dirname(fullPath), "r");
+    const directory = await fs.open(path.dirname(fullPath), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW, 0o700);
     try { await directory.sync(); } finally { await directory.close(); }
   } finally { await fs.rm(staging, { recursive: true, force: true }); }
   return { cwd: rootDir, path: relPath };
