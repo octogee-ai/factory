@@ -10,6 +10,7 @@ export interface ModelBrokerUsageLedgerEntry {
     readonly eventId: string;
     readonly ownerKey: string;
     readonly createdAt: number;
+    readonly expiresAt: number;
     readonly event: Readonly<Record<string, unknown>>;
     readonly totalTokens: number;
     readonly costUsd: number;

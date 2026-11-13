@@ -16,6 +16,7 @@ export interface ModelBrokerUsageLedgerEntry {
   readonly eventId: string;
   readonly ownerKey: string;
   readonly createdAt: number;
+  readonly expiresAt: number;
   readonly event: Readonly<Record<string, unknown>>;
   readonly totalTokens: number;
   readonly costUsd: number;
@@ -51,6 +52,7 @@ function validEntry(entry: ModelBrokerUsageLedgerEntry): ModelBrokerUsageLedgerE
   requireKey(entry.eventId, "event id");
   requireKey(entry.ownerKey, "owner key");
   requireTime(entry.createdAt, "creation time");
+  requireTime(entry.expiresAt, "expiry");
   requireTime(entry.totalTokens, "token count");
   requireAmount(entry.costUsd, "cost");
   requireAmount(entry.chargeUsd, "charge");
@@ -83,25 +85,32 @@ export function createPostgresModelBrokerUsageLedger(
       const entry = validEntry(input);
       const result = await pool.query<{ recorded: number }>(
         `WITH recorded AS (
-           INSERT INTO ${events} (event_id, owner_key, created_at, event)
-           VALUES ($1, $2, $3, $4::jsonb)
+           INSERT INTO ${events} (event_id, owner_key, created_at, expires_at, event)
+           VALUES ($1, $2, $3, $4, $5::jsonb)
            ON CONFLICT (event_id) DO NOTHING
            RETURNING event_id
          ), added AS (
            INSERT INTO ${spend} AS current (owner_key, period, start_ms, request_count, total_tokens, cost_usd, charge_usd)
-           SELECT $2, spend.period, spend.start_ms, 1, $5, $6, $7
-             FROM recorded, unnest($8::text[], $9::bigint[]) AS spend(period, start_ms)
-           ON CONFLICT (owner_key, period, start_ms) DO UPDATE SET
-             request_count = current.request_count + 1,
-             total_tokens = current.total_tokens + EXCLUDED.total_tokens,
-             cost_usd = current.cost_usd + EXCLUDED.cost_usd,
-             charge_usd = current.charge_usd + EXCLUDED.charge_usd
+           SELECT $2, spend.period, spend.start_ms, 1, $6, $7, $8
+             FROM recorded, unnest($9::text[], $10::bigint[]) AS spend(period, start_ms)
+           ON CONFLICT (owner_key, period) DO UPDATE SET
+             request_count = CASE WHEN EXCLUDED.start_ms = current.start_ms
+               THEN current.request_count + 1 ELSE EXCLUDED.request_count END,
+             total_tokens = CASE WHEN EXCLUDED.start_ms = current.start_ms
+               THEN current.total_tokens + EXCLUDED.total_tokens ELSE EXCLUDED.total_tokens END,
+             cost_usd = CASE WHEN EXCLUDED.start_ms = current.start_ms
+               THEN current.cost_usd + EXCLUDED.cost_usd ELSE EXCLUDED.cost_usd END,
+             charge_usd = CASE WHEN EXCLUDED.start_ms = current.start_ms
+               THEN current.charge_usd + EXCLUDED.charge_usd ELSE EXCLUDED.charge_usd END,
+             start_ms = EXCLUDED.start_ms
+           WHERE EXCLUDED.start_ms >= current.start_ms
          )
          SELECT count(*)::int AS recorded FROM recorded`,
         [
           entry.eventId,
           entry.ownerKey,
           entry.createdAt,
+          entry.expiresAt,
           JSON.stringify(entry.event),
           entry.totalTokens,
           entry.costUsd,
@@ -132,7 +141,9 @@ export function createPostgresModelBrokerUsageLedger(
     async reserveRequest(rateKey, startMs) {
       const result = await pool.query<{ request_count: number }>(
         `INSERT INTO ${rate} AS current (owner_key, start_ms, request_count) VALUES ($1, $2, 1)
-         ON CONFLICT (owner_key, start_ms) DO UPDATE SET request_count = current.request_count + 1
+         ON CONFLICT (owner_key) DO UPDATE SET
+           request_count = CASE WHEN EXCLUDED.start_ms > current.start_ms THEN 1 ELSE current.request_count + 1 END,
+           start_ms = GREATEST(current.start_ms, EXCLUDED.start_ms)
          RETURNING request_count`,
         [requireKey(rateKey, "rate key"), requireTime(startMs, "rate window start")],
       );

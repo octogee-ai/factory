@@ -1111,9 +1111,10 @@ CREATE TABLE model_broker_usage_events (
   event_id    text PRIMARY KEY CHECK (event_id <> ''),
   owner_key   text NOT NULL CHECK (owner_key <> ''),
   created_at  bigint NOT NULL,
+  expires_at  bigint NOT NULL,
   event       jsonb NOT NULL CHECK (jsonb_typeof(event) = 'object')
 );
-CREATE INDEX model_broker_usage_events_owner_idx ON model_broker_usage_events (owner_key, created_at);
+CREATE INDEX model_broker_usage_events_expiry_idx ON model_broker_usage_events (expires_at);
 
 CREATE TABLE model_broker_spend_periods (
   owner_key      text NOT NULL CHECK (owner_key <> ''),
@@ -1123,14 +1124,13 @@ CREATE TABLE model_broker_spend_periods (
   total_tokens   bigint NOT NULL CHECK (total_tokens >= 0),
   cost_usd       double precision NOT NULL CHECK (cost_usd >= 0),
   charge_usd     double precision NOT NULL CHECK (charge_usd >= 0),
-  PRIMARY KEY (owner_key, period, start_ms)
+  PRIMARY KEY (owner_key, period)
 );
 
 CREATE TABLE model_broker_rate_windows (
-  owner_key      text NOT NULL CHECK (owner_key <> ''),
+  owner_key      text PRIMARY KEY CHECK (owner_key <> ''),
   start_ms       bigint NOT NULL,
-  request_count  integer NOT NULL CHECK (request_count > 0),
-  PRIMARY KEY (owner_key, start_ms)
+  request_count  integer NOT NULL CHECK (request_count > 0)
 );
 `;
 export const PLATFORM_STATE_MIGRATIONS = [

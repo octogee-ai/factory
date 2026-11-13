@@ -6,7 +6,7 @@ import type {
 } from "@octogee/core/model-broker-usage-ledger";
 import { rateWindowStartMs, usageWindowStartMs, weekWindowStartMs } from "@octogee/shared/types/model-broker-usage";
 
-import { createLedgerModelBrokerUsageStore, type ModelBrokerUsageRecordInput } from "../lib/model-broker-usage.js";
+import { createLedgerModelBrokerUsageStore, usageExpiresAt, type ModelBrokerUsageRecordInput } from "../lib/model-broker-usage.js";
 
 const NOW = 1_800_000_123_456;
 
@@ -56,6 +56,7 @@ describe("model broker usage kept in the platform ledger", () => {
       eventId: "event-1",
       ownerKey: "uid-lin",
       createdAt: NOW,
+      expiresAt: usageExpiresAt(NOW).getTime(),
       totalTokens: 1_000_000,
       costUsd: 3,
       chargeUsd: 3,

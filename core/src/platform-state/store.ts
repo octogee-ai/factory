@@ -166,4 +166,5 @@ export interface ExpirySweepResult {
   readonly operations: number;
   readonly operationAudits: number;
   readonly accessGrants: number;
+  readonly modelBrokerUsageEvents: number;
 }

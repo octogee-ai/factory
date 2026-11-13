@@ -835,6 +835,7 @@ export function createLedgerModelBrokerUsageStore(ledger: PlatformUsageLedger): 
         eventId,
         ownerKey: windowOwnerKey(input),
         createdAt: now,
+        expiresAt: usageExpiresAt(now).getTime(),
         event: eventDocument({ ...input, eventId, now, cacheWriteTtl, cost, chargeUsd, windowStartMs }),
         totalTokens: totalTokens(input.usage),
         costUsd: cost.total,
