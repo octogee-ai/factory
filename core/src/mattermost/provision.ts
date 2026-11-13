@@ -15,6 +15,7 @@ import { userChannelMembers } from "./channel-members.js";
 import { mintAndPersistDefaultAgentToken } from "./default-agent-pat.js";
 import { USER_PAT_DESCRIPTION } from "./user-pat.js";
 import { mmUploadAvatar } from "./avatars.js";
+import { controlUiCommandSpec, controlUiCommandUrl } from "./control-ui-command.js";
 import { isPlaceholderEmail, placeholderEmail } from "../placeholder-email.js";
 
 export interface StoredMattermostNames {
@@ -225,6 +226,17 @@ async function setupWorkspaceTeam(host: ManagedChannelHost, opts: {
   if (adminUserId) {
     await host.addMember({ teamId }, adminUserId);
     log(`[mattermost] admin bot added to workspace team ${slug}`);
+  }
+
+  await registerControlUiCommand(host, teamId, slug);
+}
+
+async function registerControlUiCommand(host: ManagedChannelHost, teamId: string, slug: string): Promise<void> {
+  try {
+    const result = await host.ensureCommand(controlUiCommandSpec(teamId, controlUiCommandUrl(process.env.K8S_NAMESPACE)));
+    log(`[mattermost] /ui command ${result} in workspace team ${slug}`);
+  } catch (e: unknown) {
+    log(`⚠ [mattermost] /ui command registration failed for workspace team ${slug}: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 

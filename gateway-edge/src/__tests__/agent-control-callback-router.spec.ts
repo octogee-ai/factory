@@ -3,7 +3,10 @@ import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createAgentControlCallbackRouter,
+  signAgentControlRouterRequest,
+  signMattermostCommandRequest,
   verifyAgentControlRouterRequest,
+  verifyMattermostCommandRequest,
 } from "../agent-control-callback-router.js";
 import { createVmRoutesResolver } from "../vm-routes.js";
 
@@ -14,6 +17,72 @@ afterEach(async () => {
 });
 
 describe("private Mattermost callback router", () => {
+  it("forwards the /ui slash command to the API with a command proof and relays the ephemeral reply", async () => {
+    const seen: Array<{ url?: string; body: Buffer; headers: Record<string, unknown> }> = [];
+    const api = createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      seen.push({ url: req.url, body: Buffer.concat(chunks), headers: req.headers });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end('{"response_type":"ephemeral","text":"hi"}');
+    });
+    servers.push(api);
+    await new Promise<void>((resolve) => api.listen(0, "127.0.0.1", resolve));
+    const apiAddress = api.address();
+    if (!apiAddress || typeof apiAddress === "string") throw new Error("missing api address");
+    const gatewayOrigin = vi.fn(() => "http://127.0.0.1:1");
+    const router = createAgentControlCallbackRouter({
+      namespace: "octogee-test",
+      signingKey: ROUTER_KEY,
+      now: () => 1_000,
+      targetOrigin: gatewayOrigin,
+      apiOrigin: `http://127.0.0.1:${apiAddress.port}`,
+      log: () => undefined,
+    });
+    servers.push(router);
+    await new Promise<void>((resolve) => router.listen(0, "127.0.0.1", resolve));
+    const address = router.address();
+    if (!address || typeof address === "string") throw new Error("missing router address");
+    const form = "token=command-token&team_id=t&user_id=u&command=%2Fui";
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/internal/mattermost/commands/control-ui`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "x-octogee-mattermost-command-signature": "f".repeat(128),
+      },
+      body: form,
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ response_type: "ephemeral", text: "hi" });
+    expect(gatewayOrigin).not.toHaveBeenCalled();
+    expect(seen).toHaveLength(1);
+    const [delivery] = seen;
+    expect(delivery!.url).toBe("/internal/mattermost/commands/control-ui");
+    expect(delivery!.body.toString()).toBe(form);
+    expect(delivery!.headers["x-octogee-agent-control-signature"]).toBeUndefined();
+    const proof = {
+      command: String(delivery!.headers["x-octogee-mattermost-command"]),
+      timestamp: String(delivery!.headers["x-octogee-mattermost-command-timestamp"]),
+      signature: String(delivery!.headers["x-octogee-mattermost-command-signature"]),
+    };
+    expect(proof.signature).not.toBe("f".repeat(128));
+    expect(verifyMattermostCommandRequest(delivery!.body, proof, verificationKey, 1_000)).toBe(true);
+    expect(verifyMattermostCommandRequest(Buffer.from(`${form}&x=1`), proof, verificationKey, 1_000)).toBe(false);
+    expect(verifyMattermostCommandRequest(delivery!.body, proof, verificationKey, 1_000 + 31_000)).toBe(false);
+  });
+
+  it("keeps command proofs and gateway callback proofs from standing in for each other", () => {
+    const body = Buffer.from("token=t");
+    const gatewaySignature = signAgentControlRouterRequest(body, "walter", "1000", ROUTER_KEY);
+    const commandSignature = signMattermostCommandRequest(body, "control-ui", "1000", ROUTER_KEY);
+
+    expect(verifyMattermostCommandRequest(body, { command: "control-ui", timestamp: "1000", signature: gatewaySignature }, verificationKey, 1_000)).toBe(false);
+    expect(verifyAgentControlRouterRequest(body, { gatewayId: "walter", timestamp: "1000", signature: commandSignature }, verificationKey, 1_000)).toBe(false);
+    expect(verifyMattermostCommandRequest(body, { command: "other", timestamp: "1000", signature: commandSignature }, verificationKey, 1_000)).toBe(false);
+  });
+
   it("routes signed callbacks to current VM entries and falls back to shared services after removal", async () => {
     const deliveries: string[] = [];
     const vm = createServer(async (req, res) => {

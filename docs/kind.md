@@ -204,7 +204,8 @@ When `user inspect` shows provisioning `complete` and the user mounted on
 
 A user on a shared gateway works with their agent through Mattermost and Gitea.
 The OpenClaw Control UI is for users on an isolated gateway, and kind runs only
-shared gateways.
+shared gateways, so `/ui` in Mattermost answers that the Control UI is for
+isolated gateways only.
 
 ## Sign in to Mattermost and Gitea
 

@@ -141,7 +141,7 @@ spec:
             matchExpressions:
               - key: app
                 operator: In
-                values: [glm-controller, llm-broker, octogee-artifact-worker, octogee-gateway, octogee-vm-bridge]
+                values: [glm-controller, llm-broker, mattermost-callback-router, octogee-artifact-worker, octogee-gateway, octogee-vm-bridge]
       ports:
         - protocol: TCP
           port: 3001

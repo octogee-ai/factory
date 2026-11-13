@@ -4,6 +4,8 @@ import { Registry, collectDefaultMetrics, Counter, Histogram } from "prom-client
 
 import { corsMiddleware } from "../../gateway-edge/src/middleware/cors.js";
 import { requestLogger, logger, setLogService } from "../../gateway-edge/src/middleware/logging.js";
+import { mattermostChannelHostFromEnv } from "@octogee/core/channel-host";
+import { createMattermostCommandRoutes } from "./routes/mattermost-commands.js";
 
 import { errorHandler } from "../../gateway-edge/src/middleware/errors.js";
 import { helmetMiddleware } from "../../gateway-edge/src/middleware/security.js";
@@ -485,6 +487,12 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   app.use(httpRequestMetrics);
 
   app.use(requestLogger);
+  app.use("/internal/mattermost/commands", createMattermostCommandRoutes({
+    store: platformStateStore,
+    routerPublicKey: process.env.AGENT_CONTROL_ROUTER_PUBLIC_KEY ?? "",
+    commandTokenMatches: (input) => mattermostChannelHostFromEnv().commandTokenMatches(input),
+    log: (message, meta) => logger.warn(message, meta ?? {}),
+  }));
 
   installBodyParsers(app);
   mountDiagnosticRoutes(app, metricsRegistry, tenantBindingHealth);
