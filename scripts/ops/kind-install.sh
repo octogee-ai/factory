@@ -7,21 +7,34 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 NAME="octogee"
 NAMESPACE="octogee-local"
 BUILD=true
+PULL=false
+SHA=""
 CONTEXT_DIR="$ROOT"
 OPENCLAW_DIR=""
 IMAGES=""
+
+log() { printf '\n== %s\n' "$*"; }
+die() { printf 'kind-install: %s\n' "$*" >&2; exit 1; }
+
 COMMAND="${1:-}"
 [[ $# -gt 0 ]] && shift
 for arg in "$@"; do
   case "$arg" in
     --name=*) NAME="${arg#*=}" ;;
     --skip-build) BUILD=false ;;
+    --pull) PULL=true ;;
+    --sha=*) SHA="${arg#*=}" ;;
     --context-dir=*) CONTEXT_DIR="$(cd "${arg#*=}" && pwd)" ;;
     --openclaw-dir=*) OPENCLAW_DIR="$(cd "${arg#*=}" && pwd)" ;;
     --images=*) IMAGES="${arg#*=}" ;;
     *) echo "Unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
+if $PULL && ! $BUILD; then die "Choose either --pull or --skip-build"; fi
+if [[ -n "$SHA" ]]; then
+  $PULL || die "--sha needs --pull"
+  [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || die "--sha needs a full commit SHA"
+fi
 
 STATE="${OCTOGEE_KIND_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/octogee-kind}/$NAME"
 KUBECONFIG_FILE="$STATE/kubeconfig"
@@ -31,17 +44,16 @@ REGISTRY_PORT=5001
 REGISTRY_IMAGE="registry:3.0.0@sha256:6c5666b861f3505b116bb9aa9b25175e71210414bd010d92035ff64018f9457e"
 IMAGE_PREFIX="localhost:$REGISTRY_PORT/octogee/"
 PUSH_PREFIX="$REGISTRY:5000/octogee/"
+PUBLISHED="ghcr.io/octogee-ai/octogee-cloud"
 BUILDER="octogee-cloud-kind"
 ADMIN_PORT=18080
-SHA="$(git -C "$ROOT" rev-parse HEAD)"
+SHA="${SHA:-$(git -C "$ROOT" rev-parse HEAD)}"
 SHORT="${SHA:0:7}"
 case "$(uname -m)" in
   arm64|aarch64) PLATFORM=linux/arm64 ;;
   *) PLATFORM=linux/amd64 ;;
 esac
 
-log() { printf '\n== %s\n' "$*"; }
-die() { printf 'kind-install: %s\n' "$*" >&2; exit 1; }
 k() { kubectl --kubeconfig="$KUBECONFIG_FILE" --context="$KUBE_CONTEXT" -n "$NAMESPACE" "$@"; }
 h() { helm --kubeconfig="$KUBECONFIG_FILE" --kube-context="$KUBE_CONTEXT" -n "$NAMESPACE" "$@"; }
 random_hex() { openssl rand -hex "$1"; }
@@ -123,29 +135,43 @@ build_images() {
   [[ -n "$IMAGES" ]] && selection=(--images="$IMAGES")
   stage_openclaw
   ensure_builder
-  node "$ROOT/scripts/ci/cloud-build.mjs" plan --registry=ghcr.io/octogee-ai/octogee-cloud --sha="$SHA" \
+  node "$ROOT/scripts/ci/cloud-build.mjs" plan --registry="$PUBLISHED" --sha="$SHA" \
     --platform="$PLATFORM" --root="$CONTEXT_DIR" --push --tag-prefix="$PUSH_PREFIX" ${selection[@]+"${selection[@]}"} > "$plan"
   docker buildx bake --builder="$BUILDER" --allow=fs.read="$CONTEXT_DIR" --file="$plan" --metadata-file="$metadata"
   node "$ROOT/scripts/ci/cloud-build.mjs" digests --platform="$PLATFORM" --metadata="$metadata" ${selection[@]+"${selection[@]}"} > "$STATE/digests.built.json"
+  record_digests "$STATE/digests.built.json"
+}
+
+pull_images() {
+  local selection=()
+  [[ -n "$IMAGES" ]] && selection=(--images="$IMAGES")
+  node "$ROOT/scripts/ci/cloud-build.mjs" copy --registry="$PUBLISHED" --sha="$SHA" --platform="$PLATFORM" \
+    --tag-prefix="$IMAGE_PREFIX" ${selection[@]+"${selection[@]}"} > "$STATE/digests.pulled.json"
+  record_digests "$STATE/digests.pulled.json"
+}
+
+record_digests() {
   node -e '
     const fs = require("node:fs");
-    const [all, built] = process.argv.slice(1);
-    const fresh = JSON.parse(fs.readFileSync(built, "utf8"));
+    const [all, latest, sha] = process.argv.slice(1);
+    const fresh = JSON.parse(fs.readFileSync(latest, "utf8"));
     const previous = fs.existsSync(all) ? JSON.parse(fs.readFileSync(all, "utf8")) : { images: {} };
     const kept = previous.platform === fresh.platform ? previous.images : {};
-    fs.writeFileSync(all, JSON.stringify({ platform: fresh.platform, images: { ...kept, ...fresh.images } }, null, 2) + "\n");
-  ' "$STATE/digests.json" "$STATE/digests.built.json"
+    fs.writeFileSync(all, JSON.stringify({ platform: fresh.platform, sha, images: { ...kept, ...fresh.images } }, null, 2) + "\n");
+  ' "$STATE/digests.json" "$1" "$SHA"
 }
 
 image_values() {
-  node --input-type=module - "$STATE/digests.json" "$IMAGE_PREFIX" "$SHORT" "$SHA" \
+  node --input-type=module - "$STATE/digests.json" "$IMAGE_PREFIX" \
     "$(node -p "require('$ROOT/infra/gateway/openclaw-tarball/current.json').sourceSha")" > "$STATE/images.yaml" <<'JS'
 import { readFileSync } from "node:fs";
-const [file, prefix, tag, sha, openclaw] = process.argv.slice(2);
-const { images } = JSON.parse(readFileSync(file, "utf8"));
+const [file, prefix, openclaw] = process.argv.slice(2);
+const { sha, images } = JSON.parse(readFileSync(file, "utf8"));
+if (!/^[a-f0-9]{40}$/.test(sha ?? "")) throw new Error(`${file} names no source SHA; run up again without --skip-build`);
+const tag = sha.slice(0, 7);
 const required = ["glm-controller", "gateway-edge", "octogee-gateway", "mattermost"];
 const missing = required.filter(name => !images[name]);
-if (missing.length) throw new Error(`No image was built for ${missing.join(", ")}`);
+if (missing.length) throw new Error(`No image was built or copied for ${missing.join(", ")}`);
 const image = name => ({ repository: `${prefix}${name}`, tag, digest: images[name] ?? `sha256:${"0".repeat(64)}` });
 console.log(JSON.stringify({
   mattermost: { image: image("mattermost") },
@@ -330,11 +356,14 @@ up() {
   log "Cluster $KUBE_CONTEXT (kubeconfig $KUBECONFIG_FILE)"
   ensure_registry
   ensure_cluster
-  if $BUILD; then
+  if $PULL; then
+    log "Copying the $PLATFORM images published at $SHORT"
+    pull_images
+  elif $BUILD; then
     log "Building $PLATFORM images at $SHORT"
     build_images
   fi
-  [[ -s "$STATE/digests.json" ]] || die "No built images; run without --skip-build first"
+  [[ -s "$STATE/digests.json" ]] || die "No images yet; run up without --skip-build, or with --pull"
   image_values
   log "Secrets"
   write_secrets
@@ -383,5 +412,5 @@ case "$COMMAND" in
   up) up ;;
   down) down ;;
   status) status ;;
-  *) echo "Usage: $0 {up|down|status} [--name=NAME] [--skip-build] [--images=A,B] [--context-dir=DIR] [--openclaw-dir=DIR]" >&2; exit 2 ;;
+  *) echo "Usage: $0 {up|down|status} [--name=NAME] [--skip-build | --pull [--sha=SHA]] [--images=A,B] [--context-dir=DIR] [--openclaw-dir=DIR]" >&2; exit 2 ;;
 esac

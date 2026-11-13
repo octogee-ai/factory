@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { cloudBakePlan, digestsFromMetadata, imageManifest, imagePaths, mergeCommands, productFindings } from "../ci/cloud-build.mjs";
+import { cloudBakePlan, copyPublished, digestsFromMetadata, imageManifest, imagePaths, mergeCommands, productFindings } from "../ci/cloud-build.mjs";
 import { IMAGE_BUILDS } from "../ci/image-build.mjs";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
@@ -118,22 +118,45 @@ describe("public platform image manifest", () => {
   });
 });
 
-describe("image file listing", () => {
-  const withTools = async (tools: Record<string, string>, run: () => Promise<unknown>) => {
-    const bin = mkdtempSync(join(tmpdir(), "cloud-build-tools-"));
-    const path = process.env.PATH;
-    try {
-      for (const [name, script] of Object.entries(tools)) {
-        writeFileSync(join(bin, name), `#!/bin/sh\n${script}\n`);
-        chmodSync(join(bin, name), 0o755);
-      }
-      process.env.PATH = `${bin}:${path}`;
-      return await run();
-    } finally {
-      process.env.PATH = path;
-      rmSync(bin, { recursive: true, force: true });
+const withTools = async (tools: Record<string, string>, run: () => unknown) => {
+  const bin = mkdtempSync(join(tmpdir(), "cloud-build-tools-"));
+  const path = process.env.PATH;
+  try {
+    for (const [name, script] of Object.entries(tools)) {
+      writeFileSync(join(bin, name), `#!/bin/sh\n${script}\n`);
+      chmodSync(join(bin, name), 0o755);
     }
-  };
+    process.env.PATH = `${bin}:${path}`;
+    return await run();
+  } finally {
+    process.env.PATH = path;
+    rmSync(bin, { recursive: true, force: true });
+  }
+};
+
+describe("published image copy", () => {
+  const amd64Only = JSON.stringify({ manifests: [{ digest: digest(1), platform: { os: "linux", architecture: "amd64" } }] });
+  const copy = () => copyPublished({ registry, sha, platform: "linux/arm64", tagPrefix: "localhost:5001/octogee/", images: ["glm-controller"] });
+
+  it("refuses an image that was not published for the host's platform, and copies nothing", async () => {
+    const docker = `case "$3" in inspect) echo '${amd64Only}' ;; create) exit 9 ;; esac`;
+    await expect(withTools({ docker }, copy)).rejects.toThrow(`${registry}/glm-controller:${sha} has no linux/arm64 image`);
+  });
+
+  it("names the image a commit has not published", async () => {
+    await expect(withTools({ docker: "exit 1" }, copy)).rejects.toThrow(`No published image at ${registry}/glm-controller:${sha}`);
+  });
+
+  it.each([
+    [{ tagPrefix: "" }, "tag prefix"],
+    [{ sha: "abc" }, "full source SHA"],
+    [{ images: ["artifact-worker"] }, "Unknown platform image"],
+  ])("refuses %j", (overrides, message) => {
+    expect(() => copyPublished({ registry, sha, platform: "linux/arm64", tagPrefix: "x/", ...overrides })).toThrow(message);
+  });
+});
+
+describe("image file listing", () => {
   const docker = (exportStep: string) =>
     `case "$1" in create) echo container-1 ;; export) ${exportStep} ;; rm) exit 0 ;; esac`;
 
