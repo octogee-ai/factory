@@ -29,11 +29,13 @@ jobs:
             [[ "$version" == *+octogee1 ]]
             printf '%s %s\n' "$package" "$version"
           done
-          differences=$(dpkg -V libxml2 openssh-client)
-          if [[ -n "$differences" ]]; then
-            printf '%s\n' "$differences"
-            printf '%s\n' "$differences" | awk 'NF && $2 != "c" { failed = 1 } END { exit failed }'
-          fi
+          multiarch=x86_64-linux-gnu
+          manifest="/var/lib/dpkg/info/libxml2:$(dpkg --print-architecture).md5sums"
+          for path in "usr/lib/$multiarch/$(basename "$(readlink -f "/usr/lib/$multiarch/libxml2.so.2")")" usr/bin/ssh usr/bin/ssh-keygen; do
+            checksum=$(awk -v path="$path" '$2 == path { print }' "$manifest" /var/lib/dpkg/info/openssh-client.md5sums)
+            [[ -n "$checksum" ]]
+            (cd / && printf '%s\n' "$checksum" | md5sum --check --strict)
+          done
           ldd /usr/bin/ffmpeg | grep 'libxml2.so.2 => /'
           ssh -V
           work=$(mktemp -d)
