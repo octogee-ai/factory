@@ -15,7 +15,7 @@ describe("deployment target Helm values", () => {
 
     expect(rendered).toContain('deploymentTargetId: "test-central"');
     expect(rendered).toContain('deploymentProjectId: "octogee-test"');
-    expect(rendered).toContain('customerHostingProjectId: "octogee-customer-hosting-test"');
+    expect(rendered).toContain('customerHostingProjectId: "example-test-hosting"');
     expect(rendered.match(/customerHostingProjectId:/g)).toHaveLength(1);
     expect(rendered).not.toContain("OCTOGEE_CUSTOMER_HOSTING_PROJECT_ID:");
     expect(rendered).not.toContain("projectPublisher:");
