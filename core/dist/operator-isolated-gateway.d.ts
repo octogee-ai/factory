@@ -1,6 +1,7 @@
 import type { GatewayMutableConfig } from "@octogee/shared/types/gateway-mutable-config";
 import type { SizingTier } from "@octogee/shared/types/sizing";
 import { type GatewayArtifact } from "./gateway-live-release.js";
+import type { GatewaySizingProfile } from "./platform-state/config.js";
 import type { PlatformStateRepositories, PlatformStateStore } from "./platform-state/store.js";
 export declare const OPERATOR_ISOLATED_GATEWAY_SOURCE = "operator-isolated-gateway";
 export declare function operatorAllocationId(): string;
@@ -12,6 +13,9 @@ export interface OperatorIsolatedGatewayAnswer {
     body: Record<string, unknown>;
 }
 type Reader = Pick<PlatformStateRepositories, "config" | "users" | "gateways" | "fleetRegistry" | "journal">;
+type IsolatedSizingProfile = Extract<GatewaySizingProfile, {
+    isolation: "isolated";
+}>;
 export interface NamedIsolatedSizingProfile {
     sizingKey: string;
     sizingTier: SizingTier;
@@ -23,6 +27,7 @@ interface GivePlan extends NamedIsolatedSizingProfile {
     artifact: GatewayArtifact;
 }
 export declare function isolatedSizingProfileKeys(reader: Pick<PlatformStateRepositories, "config">): Promise<string[]>;
+export declare function hasVmShape(profile: IsolatedSizingProfile): boolean;
 export declare function resolveIsolatedSizingProfile(reader: Pick<PlatformStateRepositories, "config">, named: unknown): Promise<NamedIsolatedSizingProfile | {
     refusal: OperatorIsolatedGatewayAnswer;
 }>;

@@ -24,7 +24,7 @@ export async function isolatedSizingProfileKeys(reader) {
     const profiles = (await reader.config.orchestrator.get())?.sizingProfiles ?? {};
     return Object.entries(profiles).filter(([, profile]) => profile.isolation === "isolated").map(([key]) => key).sort();
 }
-function hasVmShape(profile) {
+export function hasVmShape(profile) {
     const { computer } = profile;
     return computer.runtime === "gce-vm" && computer.machineType !== null &&
         computer.provisioningModel !== null && computer.bootDisk !== null;
