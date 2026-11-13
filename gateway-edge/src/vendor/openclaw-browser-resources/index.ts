@@ -2744,7 +2744,7 @@ var ga, fe, _t = I(() => {
   }, fe = ga;
 });
 
-// octogee/app/openclaw-islands/i18n.ts
+// gateway-edge/openclaw-browser-resources/i18n.ts
 var Hr = I(() => {
   _t();
 });
@@ -7195,7 +7195,7 @@ function co(e, t) {
   return ao.set(e, { toolMessages: t, latest: o }), o;
 }
 
-// octogee/app/openclaw-browser/resources.ts
+// gateway-edge/openclaw-browser-resources/entry.ts
 function em(e, t) {
   return [...co(e, []).values()].filter((r) => r.tab.target === "host" && r.tab.profile === t).at(-1) ?? null;
 }

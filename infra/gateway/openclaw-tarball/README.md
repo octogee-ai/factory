@@ -156,18 +156,17 @@ After changing the source pin, regenerate `core/src/agent-store-routines.json`
 with `scripts/ops/qualify-agent-store-routines.mjs` against disposable PostgreSQL
 16 with pgvector 0.8.7, then rebuild `core/`.
 
-The hosted UI islands ship from the same source. Regenerate them from the same
-clean, built checkout before publishing, so `sourceSha` pins the gateway objects
-and the committed bundles together:
+gateway-edge's Browser resource projection ships from the same source.
+Regenerate it from the same clean checkout before publishing, so `sourceSha`
+pins the gateway objects and the committed bundle together:
 
 ```bash
-node app/openclaw-islands/build.mjs /path/to/openclaw "$(git -C /path/to/openclaw rev-parse HEAD)"
+node gateway-edge/openclaw-browser-resources/build.mjs /path/to/openclaw "$(git -C /path/to/openclaw rev-parse HEAD)"
 ```
 
-`tests/specs/openclaw-native-islands-pin.spec.ts` fails a PR whose committed
-islands do not match `sourceSha`, and the build prints the upstream changes to
-the islands' input files since the previous pin (see
-[app/openclaw-islands/README.md](../../../../app/openclaw-islands/README.md)).
+Its `provenance.json` records that source and a digest of the generator and
+adapter files in `gateway-edge/openclaw-browser-resources/`, so the committed
+bundle can be checked against the pin and against the files that shaped it.
 
 Once `current.json` names the new build, run the state pin-roll ceremony.
 
