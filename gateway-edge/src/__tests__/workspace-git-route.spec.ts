@@ -109,6 +109,18 @@ describe("gateway-local workspace git authorization", () => {
     expect(h.gitStatus).toHaveBeenCalledWith("/customers/alice/projects/orbit");
   });
 
+  it("limits mutations by the broker's user identity and leaves read traffic available", async () => {
+    const client = request(app());
+    const commit = () => client.post("/api/g/walter/workspace/git/commit")
+      .set("authorization", BEARER).send({ slug: "alice", project: "orbit", message: "save" });
+    for (let count = 0; count < 30; count++) await commit().expect(200);
+    await commit().expect(429);
+    expect(h.gitCommit).toHaveBeenCalledTimes(30);
+    await client.get("/api/g/walter/workspace/git/status?slug=alice&project=orbit").set("authorization", BEARER).expect(200);
+    h.authorize.mockResolvedValueOnce(grant({ uid: "uid-second-member" }));
+    await commit().expect(200);
+  });
+
   it.each(["status", "diff", "log", "branches"])("answers 503 CUSTOMER_DIR_MISSING for /git/%s when an authorized workspace is not mounted", async (name) => {
     h.authorize.mockResolvedValueOnce(grant({ projectSlug: null, githubToken: null }));
     h.resolveUserDir.mockResolvedValueOnce(null);
