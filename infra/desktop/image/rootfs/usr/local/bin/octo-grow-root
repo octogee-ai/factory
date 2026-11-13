@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MOUNT="${OCTO_GROW_ROOT_MOUNT:-/}"
+SECTOR_BYTES=512
+GPT_SLACK_BYTES=$((1024 * 1024))
+
+source="$(findmnt -no SOURCE "$MOUNT")"
+source="${source%%\[*}"
+read -r parent number start size <<<"$(lsblk -bdno PKNAME,PARTN,START,SIZE "$source")"
+disk="/dev/$parent"
+disk_bytes="$(lsblk -bdno SIZE "$disk")"
+partition_end=$((start * SECTOR_BYTES + size))
+
+if ((disk_bytes - partition_end > GPT_SLACK_BYTES)); then
+  echo "octo-grow-root: growing $source from $partition_end to $disk_bytes bytes on $disk"
+  echo ", +" | sfdisk --no-reread --no-tell-kernel --force -N "$number" "$disk"
+  partx --update --nr "$number" "$disk"
+else
+  echo "octo-grow-root: $source already fills $disk ($disk_bytes bytes)"
+fi
+btrfs filesystem resize max "$MOUNT"

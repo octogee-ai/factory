@@ -1,0 +1,11 @@
+[Unit]
+Description=Install SSH keys for octo from GCE instance metadata
+Requires=octo-home-disk.service
+After=network-online.target octo-home-disk.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/octo-metadata-ssh-keys
+StandardOutput=journal+console
+StandardError=journal+console

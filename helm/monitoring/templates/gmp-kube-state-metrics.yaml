@@ -1,0 +1,193 @@
+# Standalone kube-state-metrics scraped INTO GMP. The kube-prometheus-stack
+# bundled a KSM, but that stack is retired (it can't scrape kubelets on
+# Autopilot); GMP is the single source of truth now. Distinct `app:
+# gmp-kube-state-metrics` selector so the ClusterPodMonitoring scrapes only this
+# instance (no double-count with the stack's KSM during the cutover overlap).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gmp-kube-state-metrics
+  labels:
+    app: gmp-kube-state-metrics
+    {{- include "octogee-monitoring.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: gmp-kube-state-metrics
+  labels:
+    app: gmp-kube-state-metrics
+    {{- include "octogee-monitoring.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    # `secrets` intentionally excluded from the upstream KSM role: list/watch on
+    # secrets returns their data cluster-wide, and we do not use kube_secret_*
+    # metrics. Re-adding it trips Trivy KSV-0041 (CRITICAL). Least-privilege.
+    resources: [configmaps, nodes, pods, services, serviceaccounts, resourcequotas, replicationcontrollers, limitranges, persistentvolumeclaims, persistentvolumes, namespaces, endpoints]
+    verbs: [list, watch]
+  - apiGroups: [apps]
+    resources: [statefulsets, daemonsets, deployments, replicasets]
+    verbs: [list, watch]
+  - apiGroups: [batch]
+    resources: [cronjobs, jobs]
+    verbs: [list, watch]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [list, watch]
+  - apiGroups: [authentication.k8s.io]
+    resources: [tokenreviews]
+    verbs: [create]
+  - apiGroups: [authorization.k8s.io]
+    resources: [subjectaccessreviews]
+    verbs: [create]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [list, watch]
+  - apiGroups: [certificates.k8s.io]
+    resources: [certificatesigningrequests]
+    verbs: [list, watch]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [list, watch]
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses, volumeattachments]
+    verbs: [list, watch]
+  - apiGroups: [admissionregistration.k8s.io]
+    resources: [mutatingwebhookconfigurations, validatingwebhookconfigurations]
+    verbs: [list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies, ingressclasses, ingresses]
+    verbs: [list, watch]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [list, watch]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterrolebindings, clusterroles, rolebindings, roles]
+    verbs: [list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: gmp-kube-state-metrics
+  labels:
+    app: gmp-kube-state-metrics
+    {{- include "octogee-monitoring.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: gmp-kube-state-metrics
+subjects:
+  - kind: ServiceAccount
+    name: gmp-kube-state-metrics
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gmp-kube-state-metrics
+  labels:
+    app: gmp-kube-state-metrics
+    {{- include "octogee-monitoring.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gmp-kube-state-metrics
+  template:
+    metadata:
+      labels:
+        app: gmp-kube-state-metrics
+        {{- include "octogee-monitoring.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: gmp-kube-state-metrics
+      automountServiceAccountToken: true
+      nodeSelector:
+        kubernetes.io/os: linux
+        cloud.google.com/private-node: "true"
+      containers:
+        - name: kube-state-metrics
+          image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.20.0
+          args:
+            - --port=8080
+            - --telemetry-port=8081
+            - --metric-labels-allowlist=nodes=[cloud.google.com/gke-spot,cloud.google.com/gke-provisioning,cloud.google.com/compute-class,topology.kubernetes.io/zone],pods=[gateway-class,gateway-id,gateway-instance]
+          ports:
+            - name: http-metrics
+              containerPort: 8080
+            - name: telemetry
+              containerPort: 8081
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: 8080
+            initialDelaySeconds: 5
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 300Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65534
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gmp-kube-state-metrics
+  labels:
+    app: gmp-kube-state-metrics
+    {{- include "octogee-monitoring.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    app: gmp-kube-state-metrics
+  ports:
+    - name: http-metrics
+      port: 8080
+      targetPort: http-metrics
+    - name: telemetry
+      port: 8081
+      targetPort: telemetry
+---
+# GMP scrapes the KSM into Monarch. targetLabels.metadata: [] keeps the metric's
+# OWN namespace/pod labels (KSM describes other objects) instead of the scrape
+# target's — the documented fix for the kube_* label collision.
+#
+# keep-list is the EXACT metric names the boards + gmp-rules.yaml query, not
+# whole kube_* families (see DECISIONS.md for why + the measured numbers). Add
+# a name here when a new panel/alert needs one — that's the whole contract.
+apiVersion: monitoring.googleapis.com/v1
+kind: ClusterPodMonitoring
+metadata:
+  name: gmp-kube-state-metrics
+  labels:
+    {{- include "octogee-monitoring.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app: gmp-kube-state-metrics
+  endpoints:
+    - port: 8080
+      path: /metrics
+      interval: 30s
+      metricRelabeling:
+        - action: keep
+          sourceLabels: [__name__]
+          regex: kube_(cronjob_status_last_successful_time|daemonset_labels|deployment_(labels|spec_replicas|status_replicas|status_replicas_available|status_replicas_ready|status_replicas_unavailable|status_replicas_updated)|namespace_(created|labels)|node_(info|labels|spec_taint|status_condition)|persistentvolumeclaim_info|pod_(container_(info|resource_limits|resource_requests|status_(last_terminated_(exitcode|reason)|ready|restarts_total|running|terminated|waiting|waiting_reason))|info|labels|status_(phase|qos_class|ready|reason|scheduled))|statefulset_labels)
+  targetLabels:
+    metadata: []

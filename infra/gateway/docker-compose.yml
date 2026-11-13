@@ -1,0 +1,34 @@
+services:
+  octogee-gateway:
+    image: ${OCTOGEE_GATEWAY_IMAGE:-octogee-gateway:local}
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      BENDER_BOT_USER_ID: ${BENDER_BOT_USER_ID:-1471934543362523340}
+      # Gateway identifier written to usage_logs (useful when running multiple gateways)
+      GATEWAY_ID: ${GATEWAY_ID:-local}
+      # Path to the OpenClaw agents directory inside the container (auto-resolved from HOME if unset)
+      # OPENCLAW_AGENTS_DIR: /home/node/.openclaw/agents
+    volumes:
+      - ${OCTOGEE_DATA_DIR:-$HOME/octogee-gateway}/.openclaw:/home/node/.openclaw
+    ports:
+      - "${GATEWAY_PORT:-18791}:18789"
+    init: true
+    restart: unless-stopped
+
+  octogee-cli:
+    image: ${OCTOGEE_GATEWAY_IMAGE:-octogee-gateway:local}
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      BROWSER: echo
+    volumes:
+      - ${OCTOGEE_DATA_DIR:-$HOME/octogee-gateway}/.openclaw:/home/node/.openclaw
+    stdin_open: true
+    tty: true
+    init: true
+    entrypoint: ["node", "dist/index.js"]

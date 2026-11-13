@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Files
+Comment=Browse the files on this computer
+Exec=pcmanfm %U
+Icon=octogee-files
+Terminal=false
+Categories=System;FileManager;Utility;
+MimeType=inode/directory;

@@ -1,0 +1,192 @@
+import { constants } from "node:fs";
+import { link, lstat, mkdir, open, rename, unlink } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import path from "node:path";
+import { manifestObjectPath, parseManifest, serializeManifest, type Manifest } from "./workspace-manifest.js";
+
+const PROJECT_MANIFEST = "manifest.json";
+const PROJECT_STATE_DIRECTORY = ".octogee-state";
+const PROJECT_ASSET_OWNER_ERROR = "project asset materialization owner differs";
+
+async function projectFile<T>(root: string, directory: ".files" | ".octogee-state" | ".git", name: string, use: (file: {
+  read(): Promise<string | null>;
+  write(contents: string, exclusive?: boolean): Promise<void>;
+}) => Promise<T>, createDirectory = true): Promise<T> {
+  const parent = await open(root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  const fdRoot = process.platform === "linux" ? "/proc/self/fd" : "/dev/fd";
+  let handle;
+  try {
+    const dir = `${fdRoot}/${parent.fd}/${directory}`;
+    if (createDirectory) await mkdir(dir).catch(error => { if (error.code !== "EEXIST") throw error; });
+    try { handle = await open(dir, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW); }
+    catch (error) {
+      if (!createDirectory && (error as NodeJS.ErrnoException).code === "ENOENT") return use({
+        read: async () => null,
+        write: async () => { throw new Error("project state directory is absent"); },
+      });
+      throw error;
+    }
+    const location = `${fdRoot}/${handle.fd}/${name}`;
+    return await use({
+      read: async () => {
+        let file;
+        try {
+          file = await open(location, constants.O_RDONLY | constants.O_NOFOLLOW);
+          const stat = await file.stat();
+          if (!stat.isFile() || stat.size > 10 * 1024 * 1024) throw new Error("invalid project asset state file");
+          return await file.readFile("utf8");
+        } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") { return null; }
+          throw error; }
+        finally { await file?.close(); }
+      },
+      write: async (contents, exclusive = false) => {
+        const temporary = `${fdRoot}/${handle!.fd}/.asset-state-${randomUUID()}`;
+        const file = await open(temporary, "wx", 0o600);
+        try {
+          await file.writeFile(contents);
+          await file.sync();
+        } finally { await file.close(); }
+        try {
+          if (exclusive) await link(temporary, location);
+          else await rename(temporary, location);
+          await handle!.sync();
+        } finally { await unlink(temporary).catch(error => { if (error.code !== "ENOENT") throw error; }); }
+      },
+    });
+  } finally { await handle?.close(); await parent.close(); }
+}
+
+export async function readProjectAssetManifest(root: string, prefix: string): Promise<Manifest | null> {
+  return projectFile(root, ".files", PROJECT_MANIFEST, async file => {
+    const contents = await file.read();
+    return contents === null ? null : parseManifest(manifestObjectPath(prefix), contents);
+  });
+}
+
+export async function initializeProjectAssetManifest(root: string, prefix: string, manifest: Manifest): Promise<void> {
+  const contents = serializeManifest(manifest);
+  parseManifest(manifestObjectPath(prefix), contents);
+  await projectFile(root, ".files", PROJECT_MANIFEST, file => file.write(contents, true));
+}
+
+export async function withProjectAssetManifest<T>(root: string, prefix: string, use: (manifest: Manifest) => Promise<T>): Promise<T> {
+  return projectFile(path.dirname(root), PROJECT_STATE_DIRECTORY, `${path.basename(root)}.json`, async readyFile => {
+    const receipt = await readyFile.read();
+    const state = receipt === null ? null : JSON.parse(receipt);
+    if (state !== null && (state.version !== 1 || prefix !== `customers/${state.slug}/projects/${state.project}`)) throw new Error("project restore owner differs");
+    const checkout = state === null ? null : await projectCheckoutIdentity(root, false);
+    return projectFile(root, ".files", PROJECT_MANIFEST, async file => {
+      const contents = await file.read();
+      const restored = checkout !== null && state?.checkout === checkout && state.identity === projectAssetVersion(checkout, contents);
+      const manifest = contents === null ? {} : parseManifest(manifestObjectPath(prefix), contents);
+      const before = serializeManifest(manifest);
+      const result = await use(manifest);
+      const after = serializeManifest(manifest);
+      if (before !== after) {
+        parseManifest(manifestObjectPath(prefix), after);
+        await file.write(after);
+        if (restored) {
+          if (await projectCheckoutIdentity(root, false) !== checkout) throw new Error("project checkout changed during asset edit");
+          await readyFile.write(JSON.stringify({ ...state, identity: projectAssetVersion(checkout, after) }));
+        }
+      }
+      return result;
+    });
+  }, false);
+}
+
+export async function readMaterializedProjectAssets(root: string, prefix: string, location = { parent: path.dirname(root), name: path.basename(root) }): Promise<Manifest> {
+  const identity = await projectCheckoutIdentity(root, false);
+  if (identity === null) return {};
+  return projectFile(location.parent, PROJECT_STATE_DIRECTORY, `${location.name}.assets.json`, async file => {
+    const contents = await file.read();
+    if (contents === null) return {};
+    const state = JSON.parse(contents);
+    if (state.version !== 1 || state.prefix !== prefix) throw new Error(PROJECT_ASSET_OWNER_ERROR);
+    return parseManifest(manifestObjectPath(prefix), JSON.stringify(state.identity === identity ? state.files : {}));
+  }, false);
+}
+
+export async function withMaterializedProjectAssets<T>(root: string, prefix: string, use: (manifest: Manifest) => Promise<T>): Promise<T> {
+  const identity = await projectCheckoutIdentity(root, true);
+  return projectFile(path.dirname(root), PROJECT_STATE_DIRECTORY, `${path.basename(root)}.assets.json`, async file => {
+    const contents = await file.read();
+    const state = contents === null ? { version: 1, prefix, files: {} } : JSON.parse(contents);
+    if (state.version !== 1 || state.prefix !== prefix) throw new Error(PROJECT_ASSET_OWNER_ERROR);
+    const current = state.identity === identity;
+    const files = parseManifest(manifestObjectPath(prefix), JSON.stringify(current ? state.files : {}));
+    const before = serializeManifest(files);
+    const result = await use(files);
+    if (!current || serializeManifest(files) !== before) {
+      parseManifest(manifestObjectPath(prefix), serializeManifest(files));
+      await file.write(JSON.stringify({ version: 1, prefix, identity, files }));
+    }
+    return result;
+  });
+}
+
+export async function writeProjectRestoreReady(root: string, slug: string, project: string): Promise<void> {
+  const checkout = (await projectCheckoutIdentity(root, true))!;
+  const manifest = await projectFile(root, ".files", PROJECT_MANIFEST, file => file.read(), false);
+  const identity = projectAssetVersion(checkout, manifest);
+  await projectFile(path.dirname(root), PROJECT_STATE_DIRECTORY, `${path.basename(root)}.json`, file => file.write(JSON.stringify({ version: 1, slug, project, checkout, identity })));
+}
+
+export async function readProjectRestoreReady(root: string, slug: string, project: string): Promise<boolean> {
+  return await readProjectRestoreState(root, slug, project) === "ready";
+}
+
+export async function readProjectRestoreState(root: string, slug: string, project: string): Promise<"ready" | "manifest-changed" | "unrestored"> {
+  const checkout = await projectCheckoutIdentity(root, false);
+  if (checkout === null) return "unrestored";
+  return projectFile(path.dirname(root), PROJECT_STATE_DIRECTORY, `${path.basename(root)}.json`, async file => {
+    const contents = await file.read();
+    if (contents === null) return "unrestored";
+    const state = JSON.parse(contents);
+    if (state.version !== 1 || state.slug !== slug || state.project !== project) throw new Error("project restore owner differs");
+    if (state.checkout !== checkout) return "unrestored";
+    const manifest = await projectFile(root, ".files", PROJECT_MANIFEST, file => file.read(), false);
+    return state.identity === projectAssetVersion(checkout, manifest) ? "ready" : "manifest-changed";
+  }, false);
+}
+
+function projectAssetVersion(checkout: string, manifest: string | null): string {
+  return createHash("sha256").update(JSON.stringify([checkout, manifest])).digest("hex");
+}
+
+async function projectCheckoutIdentity(root: string, create: boolean): Promise<string | null> {
+  const stat = await lstat(root);
+  if (!stat.isDirectory()) throw new Error("project working set is not a directory");
+  const gitfile = await projectGitfileIdentity(root);
+  if (gitfile !== null) return gitfile;
+  return projectFile(root, ".git", "octogee-checkout.json", async file => {
+    let contents = await file.read();
+    if (contents === null && create) {
+      try { await file.write(JSON.stringify({ version: 1, id: randomUUID() }), true); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+      contents = await file.read();
+      if (contents === null) throw new Error("project checkout identity disappeared");
+    }
+    if (contents === null) return null;
+    const identity = JSON.parse(contents);
+    if (identity.version !== 1 || typeof identity.id !== "string" || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/u.test(identity.id)) throw new Error("invalid project checkout identity");
+    return identity.id;
+  }, create);
+}
+
+async function projectGitfileIdentity(root: string): Promise<string | null> {
+  const parent = await open(root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  const fdRoot = process.platform === "linux" ? "/proc/self/fd" : "/dev/fd";
+  let file;
+  try {
+    try { file = await open(`${fdRoot}/${parent.fd}/.git`, constants.O_RDONLY | constants.O_NOFOLLOW); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") { return null; }
+      throw error; }
+    const stat = await file.stat({ bigint: true });
+    if (stat.isDirectory()) return null;
+    if (!stat.isFile() || stat.size > 8192n || stat.birthtimeNs <= 0n) throw new Error("invalid project Git pointer identity");
+    const pointer = await file.readFile("utf8");
+    if (!/^gitdir: [^\n]+\n?$/u.test(pointer)) throw new Error("invalid project Git pointer");
+    return createHash("sha256").update(`${stat.birthtimeNs}:`).update(pointer).digest("hex");
+  } finally { await file?.close(); await parent.close(); }
+}

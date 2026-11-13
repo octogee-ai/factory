@@ -1,0 +1,181 @@
+{{- if .Values.gatewayFleet.aliasService.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: octogee-gateway
+  labels:
+    {{- include "octogee.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: octogee-gateway
+  ports:
+    - name: http
+      port: 18789
+      targetPort: 18789
+    - name: fleet-http
+      port: {{ .Values.global.fleetControllerPort | default "3003" }}
+      targetPort: {{ .Values.global.fleetControllerPort | default "3003" }}
+  type: ClusterIP
+{{- end }}
+
+{{- if .Values.gatewayFleet.networkPolicy.enabled }}
+{{- $apiServerCidrs := required "projectRunner.apiServerEgressCidrs is required" .Values.projectRunner.apiServerEgressCidrs -}}
+{{- range $cidr := $apiServerCidrs }}
+{{- if not (hasSuffix "/32" $cidr) }}{{ fail (printf "projectRunner.apiServerEgressCidrs must contain /32 endpoint CIDRs only (got %q)" $cidr) }}{{ end -}}
+{{- if hasPrefix "169.254." $cidr }}{{ fail (printf "projectRunner.apiServerEgressCidrs must not contain link-local CIDRs (got %q)" $cidr) }}{{ end -}}
+{{- end }}
+{{- if .Values.npmCacheProxy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: builder-gateway-npm-cache-proxy-egress
+  labels:
+    {{- include "octogee.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: octogee-gateway
+    matchExpressions:
+      - key: gateway-class
+        operator: In
+        values: [builder, isolated]
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: octogee-npm-cache-proxy
+      ports:
+        - protocol: TCP
+          port: {{ .Values.npmCacheProxy.port | default 3005 }}
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-egress
+  labels:
+    {{- include "octogee.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: octogee-gateway
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 169.254.20.10/32
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              app: mattermost
+      ports:
+        - protocol: TCP
+          port: 8065
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: gitea
+      ports:
+        - protocol: TCP
+          port: 3000
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: gitea
+      ports:
+        - protocol: TCP
+          port: 2222
+    - to:
+        - podSelector:
+            matchLabels:
+              app: octogee-api
+      ports:
+        - protocol: TCP
+          port: 3001
+    - to:
+        {{- range $cidr := $apiServerCidrs }}
+        - ipBlock:
+            cidr: {{ $cidr | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 443
+    - to:
+        - podSelector:
+            matchLabels:
+              app: llm-broker
+      ports:
+        - protocol: TCP
+          port: {{ .Values.llmBroker.port | default 3010 }}
+    # Gateway-to-gateway migration control. The controller signs the
+    # direct-transfer instructions; workspace bytes never transit the
+    # controller process.
+    - to:
+        - podSelector:
+            matchLabels:
+              app: octogee-gateway
+      ports:
+        - protocol: TCP
+          port: {{ .Values.global.fleetControllerPort | default "3003" }}
+    # Gateway-to-gateway migration data plane. The target opens a
+    # short-lived rsync daemon with one-time credentials and the source
+    # streams directly to the target pod IP.
+    - to:
+        - podSelector:
+            matchLabels:
+              app: octogee-gateway
+      ports:
+        - protocol: TCP
+          port: {{ .Values.global.migrationRsyncPort | default "30873" }}
+    {{- $computer := (.Values.global).computer | default dict }}
+    {{- if $computer.enabled }}
+    - to:
+        - ipBlock:
+            cidr: {{ required "global.computer.cidr is required" $computer.cidr }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.global.fleetControllerPort | default "3003" }}
+        - protocol: TCP
+          port: {{ .Values.global.migrationRsyncPort | default "30873" }}
+    {{- end }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.169.254/32
+      ports:
+        - protocol: TCP
+          port: 443
+{{- end }}
+
+{{- $edgeEnabled := .Values.edgeIngress.enabled | default false -}}
+{{- if and (eq ((.Values.global).ingressClassName | default "traefik") "gce") (or .Values.gatewayFleet.previewIngress.enabled $edgeEnabled) }}
+---
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: {{ .Values.gatewayFleet.previewIngress.certName }}
+spec:
+  domains:
+    - {{ .Values.gatewayFleet.previewIngress.host }}
+{{- end }}

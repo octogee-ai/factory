@@ -1,0 +1,190 @@
+{{- $productPod := dict }}
+{{- with .Files.Get "product/pod.yaml" }}
+{{- $productPod = tpl . $ | fromYaml }}
+{{- with $productPod.Error }}{{ fail (printf "product/pod.yaml: %s" .) }}{{ end }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: octogee-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: octogee-api
+spec:
+  replicas: {{ .Values.replicas }}
+  minReadySeconds: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: octogee-api
+  template:
+    metadata:
+      labels:
+        app: octogee-api
+    spec:
+      {{- with (.Values.global).nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: 30
+      serviceAccountName: {{ .Values.serviceAccountName }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: octogee-api
+          image: "{{ required "octogee-api.image.repository is required" .Values.image.repository }}:{{ required "octogee-api.image.tag is required" .Values.image.tag }}@{{ required "octogee-api.image.digest is required" .Values.image.digest }}"
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 15"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.port }}
+          env:
+            - name: NATIVE_SHARED_CONTEXT_WORKER_IMAGE
+              value: "{{ .Values.image.repository }}:{{ .Values.image.tag }}@{{ .Values.image.digest }}"
+            - name: LOG_LEVEL
+              value: {{ (.Values.global).logLevel | default "info" | quote }}
+            - name: LOG_KEEP_LONG_IDENTIFIERS
+              value: {{ (.Values.global).logKeepLongIdentifiers | default false | quote }}
+            - name: PORT
+              value: {{ .Values.port | quote }}
+            - name: NODE_EXTRA_CA_CERTS
+              value: /var/run/secrets/kubernetes-api/ca.crt
+            # K8S_NAMESPACE + the four legacy GCP-project env-var
+            # spellings the route handlers use (GCLOUD_PROJECT,
+            # GCP_PROJECT_ID, GOOGLE_CLOUD_PROJECT, FIREBASE_PROJECT_ID)
+            # all derive from the pod's namespace via downward API.
+            # Each environment's namespace is named after its Google project.
+            # Matches the glm-controller pattern; eliminates the
+            # values.test.yaml override surface and the no-env-conditionals
+            # rule (memory feedback_no_env_conditionals).
+            - name: K8S_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: DEPLOYMENT_TARGET_ID
+              value: {{ required "global.deploymentTargetId is required" (.Values.global).deploymentTargetId | quote }}
+            - name: PUBLIC_APP_ORIGINS
+              value: {{ join "," (required "global.publicAppOrigins is required" (.Values.global).publicAppOrigins) | quote }}
+            - name: GCLOUD_PROJECT
+              value: {{ required "global.deploymentProjectId is required" (.Values.global).deploymentProjectId | quote }}
+            - name: GCP_PROJECT_ID
+              value: {{ required "global.deploymentProjectId is required" (.Values.global).deploymentProjectId | quote }}
+            - name: GOOGLE_CLOUD_PROJECT
+              value: {{ required "global.deploymentProjectId is required" (.Values.global).deploymentProjectId | quote }}
+            - name: FIREBASE_PROJECT_ID
+              value: {{ required "global.deploymentProjectId is required" (.Values.global).deploymentProjectId | quote }}
+            - name: OCTOGEE_CUSTOMER_HOSTING_PROJECT_ID
+              value: {{ required "global.customerHostingProjectId is required" (.Values.global).customerHostingProjectId | quote }}
+            {{- $computer := (.Values.global).computer | default dict }}
+            {{- if $computer.enabled }}
+            - name: GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL
+              value: {{ required "global.computer.serviceAccountEmail is required" $computer.serviceAccountEmail | quote }}
+            - name: GATEWAY_COMPUTER_PROJECT_ID
+              value: {{ required "global.computer.projectId is required" $computer.projectId | quote }}
+            {{- end }}
+            {{- with $productPod.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- if .Values.gatewayServiceAccount }}
+            # Admin fleet fulfillment provisions per-gateway auth-token
+            # Secret Manager shells for gateway pods. This is the cattle
+            # gateway-pod consumer GSA, not octogee-api's own Workload Identity.
+            - name: GATEWAY_SERVICE_ACCOUNT
+              value: {{ .Values.gatewayServiceAccount | quote }}
+            {{- end }}
+            {{- include "octogee.blobStoreEnv" . | nindent 12 }}
+            {{- with (include "octogee.platformStateEnv" .) }}{{ . | nindent 12 }}{{ end }}
+            {{- include "octogee.runtimeSecretStoreEnv" . | nindent 12 }}
+            {{- if not .Values.env.OCTOGEE_KMS_KEY_NAME }}
+            {{- with (.Values.global).encryptionRootKeySecretName }}
+            - name: ENCRYPTION_ROOT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . | quote }}
+                  key: root-key
+            {{- end }}
+            {{- end }}
+            {{- range $key, $value := .Values.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- $secretEnv := .Values.secrets }}
+            {{- range $path, $_ := .Files.Glob "**/secret-env.yaml" }}
+            {{- $secretEnv = concat $secretEnv ($.Files.Get $path | fromYamlArray) }}
+            {{- end }}
+            {{- range $secretEnv }}
+            - name: {{ .envName }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secretName }}
+                  key: {{ .secretKey }}
+                  optional: {{ .optional | default false }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.healthCheck.path }}
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 24
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.healthCheck.path }}
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.healthCheck.path }}
+              port: http
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: octogee-api-sa-token
+              mountPath: /var/run/secrets/octogee-api
+              readOnly: true
+            - name: kubernetes-api-identity
+              mountPath: /var/run/secrets/kubernetes-api
+              readOnly: true
+            {{- with $productPod.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: octogee-api-sa-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: octogee-api
+                  expirationSeconds: 3600
+        - name: kubernetes-api-identity
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+        {{- with $productPod.volumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}

@@ -1,0 +1,19 @@
+[Unit]
+Description=Complete native Omarchy migrations for the mounted Builder home
+Requires=octo-home-disk.service
+Wants=user@1000.service
+After=octo-home-disk.service user@1000.service
+Before=docker.service octo-gateway-agent.service octo-desktop.service
+ConditionPathExists=!/srv/octogee/home-restore.gate
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/usr/bin/systemctl is-active --quiet user@1000.service
+ExecStart=/usr/local/bin/octo-home-migrate
+TimeoutStartSec=20min
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

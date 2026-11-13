@@ -1,0 +1,3 @@
+export type { ChannelBootstrapInput, ChannelBootstrapResult, ChannelBotSpec, ChannelCompleteInput, ChannelDirectoryEntry, ChannelDirectoryQuery, ChannelEraseSpec, ChannelGatewayConfig, ChannelHost, ChannelHostEntity, ChannelHostKind, ChannelMembershipTarget, ChannelRef, ChannelSpec, ChannelTeamSpec, ChannelUserSpec, ChannelValidation, ConnectedChannelHost, ManagedChannelHost, } from "./types.js";
+export type { MattermostChannelHost, MattermostChannelHostConfig } from "./mattermost.js";
+export { createMattermostChannelHost, mattermostChannelHostFromEnv } from "./mattermost.js";

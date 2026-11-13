@@ -1,0 +1,209 @@
+#!/usr/bin/bash
+set -euo pipefail
+
+log_dir="$HOME/.local/state/octo-desktop"
+compositor="${OCTO_COMPOSITOR:-hyprland}"
+display="${OCTO_DISPLAY:-headless}"
+output="${OCTO_OUTPUT_NAME:-OCTOGEE}"
+resolution="${OCTO_RESOLUTION:-1440x900}"
+refresh="${OCTO_REFRESH:-30}"
+vnc_port="${OCTO_VNC_PORT:-5900}"
+novnc_port="${OCTO_NOVNC_PORT:-6080}"
+control_port="${OCTO_CONTROL_PORT:-7777}"
+bind="${OCTO_BIND:-0.0.0.0}"
+
+exec 9>"$XDG_RUNTIME_DIR/octo-desktop.lock"
+flock -n 9 || { echo 'ERROR: desktop session already running' >&2; exit 1; }
+
+stamp() { printf '%s %s\n' "$(date +%s.%N)" "$*" | tee -a "$log_dir/timeline.log"; }
+
+children=()
+browser_pid=""
+shutdown() {
+  stamp "shutdown requested"
+  if [[ -n "$browser_pid" ]]; then
+    kill "$browser_pid" 2>/dev/null || true
+    wait "$browser_pid" || true
+  fi
+  for pid in "${children[@]}"; do kill "$pid" 2>/dev/null || true; done
+  wait || true
+  exit 0
+}
+trap shutdown TERM INT
+
+restart_browser=0
+request_browser_restart() {
+  restart_browser=1
+  if [[ -n "$browser_pid" ]]; then kill "$browser_pid" 2>/dev/null || true; fi
+}
+trap request_browser_restart USR1
+
+browser_idle=0
+idle_browser() {
+  sleep infinity &
+  browser_pid=$!
+  browser_idle=1
+  if (( restart_browser )); then
+    kill "$browser_pid" 2>/dev/null || true
+    wait "$browser_pid" 2>/dev/null || true
+    browser_pid=""
+    stamp "Chromium restarting for an egress mode change"
+    launch_browser
+  fi
+}
+
+launch_browser() {
+  browser_idle=0
+  while true; do
+    restart_browser=0
+    /usr/local/bin/octo-desktop-browser >>"$log_dir/chromium.log" 2>&1 &
+    browser_pid=$!
+    stamp "chromium launched"
+    (( restart_browser )) || return 0
+    kill "$browser_pid" 2>/dev/null || true
+    wait "$browser_pid" 2>/dev/null || true
+    browser_pid=""
+    stamp "Chromium restarting for an egress mode change"
+  done
+}
+
+wayland_socket() {
+  ls "$XDG_RUNTIME_DIR" | grep -E '^wayland-[0-9]+$' | head -n1
+}
+
+wait_for_socket_or_exit() {
+  local pid="$1" name="$2"
+  for _ in $(seq 1 600); do
+    [[ -n "$(wayland_socket)" ]] && return 0
+    if ! kill -0 "$pid" 2>/dev/null; then
+      stamp "ERROR ${name} exited before creating a Wayland socket"
+      tail -20 "$log_dir/${name}.log" >&2
+      exit 1
+    fi
+    sleep 0.1
+  done
+  stamp "ERROR ${name} never created a Wayland socket"
+  exit 1
+}
+
+start_hyprland() {
+  start-hyprland >"$log_dir/hyprland.log" 2>&1 &
+  local pid=$!
+  children+=("$pid")
+  local sig
+  for _ in $(seq 1 600); do
+    for sig in "$XDG_RUNTIME_DIR"/hypr/*; do
+      [[ -d "$sig" ]] && export HYPRLAND_INSTANCE_SIGNATURE="${sig##*/}"
+    done
+    if hyprctl -j version >/dev/null 2>&1; then break; fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+      stamp "ERROR Hyprland exited before hyprctl became available"
+      local crash
+      crash="$(ls -t "$HOME"/.cache/hyprland/hyprlandCrashReport*.txt 2>/dev/null | head -n1)"
+      [[ -n "$crash" ]] && grep -h -E "aquamarine|ERR|CRIT" "$crash" | tail -20 >&2
+      exit 1
+    fi
+    sleep 0.1
+  done
+  hyprctl -j version >/dev/null 2>&1 || { stamp "ERROR hyprctl never became available"; tail -20 "$log_dir/hyprland.log" >&2; exit 1; }
+  stamp "hyprland ready"
+  if [[ "$display" == drm ]]; then
+    output="$(hyprctl -j monitors all | jq -r '.[0].name')"
+    [[ -n "$output" && "$output" != null ]] || { stamp "ERROR no DRM output for OCTO_DISPLAY=drm"; exit 1; }
+  elif ! hyprctl -j monitors all | jq -e --arg n "$output" '.[] | select(.name == $n)' >/dev/null; then
+    hyprctl output create headless "$output"
+  fi
+  hyprctl eval "hl.monitor({ output = \"${output}\", mode = \"${resolution}@${refresh}\", position = \"0x0\", scale = 1 })" || true
+  hyprctl keyword decoration:blur:enabled false >/dev/null || true
+  hyprctl keyword decoration:shadow:enabled false >/dev/null || true
+  hyprctl keyword animations:enabled false >/dev/null || true
+  hyprctl keyword misc:vfr true >/dev/null || true
+}
+
+start_labwc() {
+  output="HEADLESS-1"
+  export WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1
+  labwc >"$log_dir/labwc.log" 2>&1 &
+  local pid=$!
+  children+=("$pid")
+  wait_for_socket_or_exit "$pid" labwc
+  export WAYLAND_DISPLAY="$(wayland_socket)"
+  wlr-randr --output "$output" --custom-mode "$resolution" >/dev/null
+  stamp "labwc ready"
+}
+
+mkdir -p "$HOME/.local/state/omarchy/indicators"
+touch "$HOME/.local/state/omarchy/indicators/stay-awake"
+
+stamp "session start (compositor=${compositor}, display=${display})"
+case "$compositor" in
+  hyprland) start_hyprland ;;
+  labwc) start_labwc ;;
+  *) stamp "ERROR unknown OCTO_COMPOSITOR=${compositor}"; exit 2 ;;
+esac
+export WAYLAND_DISPLAY="$(wayland_socket)"
+export OCTO_OUTPUT_NAME="$output" OCTO_COMPOSITOR="$compositor"
+stamp "output ${output} configured ${resolution}@${refresh}"
+
+/usr/local/bin/octo-seat-input >"$log_dir/seat-input.log" 2>&1 &
+input_pid=$!
+children+=("$input_pid")
+for _ in $(seq 1 100); do
+  grep -q '^ready$' "$log_dir/seat-input.log" && break
+  kill -0 "$input_pid" 2>/dev/null || { stamp "ERROR virtual input seat exited before becoming ready"; cat "$log_dir/seat-input.log" >&2; exit 1; }
+  sleep 0.1
+done
+grep -q '^ready$' "$log_dir/seat-input.log" || { stamp "ERROR virtual input seat never became ready"; exit 1; }
+stamp "virtual input seat ready"
+
+wayvnc --render-cursor --output="$output" "$bind" "$vnc_port" >"$log_dir/wayvnc.log" 2>&1 &
+wayvnc_pid=$!
+children+=("$wayvnc_pid")
+stamp "wayvnc listening on ${vnc_port}"
+
+OCTO_WAYVNC_PID="$wayvnc_pid" OCTO_VNC_PORT="$vnc_port" /usr/local/bin/octo-desktop-openclaw-vnc >"$log_dir/openclaw-vnc.log" 2>&1 &
+children+=($!)
+stamp "OpenClaw authenticated VNC listener starting on loopback:5901"
+
+websockify --web /opt/novnc "${bind}:${novnc_port}" "127.0.0.1:${vnc_port}" >"$log_dir/websockify.log" 2>&1 &
+children+=($!)
+stamp "novnc + websockify on ${novnc_port} (open /vnc.html?autoconnect=true)"
+
+OCTO_BIND="$bind" OCTO_SUPERVISOR_PID="$$" python3 /usr/local/bin/octo-desktop-control "$control_port" >"$log_dir/control.log" 2>&1 &
+children+=($!)
+stamp "control api on ${control_port}"
+
+rm -f "$HOME/.config/octogee-chromium/SingletonLock" \
+  "$HOME/.config/octogee-chromium/SingletonCookie" \
+  "$HOME/.config/octogee-chromium/SingletonSocket"
+launch_browser
+
+while true; do
+  child_status=0
+  exited_pid=""
+  for pid in "${children[@]}" ${browser_pid:+"$browser_pid"}; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      exited_pid="$pid"
+      wait "$pid" || child_status=$?
+      break
+    fi
+  done
+  if [[ -z "$exited_pid" ]]; then
+    sleep 0.1
+    continue
+  fi
+  if [[ "$exited_pid" == "$browser_pid" ]]; then
+    browser_pid=""
+    if (( restart_browser )); then
+      restart_browser=0
+      stamp "Chromium restarting for an egress mode change"
+      launch_browser
+      continue
+    fi
+    (( browser_idle )) || stamp "Chromium exited (status=${child_status}); desktop remains running"
+    idle_browser
+    continue
+  fi
+  stamp "desktop service exited (pid=${exited_pid}, status=${child_status}); shutting down"
+  shutdown
+done

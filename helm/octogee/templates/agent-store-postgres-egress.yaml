@@ -1,0 +1,24 @@
+{{- if or .Values.networkPolicy.enforceDefaultDeny .Values.networkPolicy.agentStorePostgresCidr }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-store-postgres-egress
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values:
+{{- if .Values.networkPolicy.enforceDefaultDeny }}
+          - glm-controller
+{{- end }}
+          - octogee-gateway
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: {{ required "networkPolicy.privateServicesCidr is required" (.Values.networkPolicy.agentStorePostgresCidr | default .Values.networkPolicy.privateServicesCidr) }}
+      ports:
+        - protocol: TCP
+          port: 5432
+{{- end }}

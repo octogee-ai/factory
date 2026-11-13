@@ -1,0 +1,5 @@
+charts/cloud-sql-proxy-*.tgz
+charts/gateway-edge-*.tgz
+charts/glm-controller-*.tgz
+charts/mattermost-*.tgz
+charts/octogee-api-*.tgz

@@ -1,0 +1,7 @@
+{
+  "id": "octogee-identity-tools",
+  "name": "Octogee Workspace Identity Initialization",
+  "version": "1.0.0",
+  "activation": { "onStartup": true },
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+}

@@ -2,6 +2,9 @@ import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+export const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
 const BASE_UTILITIES = ["base64", "cat", "cut", "dirname", "grep", "mkdir", "printenv", "rm", "sed", "tr"];
 
@@ -49,7 +52,7 @@ export function createStubHost(): StubHost {
     run: (script, args, options = {}) =>
       spawnSync("/bin/bash", script === "-" ? ["-s", "--", ...args] : [script, ...args], {
         encoding: "utf8",
-        cwd: options.cwd,
+        cwd: options.cwd ?? REPO_ROOT,
         input: options.input ?? "",
         env: { HOME: home, PATH: bin, CALLS: log, ...options.env },
       }),

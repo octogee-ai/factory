@@ -1,0 +1,63 @@
+{{- if .Values.gitea.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gitea-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: gitea
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow GCE health checks and load balancer traffic (required for NEG-based ingress)
+    - from:
+        - ipBlock:
+            cidr: 35.191.0.0/16
+        - ipBlock:
+            cidr: 130.211.0.0/22
+      ports:
+        - protocol: TCP
+          port: 3000
+    # Allow from gateway (git clone/push via HTTP API, provisioner)
+    - from:
+        - podSelector:
+            matchLabels:
+              app: octogee-gateway
+      # gateway pod hosts gateway-edge as a sidecar (Phase 6.B), so this
+      # one selector covers gateway, chat-proxy, AND gateway-edge egress
+      # to gitea (file read/write, repo management).
+      ports:
+        - protocol: TCP
+          port: 3000
+        - protocol: TCP
+          port: 2222
+    # Allow from octogee-api (workspace git FS routes now hosted centrally)
+    - from:
+        - podSelector:
+            matchLabels:
+              app: octogee-api
+      ports:
+        - protocol: TCP
+          port: 3000
+    # Allow from glm-controller (the fleet controller deletes the user's Gitea
+    # org/repos/user during the deprovision-customer op)
+    - from:
+        - podSelector:
+            matchLabels:
+              app: glm-controller
+      ports:
+        - protocol: TCP
+          port: 3000
+    {{- if ((.Values.global).computer | default dict).enabled }}
+    - from:
+        - podSelector:
+            matchLabels:
+              app: octogee-vm-bridge
+      ports:
+        - protocol: TCP
+          port: 3000
+        - protocol: TCP
+          port: 2222
+    {{- end }}
+{{- end }}

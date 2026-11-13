@@ -1,0 +1,65 @@
+{{- $ingressClass := (.Values.global).ingressClassName | default "traefik" -}}
+{{- $edgeEnabled := .Values.edgeIngress.enabled | default false -}}
+{{- if and (eq $ingressClass "gce") (or .Values.gitea.webIngress.enabled $edgeEnabled) }}
+---
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: {{ .Values.gitea.webIngress.backendConfigName | default "gitea-backend" }}
+spec:
+  healthCheck:
+    type: HTTP
+    requestPath: /user/login
+    port: 3000
+  timeoutSec: 3600
+  connectionDraining:
+    drainingTimeoutSec: 300
+  {{- if .Values.gitea.webIngress.cloudArmor.enabled }}
+  securityPolicy:
+    name: {{ .Values.gitea.webIngress.cloudArmor.policyName }}
+  {{- end }}
+  # Always render iap.enabled — GKE BackendConfig controller ignores absent
+  # fields rather than treating them as "disable", so an `if` guard around
+  # the entire block silently strands IAP enabled on the GCP backend service.
+  # Same fix as mattermost-ingress.yaml.
+  iap:
+    enabled: {{ .Values.gitea.webIngress.iap.enabled | default false }}
+    {{- if and .Values.gitea.webIngress.iap.enabled .Values.gitea.webIngress.iap.oauthClientCredentialsSecretName }}
+    oauthclientCredentials:
+      secretName: {{ .Values.gitea.webIngress.iap.oauthClientCredentialsSecretName }}
+    {{- end }}
+---
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: {{ .Values.gitea.webIngress.certName }}
+spec:
+  domains:
+    - {{ .Values.gitea.webIngress.host }}
+{{- end }}
+{{- if and .Values.gitea.webIngress.enabled (not $edgeEnabled) }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gitea-ingress
+  {{- if eq $ingressClass "gce" }}
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    networking.gke.io/managed-certificates: {{ .Values.gitea.webIngress.certName }}
+    kubernetes.io/ingress.global-static-ip-name: {{ .Values.gitea.webIngress.staticIpName }}
+  {{- end }}
+spec:
+  ingressClassName: {{ $ingressClass }}
+  rules:
+    - host: {{ .Values.gitea.webIngress.host }}
+      http:
+        paths:
+          - path: {{ ternary "/*" "/" (eq $ingressClass "gce") }}
+            pathType: {{ ternary "ImplementationSpecific" "Prefix" (eq $ingressClass "gce") }}
+            backend:
+              service:
+                name: octogee-gitea-http
+                port:
+                  number: 3000
+{{- end }}

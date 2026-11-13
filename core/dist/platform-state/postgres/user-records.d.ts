@@ -1,0 +1,11 @@
+import type { PlatformUserRecord, UserRecordsRepository } from "../users.js";
+import { type RecordKey } from "../errors.js";
+import type { Stored, WatchFilters } from "../store.js";
+import type { PostgresSession } from "./session.js";
+import { type Row } from "./sql.js";
+import type { PostgresWatchSource } from "./watch-sources.js";
+export declare const userKey: (uid: string) => RecordKey;
+export declare function selectUsers(where: string, suffix?: string): string;
+export declare function decodeUserRow(row: Row): Stored<PlatformUserRecord>;
+export declare function createPostgresUserRecordsRepository(session: PostgresSession): UserRecordsRepository;
+export declare function postgresUsersWatchSource(filter: WatchFilters["builders"]): PostgresWatchSource<"builders">;

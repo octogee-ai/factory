@@ -1,7 +1,7 @@
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { type StubHost, createStubHost, stubUname } from "./stub-host";
+import { REPO_ROOT, type StubHost, createStubHost, stubUname } from "./stub-host";
 
 const CLOUD_SETTINGS = {
   DOMAIN: "platform.your-company.com",
@@ -38,7 +38,7 @@ beforeEach(() => {
   host = createStubHost();
   checkout = join(host.home, "checkout");
   mkdirSync(checkout);
-  copyFileSync("install.sh", join(checkout, "install.sh"));
+  copyFileSync(join(REPO_ROOT, "install.sh"), join(checkout, "install.sh"));
   recipe("deploy/lib.sh");
   recipe("deploy/local/up.sh", 'cat > "${HOME}/stdin-seen-by-up"');
   recipe("deploy/local/check.sh");
@@ -194,7 +194,7 @@ describe("installing", () => {
       "git",
       `target="\${*: -1}"; mkdir -p "\${target}/deploy/local"; printf 'echo "ran cloned up" >> "\${CALLS}"' > "\${target}/deploy/local/up.sh"; printf 'echo "ran cloned check" >> "\${CALLS}"' > "\${target}/deploy/local/check.sh"`,
     );
-    const script = readFileSync("install.sh", "utf8");
+    const script = readFileSync(join(REPO_ROOT, "install.sh"), "utf8");
     const run = host.run("-", ["--target=local", "--yes", "--no-prompt"], { input: script });
     expect(run.status).toBe(0);
     expect(host.calls().some((line) => line.includes(`clone --quiet --depth 1 --branch main`))).toBe(true);
@@ -204,7 +204,7 @@ describe("installing", () => {
   it("refuses to overwrite a folder that is not a checkout", () => {
     stubTools(LOCAL_TOOLS);
     mkdirSync(join(host.home, "octogee-cloud"));
-    const script = readFileSync("install.sh", "utf8");
+    const script = readFileSync(join(REPO_ROOT, "install.sh"), "utf8");
     const run = host.run("-", ["--target=local", "--yes", "--no-prompt"], { input: script });
     expect(run.status).toBe(1);
     expect(run.stderr).toContain("is not a git checkout");

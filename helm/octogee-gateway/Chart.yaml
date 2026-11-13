@@ -1,0 +1,10 @@
+apiVersion: v2
+name: octogee-gateway
+description: |
+  Single Octogee gateway pod (gateway + gateway-edge + chat-proxy
+  sidecars). One release per gateway instance, owned by the fleet controller
+  (glm-controller). The umbrella `octogee` release no longer renders
+  gateway pods — see docs/operations/RUNBOOK.md §Gateway lifecycle.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

@@ -1,0 +1,42 @@
+{{- if .Values.gatewayFleet.computeClass.enabled }}
+{{- $zones := .Values.gatewayFleet.computeClass.zones }}
+{{- $base := required "gatewayFleet.computeClass.name is required" .Values.gatewayFleet.computeClass.name }}
+---
+apiVersion: cloud.google.com/v1
+kind: ComputeClass
+metadata:
+  name: {{ $base }}
+  labels:
+    {{- include "octogee.labels" . | nindent 4 }}
+  annotations:
+    meta.helm.sh/release-name: {{ .Release.Name }}
+    meta.helm.sh/release-namespace: {{ .Release.Namespace }}
+    {{- if .Release.IsInstall }}
+    helm.sh/hook: pre-install
+    {{- end }}
+spec:
+  autopilot:
+    enabled: true
+  priorities:
+    {{- if .Values.gatewayFleet.computeClass.preferSpot }}
+    - podFamily: general-purpose
+      spot: true
+      location:
+        zones:
+          {{- toYaml $zones | nindent 10 }}
+        locationPolicy: ANY
+    {{- end }}
+    - podFamily: general-purpose
+      spot: false
+      location:
+        zones:
+          {{- toYaml $zones | nindent 10 }}
+        locationPolicy: ANY
+  activeMigration:
+    optimizeRulePriority: true
+  nodePoolConfig:
+    ipType: private
+  nodePoolAutoCreation:
+    enabled: true
+  whenUnsatisfiable: DoNotScaleUp
+{{- end }}

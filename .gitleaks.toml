@@ -1,0 +1,179 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "SHA-256 fingerprints of pinned PostgreSQL catalog expressions"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)core/(src|dist)/agent-store-routines\.json$''']
+regexTarget = "line"
+regexes = ['''^\s*"(constraint|default|index):[a-z0-9_]+:[a-z0-9_]+": "[a-f0-9]{64}",?$''']
+
+[[allowlists]]
+description = "Public publishable client keys and explicit documentation placeholders"
+regexes = [
+  '''^pk_(test|live)_[A-Za-z0-9]+$''',
+  '''^(YOUR_TOKEN_HERE|YOUR_API_KEY|replace-me|EXAMPLE|REMOVED_HISTORICAL_CREDENTIAL)$''',
+]
+
+[[allowlists]]
+description = "Mattermost function identifiers, not access tokens"
+targetRules = ["mattermost-access-token"]
+regexes = ['''^[A-Za-z]*Mattermost[A-Za-z]*$''']
+
+[[allowlists]]
+description = "Explicit synthetic credentials in behavioral tests"
+targetRules = ["generic-api-key", "github-pat", "github-oauth", "curl-auth-header"]
+condition = "AND"
+paths = ['''(^|/)[^/]+\.(spec|test)\.(ts|tsx)$''']
+regexes = [
+  '''^(abcdef0123456789ABCDEFghij|abcdefghijklmnop|sk-12345abcde|from-env-abc123|sk-or-v1-anything|test-unsubscribe-secret-bytes-12345|abcdef123456|topsecret1234567890|abc123def456|internal-key-123|pat-fresh-1234|tok-chris-abc123|tok-sam-def456|ya29\.fixture|a1b2c3d4e5f6|test-secret-key-for-hmac-signing)$''',
+  '''^(gh[op]_16C7e42F292c6912E7710c838347Ae178B4a|sk-ABCDEFGHIJKLMNOPQRSTUVWX0123456789|sk-abcdefgh1234567890|dGhlIHNhbXBsZSBub25jZQ==|eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9\.test\.signature)$''',
+]
+
+[[allowlists]]
+description = "Deterministic activity event hashes in protocol fixtures"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)tests/fixtures/agent-conversation/[^/]+\.json$''']
+regexTarget = "match"
+regexes = ['''^eventKey":\s*"[a-f0-9]{64}"$''']
+
+[[allowlists]]
+description = "Exact synthetic fixture or source expression in core/src/voice-conversation.spec.ts"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)core/src/voice-conversation\.spec\.ts$''']
+regexTarget = "match"
+regexes = [
+  '''^octogee-api:3001/internal/voice/conversation'$''',
+]
+
+[[allowlists]]
+description = "Exact synthetic fixture or source expression in docs/handbook/41-secrets-reference.md"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)docs/handbook/41-secrets-reference\.md$''']
+regexTarget = "match"
+regexes = [
+  '''^octogee-api:3001/internal/notifications/digest`$''',
+]
+
+[[allowlists]]
+description = "Exact synthetic fixture or source expression in docs/operations/INTERNAL-SERVICE-AUTH.md"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)docs/operations/INTERNAL-SERVICE-AUTH\.md$''']
+regexTarget = "match"
+regexes = [
+  '''^octogee-api:3001/internal/notifications/digest`$''',
+]
+
+[[allowlists]]
+description = "Exact synthetic fixture or source expression in glm-controller/src/__tests__/shared-restore-runtime.spec.ts"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)glm-controller/src/__tests__/shared-restore-runtime\.spec\.ts$''']
+regexTarget = "match"
+regexes = [
+  '''^key === 'glmOperations/return'$''',
+]
+
+[[allowlists]]
+description = "Exact synthetic fixture or source expression in helm/octogee/charts/gateway-edge/templates/product/cronjob-digest.yaml, and at its path before the move under product/"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)helm/octogee/charts/gateway-edge/templates/(product/)?cronjob-digest\.yaml$''']
+regexTarget = "match"
+regexes = [
+  '''^octogee-api:3001/internal/notifications/digest$''',
+]
+
+[[allowlists]]
+description = "Exact synthetic fixture or source expression in infra/desktop/image/test_desk.py"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)infra/desktop/image/test_desk\.py$''']
+regexTarget = "match"
+regexes = [
+  '''^passwd', 'America/Chicago;$''',
+]
+
+[[allowlists]]
+description = "Exact synthetic fixture or source expression in octogee-activity-tools/__tests__/activity-source.spec.ts, before and after the move under extensions/product"
+targetRules = ["aws-access-token"]
+condition = "AND"
+paths = ['''(^|/)infra/gateway/extensions/(product/)?octogee-activity-tools/__tests__/activity-source\.spec\.ts$''']
+regexTarget = "match"
+regexes = [
+  '''^AKIAABCDEFGHIJKLMNOP$''',
+]
+
+[[allowlists]]
+description = "Exact synthetic fixture or source expression in octogee-activity-tools/__tests__/activity-source.spec.ts, before and after the move under extensions/product"
+targetRules = ["jwt"]
+condition = "AND"
+paths = ['''(^|/)infra/gateway/extensions/(product/)?octogee-activity-tools/__tests__/activity-source\.spec\.ts$''']
+regexTarget = "match"
+regexes = [
+  '''^eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIn0\.signaturevalue"$''',
+]
+
+[[allowlists]]
+description = "Exact synthetic fixture or source expression in octogee-activity-tools/__tests__/activity-source.spec.ts, before and after the move under extensions/product"
+targetRules = ["private-key"]
+condition = "AND"
+paths = ['''(^|/)infra/gateway/extensions/(product/)?octogee-activity-tools/__tests__/activity-source\.spec\.ts$''']
+regexTarget = "match"
+regexes = [
+  '''^-----BEGIN PRIVATE KEY-----"\);
+    expect\(serialized\)\.not\.toContain\("-----BEGIN RSA PRIVATE KEY-----$''',
+  '''^-----BEGIN PRIVATE KEY-----\\n\$\{inputSentinel\}\\n-----END PRIVATE KEY-----\\nafter`,
+      \},
+    \}\)\);
+    await source\.handle\(event\(3, "tool", \{
+      phase: "result",
+      toolCallId: "tool-pem",
+      name: "inspect",
+      output: `before\\n-----BEGIN RSA PRIVATE KEY-----$''',
+]
+
+[[allowlists]]
+description = "Exact synthetic fixture or source expression in tests/specs/helm-octogee-api-ingress.spec.ts"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)tests/specs/helm-octogee-api-ingress\.spec\.ts$''']
+regexTarget = "match"
+regexes = [
+  '''^workspace-api-0\.1\.0\.tgz",
+  "octogee-api-0\.1\.0\.tgz"$''',
+]
+
+[[allowlists]]
+description = "Exact synthetic fixture or source expression in tests/specs/helm-octogee-api.spec.ts"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)tests/specs/helm-octogee-api\.spec\.ts$''']
+regexTarget = "match"
+regexes = [
+  '''^workspace-api-0\.1\.0\.tgz",
+  "octogee-api-0\.1\.0\.tgz"$''',
+]
+
+[[allowlists]]
+description = "Exact synthetic fixture or source expression in tests/specs/helm-umbrella-gateway-fleet.spec.ts"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)tests/specs/helm-umbrella-gateway-fleet\.spec\.ts$''']
+regexTarget = "match"
+regexes = [
+  '''^octogee-api:3001/internal/notifications/digest"$''',
+]
+
+[[allowlists]]
+description = "Exact synthetic full-SHA API image assertion in historical Cloud Build test"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)tests/specs/octogee-api-cloudbuild-publishing\.spec\.ts$''']
+regexTarget = "match"
+regexes = ['''^octogee-api:0123456789abcdef0123456789abcdef01234567"$''']

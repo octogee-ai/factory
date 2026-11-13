@@ -1,0 +1,12 @@
+[Unit]
+Description=Enroll the Limine boot entry under this computer's machine id (first boot)
+ConditionPathExists=!/var/lib/octogee/limine-enrolled
+After=local-fs.target systemd-machine-id-commit.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/octo-limine-enroll
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,68 @@
+{
+  "activityPosts": [
+    {
+      "id": "activity-root-1",
+      "channel_id": "main-1",
+      "root_id": "turn-1",
+      "props": {
+        "octogee": {
+          "schemaVersion": 3,
+          "projectionKind": "run",
+          "conversationId": "main-1",
+          "turnId": "turn-1",
+          "runId": "run-1",
+          "agentId": "agent-1",
+          "sessionKey": "agent:agent-1:mattermost:channel:main-1:thread:turn-1",
+          "origin": "human",
+          "status": "running",
+          "mainChannelId": "main-1",
+          "mainRootPostId": "turn-1",
+          "inputPostId": "turn-1",
+          "itemId": "octogee:run-root",
+          "ordinal": 0,
+          "semanticVersion": 1,
+          "attention": "routine",
+          "kind": "activity.run-root",
+          "eventKey": "cae3d59579a3d6f06c228e3d1a7e4601f0956aac9578b2befee2e3c6f8923cfe"
+        }
+      }
+    },
+    {
+      "id": "activity-tool-1",
+      "channel_id": "main-1",
+      "root_id": "turn-1",
+      "props": {
+        "octogee": {
+          "schemaVersion": 3,
+          "projectionKind": "run",
+          "conversationId": "main-1",
+          "turnId": "turn-1",
+          "runId": "run-1",
+          "origin": "human",
+          "status": "running",
+          "mainChannelId": "main-1",
+          "mainRootPostId": "turn-1",
+          "inputPostId": "turn-1",
+          "activityRootPostId": "activity-root-1",
+          "itemId": "tool-1",
+          "toolCallId": "call-1",
+          "ordinal": 2,
+          "semanticVersion": 1,
+          "attention": "routine",
+          "kind": "activity.tool",
+          "eventKey": "866f366de54c63b3c9ae70afcbbfe83baad2a404f554adf5969684b82496f8c1"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "rootCreations": [
+      {
+        "mainRootPostId": "turn-1",
+        "activityRootPostId": "activity-root-1",
+        "createdPostCount": 1,
+        "updateCount": 0
+      }
+    ]
+  }
+}

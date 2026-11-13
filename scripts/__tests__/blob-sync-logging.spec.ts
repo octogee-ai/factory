@@ -1,0 +1,21 @@
+import { afterEach, expect, it, vi } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { blobSyncForSlug } from "../lib/blob-sync.js";
+import { log, dlog } from "../lib/config.js";
+vi.mock("../lib/config.js", () => ({ CUSTOMERS_DIR: "/tmp", BLOB_SYNC_MAX_CONCURRENT: 4, BLOB_SYNC_MAX_SIZE: 100_000_000, log: vi.fn(), dlog: vi.fn() }));
+const roots: string[] = [];
+afterEach(() => { for (const root of roots.splice(0)) { rmSync(root, { recursive: true, force: true }); } vi.clearAllMocks(); });
+it("keeps unchanged syncs at DEBUG and reports real cleanup at INFO", async () => {
+  const root = mkdtempSync("/tmp/octogee-blob-log-"); roots.push(root);
+  const slug = path.basename(root);
+  const store = { manifestFor: () => ({ read: async () => null, write: vi.fn() }), download: vi.fn(), upload: vi.fn() };
+  await blobSyncForSlug(slug, { store });
+  expect(log).not.toHaveBeenCalled();
+  expect(dlog).toHaveBeenCalledWith(`[blob-sync] ${slug} up to date`);
+  mkdirSync(path.join(root, ".blobs"), { recursive: true });
+  writeFileSync(path.join(root, ".blobs", "stale.txt"), "old");
+  writeFileSync(path.join(root, ".blobs", ".sync-state.json"), JSON.stringify(["stale.txt"]));
+  await blobSyncForSlug(slug, { store });
+  expect(log).toHaveBeenCalledWith(`[blob-sync] ${slug}: 1 cleaned up`);
+});

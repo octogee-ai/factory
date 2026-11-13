@@ -1,0 +1,3 @@
+node_modules/
+*.tgz
+!octogee-shared.tgz

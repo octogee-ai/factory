@@ -23,8 +23,8 @@ both audiences: a human can't find anything, and an agent can't load just the
 slice it needs without dragging in 2,000 irrelevant lines. Each chapter is a
 focused, independently-loadable file with frontmatter.
 
-This repository carries the Dev Workflow chapters today. The operations
-chapters land here with the rest of the platform.
+This handbook carries the Dev Workflow chapters. Operations chapters for a
+hosted deployment live with that deployment.
 
 ## How to use it
 

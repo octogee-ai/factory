@@ -1,0 +1,212 @@
+#!/usr/bin/bash
+set -euo pipefail
+
+export OMARCHY_PATH="${OMARCHY_PATH:-/usr/share/omarchy}"
+share="$OMARCHY_PATH/octo-desktop"
+config="${XDG_CONFIG_HOME:-$HOME/.config}"
+state_file="$config/omarchy/octogee-desktop-style"
+hypr_config="$config/hypr/hyprland.lua"
+shell_json="$config/omarchy/shell.json"
+shell_defaults="$OMARCHY_PATH/config/omarchy/shell.json"
+plugins_dir="$config/omarchy/plugins"
+theme_dir="$config/omarchy/themes/octogee"
+current_theme="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/current/theme.name"
+require_line='package.loaded["octo-desktop.familiar"] = nil require("octo-desktop.familiar")'
+plugin_ids=(rdf.dock community.window-switcher)
+
+usage() { echo "usage: octo-desktop-style familiar [--accent <#rrggbb>]|omarchy|apply|status" >&2; exit 2; }
+warn() { printf 'octo-desktop-style: %s\n' "$*" >&2; }
+
+session_live() { [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]] && hyprctl -j version >/dev/null 2>&1; }
+
+ensure_require() {
+  mkdir -p "$(dirname "$hypr_config")"
+  [[ -f "$hypr_config" ]] || : > "$hypr_config"
+  grep -Fxq "$require_line" "$hypr_config" || printf '\n%s\n' "$require_line" >> "$hypr_config"
+}
+
+remove_require() {
+  [[ -f "$hypr_config" ]] || return 0
+  local tmp
+  tmp="$(mktemp "$hypr_config.XXXXXX")"
+  grep -Fxv "$require_line" "$hypr_config" > "$tmp" || true
+  mv "$tmp" "$hypr_config"
+}
+
+link_plugins() {
+  mkdir -p "$plugins_dir"
+  local id target
+  for id in "${plugin_ids[@]}"; do
+    target="$plugins_dir/$id"
+    if [[ -e "$target" && ! -L "$target" ]]; then
+      warn "$target is not a link; leaving the user's own copy of $id in place"
+      continue
+    fi
+    ln -sfn "$share/plugins/$id" "$target"
+  done
+}
+
+unlink_plugins() {
+  local id target
+  for id in "${plugin_ids[@]}"; do
+    target="$plugins_dir/$id"
+    [[ -L "$target" && "$(readlink "$target")" == "$share/plugins/$id" ]] && rm -f "$target"
+  done
+  return 0
+}
+
+shell_source() { if [[ -s "$shell_json" ]]; then echo "$shell_json"; else echo "$shell_defaults"; fi; }
+
+write_shell_json() {
+  local program="$1" tmp
+  mkdir -p "$(dirname "$shell_json")"
+  tmp="$(mktemp "$shell_json.XXXXXX")"
+  if ! jq -S --slurpfile ours "$share/shell-plugins.json" "$program" "$(shell_source)" "${@:2}" > "$tmp"; then
+    rm -f "$tmp"
+    warn "could not update $shell_json"
+    return 1
+  fi
+  mv "$tmp" "$shell_json"
+}
+
+merge_shell_plugins() {
+  write_shell_json '
+    ((.plugins // []) | if type == "array" then . else [] end) as $existing
+    | .plugins = $existing + [ $ours[0][] | select(.id as $id | all($existing[]; .id != $id)) ]'
+}
+
+shipped_plugin() {
+  local target="$plugins_dir/$1"
+  [[ ! -e "$target" ]] || [[ -L "$target" && "$(readlink "$target")" == "$share/plugins/$1" ]]
+}
+
+remove_shell_plugins() {
+  local id removable=()
+  for id in "${plugin_ids[@]}"; do shipped_plugin "$id" && removable+=("$id"); done
+  write_shell_json '
+    ($ARGS.positional) as $gone
+    | .plugins = ((.plugins // []) | if type == "array" then . else [] end | map(select(.id as $id | all($gone[]; . != $id))))' \
+    --args "${removable[@]}"
+}
+
+set_theme() {
+  local name="$1"
+  if session_live; then omarchy-theme-set "$name"; else OMARCHY_THEME_HEADLESS=1 omarchy-theme-set "$name"; fi || { warn "omarchy-theme-set $name failed"; return 1; }
+}
+
+accent_selection() {
+  case "$1" in
+    '#e74e3c') echo '#f8cac4' ;;
+    '#0ea5e9') echo '#b7e3f8' ;;
+    '#f5b301') echo '#fce8b3' ;;
+    '#c026d3') echo '#ecbef2' ;;
+    '#65a30d') echo '#d1e3b6' ;;
+    '#db2777') echo '#f4bed6' ;;
+    '#475569') echo '#c7cdd6' ;;
+    *)
+      local r g b
+      r=$((16#${1:1:2})); g=$((16#${1:3:2})); b=$((16#${1:5:2}))
+      printf '#%02x%02x%02x\n' $(( (r * 3 + 255 * 7) / 10 )) $(( (g * 3 + 255 * 7) / 10 )) $(( (b * 3 + 255 * 7) / 10 ))
+      ;;
+  esac
+}
+
+current_accent() {
+  [[ -f "$theme_dir/colors.toml" ]] || return 0
+  sed -n 's/^accent = "\(#[0-9a-f]\{6\}\)"$/\1/p' "$theme_dir/colors.toml" | head -n 1
+}
+
+apply_accent() {
+  local accent="$1" selection tmp
+  selection="$(accent_selection "$accent")"
+  tmp="$(mktemp "$theme_dir/colors.toml.XXXXXX")"
+  awk -v accent="$accent" -v selection="$selection" '
+    /^accent = / { print "accent = \"" accent "\""; next }
+    /^selection = / { print "selection = \"" selection "\""; next }
+    /^blue = / { print "blue = \"" accent "\""; next }
+    /^bright_blue = / { print "bright_blue = \"" accent "\""; next }
+    { print }' "$theme_dir/colors.toml" > "$tmp"
+  mv "$tmp" "$theme_dir/colors.toml"
+}
+
+install_theme() {
+  local accent="${1:-$(current_accent)}"
+  rm -rf "$theme_dir"
+  mkdir -p "$(dirname "$theme_dir")"
+  cp -R "$share/theme" "$theme_dir"
+  [[ -z "$accent" ]] || apply_accent "$accent"
+  set_theme octogee
+}
+
+restore_theme() {
+  [[ -f "$current_theme" && "$(<"$current_theme")" == octogee ]] || return 0
+  set_theme "Tokyo Night"
+}
+
+reload_session() {
+  session_live || return 0
+  hyprctl reload >/dev/null || warn "hyprctl reload failed"
+  omarchy-shell -q shell rescanPlugins >/dev/null 2>&1 || warn "shell did not rescan plugins"
+  omarchy-shell shell reloadConfig >/dev/null 2>&1 || warn "shell did not reload its config"
+}
+
+familiar() {
+  mkdir -p "$(dirname "$state_file")"
+  link_plugins
+  merge_shell_plugins
+  ensure_require
+  install_theme "${1:-}"
+  printf 'familiar\n' > "$state_file"
+  reload_session
+}
+
+unload_title_bars() {
+  session_live || return 0
+  hyprctl plugin list | grep -q hyprbars || return 0
+  hyprctl plugin unload "$share/hyprbars.so" >/dev/null || warn "could not unload hyprbars; title bars stay until the next login"
+}
+
+omarchy() {
+  mkdir -p "$(dirname "$state_file")"
+  remove_require
+  unload_title_bars
+  remove_shell_plugins
+  unlink_plugins
+  restore_theme
+  printf 'omarchy\n' > "$state_file"
+  reload_session
+}
+
+apply() {
+  if [[ ! -f "$state_file" ]]; then familiar; return; fi
+  case "$(<"$state_file")" in
+    familiar) link_plugins; merge_shell_plugins; ensure_require ;;
+    omarchy) ;;
+    *) warn "unknown style in $state_file; applying familiar"; familiar ;;
+  esac
+}
+
+status() { if [[ -f "$state_file" ]]; then cat "$state_file"; else echo unset; fi; }
+
+command="${1:-}"
+accent=""
+[[ $# -eq 0 ]] || shift
+while (($#)); do
+  case "$1" in
+    --accent)
+      [[ "$command" == familiar ]] || usage
+      accent="${2:-}"
+      [[ "$accent" =~ ^#[0-9a-f]{6}$ ]] || { warn "accent must be a lowercase #rrggbb colour"; exit 2; }
+      shift 2
+      ;;
+    *) usage ;;
+  esac
+done
+
+case "$command" in
+  familiar) familiar "$accent" ;;
+  omarchy) omarchy ;;
+  apply) apply ;;
+  status) status ;;
+  *) usage ;;
+esac

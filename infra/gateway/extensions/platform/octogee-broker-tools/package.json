@@ -1,0 +1,18 @@
+{
+  "name": "octogee-broker-tools",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck:native": "node ../../../verify-broker-plugin-contract.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  },
+  "overrides": {
+    "postcss": "8.5.25"
+  }
+}

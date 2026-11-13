@@ -1,0 +1,63 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mattermost-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: mattermost
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow GCE health checks and load balancer traffic (required for NEG-based ingress)
+    - from:
+        - ipBlock:
+            cidr: 35.191.0.0/16
+        - ipBlock:
+            cidr: 130.211.0.0/22
+      ports:
+        - protocol: TCP
+          port: 8065
+    - from:
+        - podSelector:
+            matchLabels:
+              app: octogee-gateway
+      ports:
+        - protocol: TCP
+          port: 8065
+    # octogee-api cluster singleton: the MM REST proxy (/api/v4/*) +
+    # credential mint forward to MM here.
+    - from:
+        - podSelector:
+            matchLabels:
+              app: octogee-api
+      ports:
+        - protocol: TCP
+          port: 8065
+    # glm-controller (fleet controller): destroys the user's MM channels/users/
+    # team during the deprovision-customer op.
+    - from:
+        - podSelector:
+            matchLabels:
+              app: glm-controller
+      ports:
+        - protocol: TCP
+          port: 8065
+    - from:
+        - podSelector:
+            matchLabels:
+              app: octogee-mm-admin-token-test
+      ports:
+        - protocol: TCP
+          port: 8065
+    {{- if ((.Values.global).computer | default dict).enabled }}
+    - from:
+        - podSelector:
+            matchLabels:
+              app: octogee-vm-bridge
+      ports:
+        - protocol: TCP
+          port: 8065
+    {{- end }}
+{{- end }}

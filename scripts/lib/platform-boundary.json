@@ -1,0 +1,33 @@
+{
+  "platformEntrypoints": [
+    "platform/octogee-api/src/app.ts",
+    "platform/octogee-api/src/llm-broker-app.ts",
+    "platform/octogee-api/src/npm-cache-proxy.ts",
+    "platform/octogee-api/src/main.ts",
+    "platform/gateway-edge/src/index.ts",
+    "platform/gateway-edge/src/main.ts",
+    "platform/glm-controller/src/index.ts",
+    "platform/glm-controller/src/main.ts"
+  ],
+  "platformRoots": [
+    "platform/infra/",
+    "platform/helm/",
+    "platform/scripts/",
+    "platform/templates/",
+    "platform/terraform/"
+  ],
+  "productModules": [
+    "product/",
+    "app/",
+    "site/",
+    "acceptance/",
+    "artifact-worker/",
+    "ops-agent/",
+    "platform/core/src/testing/firestore-store/",
+    "platform/core/dist/testing/firestore-store/",
+    "functions/"
+  ],
+  "ratchet": [],
+  "referenceRatchet": [],
+  "dependencyRatchet": []
+}

@@ -1,0 +1,784 @@
+{{- include "octogee-gateway.requireIdentity" . -}}
+{{- $revision := include "octogee-gateway.revisionId" . -}}
+{{- $tier := include "octogee-gateway.effectiveTier" . -}}
+{{- $preset := index .Values.tiers $tier -}}
+{{- $gatewayClass := include "octogee-gateway.gatewayClass" . -}}
+{{- $isolatedClass := eq (include "octogee-gateway.dualReadGatewayClass" .) "builder" -}}
+{{- $computeClass := .Values.computeClass -}}
+{{- $imageProfile := include "octogee-gateway.imageProfile" . -}}
+{{- $computerDesktop := include "octogee-gateway.computerDesktop" . -}}
+{{- $x11Desktop := and $isolatedClass (eq $computerDesktop "x11") -}}
+{{- $vmRuntime := eq (.Values.runtimeKind | default "cluster") "gce-vm" -}}
+{{- if and $isolatedClass (not $vmRuntime) -}}
+{{- fail (printf "octogee-gateway: a %s Builder renders only as a GCE VM bundle (runtimeKind=gce-vm); Builder gateways never run as Kubernetes Deployments" $computerDesktop) -}}
+{{- end -}}
+{{- $gatewayImageLabel := include "octogee-gateway.imageLabel" . -}}
+{{- $gatewayImageTag := .Values.image.tag | default .Values.imageTag -}}
+{{- $isolatedControlUiEnabled := and $isolatedClass (.Values.builderAccess.controlUiEnabled | default false) -}}
+{{- $controlIdentity := ternary (.Values.builderAccess.controlIdentity | default "shared-operator") "shared-operator" $isolatedClass -}}
+{{- if not $preset -}}
+{{- fail (printf "octogee-gateway: no preset defined for sizingTier=%q (add it under .Values.tiers in values.yaml)" $tier) -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: octogee-gateway-{{ $revision }}
+  labels:
+    app: octogee-gateway
+    gateway-class: {{ $gatewayClass | quote }}
+    gateway-profile: {{ $imageProfile | quote }}
+    {{- include "octogee-gateway.labels" . | nindent 4 }}
+spec:
+  # Use kindIs to distinguish "explicit 0 (paused)" from "unset (default to 1)" —
+  # helm's `default` treats 0 as falsy and would replace it with the fallback.
+  replicas: {{ if kindIs "invalid" .Values.replicas }}1{{ else }}{{ .Values.replicas }}{{ end }}
+  {{- $rollStrategy := .Values.rollStrategy | default "recreate" }}
+  {{- if eq $rollStrategy "surge" }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  {{- else if eq $rollStrategy "recreate" }}
+  strategy:
+    type: Recreate
+  {{- else }}
+  {{- fail (printf "unsupported rollStrategy %q (expected surge or recreate)" $rollStrategy) }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app: octogee-gateway
+      gateway-instance: {{ $revision }}
+  template:
+    metadata:
+      labels:
+        app: octogee-gateway
+        gateway-id: {{ .Values.gatewayId }}
+        gateway-instance: {{ $revision }}
+        gateway-class: {{ $gatewayClass | quote }}
+        gateway-profile: {{ $imageProfile | quote }}
+        # Per-pod sizing tier — stamped on the pod so
+        # GCP Billing Export can roll up cost by tier for the chargeback
+        # surface (GATEWAY-PLATFORM-SPEC §Phase 5a).
+        tier: {{ $tier | quote }}
+        # Build tag this pod rolled to — `kubectl get pods -L gateway-image`
+        # makes a blue/green or rolling update legible at a glance (the
+        # pod-template-hash already changes per image but isn't readable back to
+        # a SHA). Pod-template label ONLY, never the selector — selectors must
+        # stay stable across rolls.
+        gateway-image: {{ $gatewayImageLabel | quote }}
+    spec:
+      terminationGracePeriodSeconds: {{ .Values.preStopFlush.terminationGracePeriodSeconds | default 30 }}
+      {{- if and (ne $gatewayClass "shared") $computeClass }}
+      nodeSelector:
+        cloud.google.com/compute-class: {{ $computeClass | quote }}
+      {{- else if .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      {{- end }}
+      {{- if eq $gatewayClass "shared" }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: octogee-gateway
+              gateway-class: shared
+      {{- end }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: octogee-gateway
+              namespaceSelector: {}
+              topologyKey: kubernetes.io/hostname
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: octogee-gateway
+                namespaceSelector: {}
+                topologyKey: topology.kubernetes.io/zone
+      serviceAccountName: {{ include "octogee-gateway.serviceAccountName" . }}
+      {{- with .Values.runtimeClassName }}
+      runtimeClassName: {{ . }}
+      {{- end }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: fix-perms
+          image: "{{ required "image.repository is required" .Values.image.repository }}:{{ .Values.image.tag | default .Values.imageTag }}"
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              chown 1000:1000 /home/node
+              chmod 0755 /home/node
+              {{- if $x11Desktop }}
+              chown 1000:1000 /run/user/1000
+              chmod 0700 /run/user/1000
+              {{- end }}
+              exec setpriv --reuid=1000 --regid=1000 --keep-groups sh -c '
+                set -eu
+                cp -rn /etc/skel/. /home/node/
+                mkdir -p /home/node/.npm-cache
+                {{- if $isolatedClass }}
+                /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/prepare-project-storage.ts
+                {{- end }}
+                install -m 0500 /octogee/scripts/secret-resolver.mjs /octogee-secret-resolver/secret-resolver.mjs
+              '
+          env:
+            {{- if $isolatedClass }}
+            - name: GATEWAY_ID
+              value: {{ .Values.gatewayId | quote }}
+            {{- end }}
+            # OPENCLAW_GATEWAY_TOKEN is platform-owned: the fleet controller creates the
+            # per-gateway K8s secret `gateway-auth-token-<gatewayId>` with a
+            # random hex value before this chart installs, and the same
+            # secretKeyRef appears on all three containers (init / gateway /
+            # gateway-edge) so they agree on the token without any in-pod
+            # generation. Init seeds the PVC and the template that envsubst's
+            # OPENCLAW_GATEWAY_TOKEN into openclaw.json reads it from this env.
+            - name: OPENCLAW_AGENT_STORE_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: gateway-auth-token-{{ .Values.gatewayId }}
+                  key: agent-store-dsn
+            - name: OPENCLAW_GATEWAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gateway-auth-token-{{ .Values.gatewayId }}
+                  key: token
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+              add: [CHOWN, FOWNER, SETUID, SETGID]
+          volumeMounts:
+            - name: data
+              mountPath: /home/node
+            {{- if $isolatedClass }}
+            - name: builder-cache
+              mountPath: /work/cache
+            {{- end }}
+            {{- if $isolatedClass }}
+            - name: project-materializations
+              mountPath: /work/materialized
+            {{- end }}
+            {{- if $x11Desktop }}
+            - name: desktop-runtime
+              mountPath: /run/user/1000
+            {{- end }}
+            - name: secret-resolver
+              mountPath: /octogee-secret-resolver
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "32Mi"
+      containers:
+        - name: gateway
+          image: "{{ required "image.repository is required" .Values.image.repository }}:{{ .Values.image.tag | default .Values.imageTag }}"
+          ports:
+            - containerPort: 18789
+            - containerPort: 9092
+              name: runner-metrics
+            - containerPort: {{ .Values.env.fleetControllerPort | default "3003" }}
+              name: fleet-http
+            - containerPort: {{ .Values.env.migrationRsyncPort | default "30873" }}
+              name: migration-rsync
+          securityContext:
+            {{- toYaml .Values.gatewayContainerSecurityContext | nindent 12 }}
+          {{- if .Values.preStopFlush.enabled }}
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - sh
+                  - -c
+                  - |
+                    exec > /proc/1/fd/1 2> /proc/1/fd/2
+                    timeout {{ .Values.preStopFlush.timeoutSeconds | default 10 }}s /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/prestop-flush.ts
+                    status=$?
+                    if [ "$status" -ne 0 ]; then
+                      echo "🔴 [prestop-flush] failed exitCode=$status" >&2
+                    fi
+                    exit "$status"
+          {{- end }}
+          env:
+            - name: LOG_LEVEL
+              value: {{ .Values.env.logLevel | default "info" | quote }}
+            - name: LOG_KEEP_LONG_IDENTIFIERS
+              value: {{ .Values.env.logKeepLongIdentifiers | default false | quote }}
+            - name: OCTOGEE_RPC_TRACE_VERBOSE
+              value: {{ .Values.env.rpcTraceVerbose | default false | quote }}
+            - name: HOME
+              value: "/home/node"
+            - name: OPENCLAW_DIR
+              value: "/home/node/.openclaw"
+            - name: OPENCLAW_CONFIG_PATH
+              value: {{ if eq $gatewayClass "shared" }}"/home/node/.openclaw/openclaw.json"{{ else }}"/home/node/.openclaw/system_config/openclaw.json"{{ end }}
+            {{- if $isolatedControlUiEnabled }}
+            - name: OPENCLAW_DASHBOARD_BRIDGE_REQUIRED
+              value: "true"
+            {{- end }}
+            - name: OPENCLAW_CONTROL_IDENTITY
+              value: {{ $controlIdentity | quote }}
+            - name: NPM_CONFIG_CACHE
+              value: {{ ternary "/work/cache/npm" "/home/node/.npm-cache" $isolatedClass | quote }}
+            {{- if $isolatedClass }}
+            - name: OCTOGEE_BUILDER_TOOLCHAIN_ROOT
+              value: "/work/cache/toolchains"
+            - name: OCTOGEE_PROJECTS_MOUNT
+              value: "/work/materialized"
+            {{- end }}
+            - name: CUSTOMERS_DIR
+              value: "/home/node/.openclaw/customers"
+            - name: AGENTS_DIR
+              value: "/home/node/.openclaw/agents"
+            - name: K8S_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: GCLOUD_PROJECT
+              value: {{ .Values.env.gcloudProject | quote }}
+            - name: CLOUDSDK_CORE_PROJECT
+              value: {{ .Values.env.gcloudProject | quote }}
+            - name: GCP_PROJECT_ID
+              value: {{ .Values.env.gcloudProject | quote }}
+            - name: FIREBASE_PROJECT_ID
+              value: {{ .Values.env.firebaseProjectId | quote }}
+            - name: AGENT_PREFIX
+              value: {{ .Values.env.agentPrefix | quote }}
+            - name: GATEWAY_ID
+              value: {{ .Values.gatewayId | quote }}
+            # Identity alias — always the bare gatewayId under simple-roll.
+            # gateway-edge stamps it into the Dashboard-bridge capability file.
+            - name: GATEWAY_REVISION_ID
+              value: {{ $revision | quote }}
+            - name: GATEWAY_IMAGE_TAG
+              value: {{ $gatewayImageTag | quote }}
+            {{- if and .Values.allowOlderOpenclawMainBuilds (contains "-main." $gatewayImageTag) }}
+            - name: OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS
+              value: "1"
+            {{- end }}
+            - name: GATEWAY_PROFILE
+              value: {{ $imageProfile | quote }}
+            {{- if $x11Desktop }}
+            - name: GATEWAY_RUNTIME_KIND
+              value: {{ ternary "gce-vm" "cluster" $vmRuntime }}
+            - name: GATEWAY_COMPUTER_DESKTOP
+              value: x11
+            - name: OCTOGEE_DESKTOP_NODE_NAME
+              value: octogee-desktop
+            - name: OCTOGEE_DESKTOP_NODE_IDENTITY_PATH
+              value: /run/octogee/desktop-node-identity/identity.json
+            - name: GATEWAY_COMPUTER_CONTROL_URL
+              value: http://127.0.0.1:7777
+            {{- end }}
+            - name: GATEWAY_CLASS
+              value: {{ $gatewayClass | quote }}
+            {{- $llmBrokerUrl := .Values.env.llmBrokerUrl | default (printf "http://llm-broker.%s.svc.cluster.local:3010" .Release.Namespace) }}
+            # Every class routes anthropic through the LLM broker — no provider key
+            # is served from a pod to api.anthropic.com directly. The base URL is
+            # pod-level for all; pre-boot-config.ts syncs it into
+            # models.providers.anthropic.baseUrl.
+            - name: ANTHROPIC_BASE_URL
+              value: {{ $llmBrokerUrl | quote }}
+            - name: OPENROUTER_BASE_URL
+              value: {{ printf "%s/v1" (trimSuffix "/" $llmBrokerUrl) | quote }}
+            # OpenAI-compatible traffic that uses platform credentials goes through
+            # the broker; BYOK OpenAI keeps its provider-standard endpoint.
+            - name: PLATFORM_OPENAI_BASE_URL
+              value: {{ printf "%s/v1" (trimSuffix "/" $llmBrokerUrl) | quote }}
+            {{- if eq (toString .Values.env.platformMetaEnabled) "true" }}
+            - name: PLATFORM_META_BASE_URL
+              value: {{ printf "%s/v1" (trimSuffix "/" $llmBrokerUrl) | quote }}
+            {{- end }}
+            {{- if eq (toString .Values.env.platformVertexEnabled) "true" }}
+            - name: PLATFORM_VERTEX_BASE_URL
+              value: {{ trimSuffix "/" $llmBrokerUrl | quote }}
+            {{- end }}
+            - name: OPENAI_EMBEDDINGS_ENABLED
+              value: {{ .Values.env.openaiEmbeddingsEnabled | toString | quote }}
+            - name: OPENAI_EMBEDDINGS_MODEL
+              value: {{ .Values.env.openaiEmbeddingsModel | toString | quote }}
+            {{- if eq $gatewayClass "shared" }}
+            # Shared (multi-tenant) pods carry NO pod-level provider key. Each
+            # agent's anthropic:default is its OWN per-user broker token
+            # (agent-model-token-<agentId>), materialized into the agent's auth-profile
+            # store by pre-boot-config.ts / byot-sync and fetched at runtime via the
+            # secret-resolver → POST /internal/byok/agent-model-token. The broker
+            # resolves platform-or-BYOK per owner and meters per ownerUid.
+            {{- end }}
+            # Node.js runtime tuning sized per the resolved sizing tier
+            # ($preset.nodejs). UV pool default of 4 leaves parallel
+            # fs/crypto/dns serialized; V8 default ~4 GiB heap caps the
+            # gateway at a fraction of available pod memory. NODE_OPTIONS
+            # prepends Dockerfile's --no-deprecation; Node honors the env
+            # var unioned over CLI args.
+            - name: UV_THREADPOOL_SIZE
+              value: {{ $preset.nodejs.uvThreadpoolSize | quote }}
+            - name: NODE_OPTIONS
+              value: "--no-deprecation --max-old-space-size={{ $preset.nodejs.maxOldSpaceSizeMb }}"
+            - name: GITHUB_ORG
+              value: {{ .Values.env.githubOrg | quote }}
+            - name: MM_URL
+              value: {{ .Values.env.mmUrl | default (printf "http://mattermost.%s.svc.cluster.local:8065" .Release.Namespace) | quote }}
+            - name: MM_SITE_URL
+              value: {{ .Values.env.mmSiteUrl | default .Values.env.mmUrl | default (printf "http://mattermost.%s.svc.cluster.local:8065" .Release.Namespace) | quote }}
+            - name: MM_INTERACTIONS_CALLBACK_BASE_URL
+              value: {{ .Values.env.mmInteractionsCallbackBaseUrl | default (printf "http://mattermost-callback-router.%s.svc.cluster.local:3001/internal/openclaw/mattermost/%s" .Release.Namespace .Values.gatewayId) | quote }}
+            - name: MM_INTERACTIONS_ALLOWED_SOURCE_IPS
+              value: "127.0.0.1"
+            - name: GIT_API_URL
+              value: {{ .Values.env.gitApiUrl | default (printf "http://octogee-gitea-http.%s.svc.cluster.local:3000/api/v1" .Release.Namespace) | quote }}
+            - name: GIT_SSH_HOST
+              value: {{ .Values.env.gitSshHost | default (printf "octogee-gitea-ssh.%s.svc.cluster.local" .Release.Namespace) | quote }}
+            - name: API_PUBLIC_URL
+              value: {{ .Values.env.apiPublicUrl | quote }}
+            - name: APP_URL
+              value: {{ .Values.gatewayEdge.env.APP_URL | default .Values.env.appUrl | default "https://app.octogee.com" | quote }}
+            - name: PUBLIC_APP_ORIGINS
+              value: {{ join "," (required "gatewayEdge.publicAppOrigins is required" .Values.gatewayEdge.publicAppOrigins) | quote }}
+            - name: OPENCLAW_LOG_LEVEL
+              value: {{ .Values.env.openclawLogLevel | default "info" | quote }}
+            - name: FLEET_CONTROLLER_PORT
+              value: {{ .Values.env.fleetControllerPort | default "3003" | quote }}
+            {{- if $isolatedClass }}
+            - name: OCTOGEE_BUILDER_NPM_FALLBACK_REGISTRY
+              value: {{ .Values.env.builderNpmFallbackRegistry | quote }}
+            {{- end }}
+            - name: MIGRATION_RSYNC_PORT
+              value: {{ .Values.env.migrationRsyncPort | default "30873" | quote }}
+            - name: FLEET_CONTROLLER_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: octogee-fleet-controller
+                  key: public-key
+            # Where legacy in-pod callers reach gateway-edge. The platform
+            # INTERNAL_SERVICE_KEY is intentionally not present in this
+            # OpenClaw gateway container; callers that still require it fail closed
+            # until they move behind octogee-api/fleet controller.
+            - name: GATEWAY_EDGE_INTERNAL_URL
+              value: "http://127.0.0.1:{{ .Values.gatewayEdge.port }}"
+            # Gitea admin lifecycle operations are brokered by octogee-api,
+            # which holds the Gitea admin token. The OpenClaw gateway
+            # presents only its projected gateway KSA token; octogee-api
+            # TokenReview + tenant enforcement bind it back to this gateway.
+            - name: GITEA_ADMIN_BROKER_URL
+              value: "http://octogee-api.{{ .Release.Namespace }}.svc.cluster.local:3001"
+            - name: FLEET_BROKER_URL
+              value: "http://octogee-api.{{ .Release.Namespace }}.svc.cluster.local:3001"
+            - name: OCTOGEE_API_SA_TOKEN_PATH
+              value: "/var/run/secrets/octogee-gateway-broker/token"
+            - name: OCTOGEE_GATEWAY_CREDENTIAL_TOKEN_PATH
+              value: "/var/run/secrets/octogee-gateway-credentials/token"
+            # Same per-gateway K8s secret as init + gateway-edge (see init
+            # container env block for the rationale). Pinned via the chart
+            # so kubectl-set-env side-channels can't drift the value out
+            # from under helm again.
+            - name: OPENCLAW_AGENT_STORE_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: gateway-auth-token-{{ .Values.gatewayId }}
+                  key: agent-store-dsn
+            - name: OPENCLAW_GATEWAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gateway-auth-token-{{ .Values.gatewayId }}
+                  key: token
+          volumeMounts:
+            - name: data
+              mountPath: /home/node
+            {{- if $isolatedClass }}
+            - name: builder-cache
+              mountPath: /work/cache
+            {{- end }}
+            {{- if $isolatedClass }}
+            - name: project-materializations
+              mountPath: /work/materialized
+              subPath: projects
+            {{- end }}
+            {{- if $x11Desktop }}
+            - name: desktop-node-identity
+              mountPath: /run/octogee/desktop-node-identity
+            - name: desktop-runtime
+              mountPath: /run/user/1000
+            - name: desktop-shm
+              mountPath: /dev/shm
+            {{- end }}
+            # OpenClaw's exec secret provider requires the resolver to be owned
+            # by the runtime uid, so the image cannot make it root-owned. The
+            # init container stages the bundle into a pod-local volume and this
+            # read-only mount pins it over the image path: the runtime user
+            # owns the file but cannot chmod, rewrite, or replace it.
+            - name: secret-resolver
+              mountPath: /octogee/scripts/secret-resolver.mjs
+              subPath: secret-resolver.mjs
+              readOnly: true
+            - name: gateway-broker-sa-token
+              mountPath: /var/run/secrets/octogee-gateway-broker
+              readOnly: true
+            - name: gateway-credential-sa-token
+              mountPath: /var/run/secrets/octogee-gateway-credentials
+              readOnly: true
+            # No platform secrets are mounted here. The projected token above
+            # is this gateway's KSA identity for tenant-bound broker calls.
+          # Non-shared startup and liveness probe the fleet controller, which
+          # starts after durable-config repair; the startup budget bounds one
+          # identity-pure attempt. Readiness stays closed until the fleet controller finishes
+          # the surge user handoff and OpenClaw is healthy.
+          startupProbe:
+            {{- if eq $gatewayClass "shared" }}
+            httpGet:
+              path: /healthz
+              port: 18789
+            {{- else }}
+            httpGet:
+              path: /startup-ready
+              port: {{ .Values.env.fleetControllerPort | default "3003" }}
+            {{- end }}
+            initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            {{- if eq $gatewayClass "shared" }}
+            failureThreshold: {{ .Values.probes.startup.sharedFailureThreshold }}
+            {{- else }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+            {{- end }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+          livenessProbe:
+            {{- if eq $gatewayClass "shared" }}
+            tcpSocket:
+              port: 18789
+            {{- else }}
+            httpGet:
+              path: /health
+              port: {{ .Values.env.fleetControllerPort | default "3003" }}
+            {{- end }}
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+          readinessProbe:
+            httpGet:
+              path: /surge-ready
+              port: {{ .Values.env.fleetControllerPort | default "3003" }}
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            successThreshold: {{ .Values.probes.readiness.successThreshold | default 1 }}
+          resources:
+            {{- if $isolatedClass }}
+            {{- toYaml (mergeOverwrite (deepCopy $preset.resources) (dict "requests" (dict "ephemeral-storage" "9Gi") "limits" (dict "ephemeral-storage" "9Gi"))) | nindent 12 }}
+            {{- else }}
+            {{- toYaml $preset.resources | nindent 12 }}
+            {{- end }}
+
+        {{- if .Values.gatewayEdge.enabled }}
+        # chat-proxy folded in — one container, one port (3001) serves the
+        # API, the chat WS surface, and /metrics.
+        - name: gateway-edge
+          image: "{{ required "gatewayEdge.image.repository is required" .Values.gatewayEdge.image.repository }}:{{ .Values.gatewayEdge.image.tag | default .Values.imageTag }}"
+          ports:
+            - containerPort: {{ .Values.gatewayEdge.port }}
+              name: gateway-edge
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: LOG_LEVEL
+              value: {{ .Values.env.logLevel | default "info" | quote }}
+            - name: LOG_KEEP_LONG_IDENTIFIERS
+              value: {{ .Values.env.logKeepLongIdentifiers | default false | quote }}
+            - name: PORT
+              value: "{{ .Values.gatewayEdge.port }}"
+            - name: PUBLIC_APP_ORIGINS
+              value: {{ join "," (required "gatewayEdge.publicAppOrigins is required" .Values.gatewayEdge.publicAppOrigins) | quote }}
+            {{- if $isolatedClass }}
+            - name: OCTOGEE_PROJECTS_MOUNT
+              value: "/work/materialized"
+            {{- end }}
+            - name: K8S_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: K8S_SERVICE_ACCOUNT_NAME
+              value: {{ include "octogee-gateway.serviceAccountName" . | quote }}
+            - name: OPENCLAW_GATEWAY_URL
+              value: "http://127.0.0.1:18789"
+            - name: GATEWAY_API_URL
+              value: "http://127.0.0.1:18789"
+            - name: OPENCLAW_GATEWAY_DEVICE_TOKEN_PATH
+              value: "/var/run/octogee/openclaw-device-auth/token"
+            - name: OPENCLAW_CONFIG
+              value: {{ if eq $gatewayClass "shared" }}"/home/node/.openclaw/openclaw.json"{{ else }}"/home/node/.openclaw/system_config/openclaw.json"{{ end }}
+            - name: OPENCLAW_CONTROL_IDENTITY
+              value: {{ $controlIdentity | quote }}
+            {{- if $isolatedControlUiEnabled }}
+            - name: OPENCLAW_DIR
+              value: "/home/node/.openclaw"
+            - name: OPENCLAW_CONFIG_PATH
+              value: "/home/node/.openclaw/system_config/openclaw.json"
+            - name: OPENCLAW_DASHBOARD_BRIDGE_ENABLED
+              value: "true"
+            - name: OPENCLAW_CONTROL_BROKER_URL
+              value: "http://octogee-api.{{ .Release.Namespace }}.svc.cluster.local:3001"
+            {{- end }}
+            - name: GATEWAY_ID
+              value: {{ .Values.gatewayId | quote }}
+            # Identity alias — always the bare gatewayId under simple-roll.
+            # gateway-edge stamps it into the Dashboard-bridge capability file.
+            - name: GATEWAY_REVISION_ID
+              value: {{ $revision | quote }}
+            - name: GATEWAY_PROFILE
+              value: {{ $imageProfile | quote }}
+            {{- if $x11Desktop }}
+            - name: GATEWAY_RUNTIME_KIND
+              value: {{ ternary "gce-vm" "cluster" $vmRuntime }}
+            - name: GATEWAY_COMPUTER_DESKTOP
+              value: x11
+            - name: OCTOGEE_DESKTOP_NODE_NAME
+              value: octogee-desktop
+            - name: OCTOGEE_DESKTOP_NODE_IDENTITY_PATH
+              value: /run/octogee/desktop-node-identity/identity.json
+            - name: GATEWAY_COMPUTER_CONTROL_URL
+              value: http://127.0.0.1:7777
+            {{- end }}
+            - name: GATEWAY_CLASS
+              value: {{ $gatewayClass | quote }}
+            - name: OPENROUTER_BASE_URL
+              value: {{ printf "%s/v1" (trimSuffix "/" $llmBrokerUrl) | quote }}
+            - name: PLATFORM_OPENAI_BASE_URL
+              value: {{ printf "%s/v1" (trimSuffix "/" $llmBrokerUrl) | quote }}
+            {{- if eq (toString .Values.env.platformMetaEnabled) "true" }}
+            - name: PLATFORM_META_BASE_URL
+              value: {{ printf "%s/v1" (trimSuffix "/" $llmBrokerUrl) | quote }}
+            {{- end }}
+            {{- if eq (toString .Values.env.platformVertexEnabled) "true" }}
+            - name: PLATFORM_VERTEX_BASE_URL
+              value: {{ trimSuffix "/" $llmBrokerUrl | quote }}
+            {{- end }}
+            - name: MM_INTERNAL_URL
+              value: {{ required "env.mmInternalUrl is required (in-cluster MM URL — the folded chat-proxy WS bridge + Activity sink use it)" .Values.env.mmInternalUrl | quote }}
+            - name: MM_PUBLIC_URL
+              value: {{ .Values.env.mmInternalUrl | quote }}
+            - name: FIREBASE_PROJECT
+              value: {{ .Values.env.firebaseProjectId | quote }}
+            - name: OPENCLAW_RUNTIME_BROKER_URL
+              value: "http://octogee-api.{{ .Release.Namespace }}.svc.cluster.local:3001"
+            - name: CONNECTOR_TOKEN_BROKER_URL
+              value: "http://octogee-api.{{ .Release.Namespace }}.svc.cluster.local:3001"
+            - name: WORKSPACE_COMMIT_PROOF_BROKER_URL
+              value: "http://octogee-api.{{ .Release.Namespace }}.svc.cluster.local:3001"
+            - name: FLEET_BROKER_URL
+              value: {{ .Values.fleetBrokerUrl | default (printf "http://octogee-api.%s.svc.cluster.local:3001" .Release.Namespace) | quote }}
+            - name: OCTOGEE_API_SA_TOKEN_PATH
+              value: "/var/run/secrets/octogee-api/token"
+            - name: OCTOGEE_GATEWAY_CREDENTIAL_TOKEN_PATH
+              value: "/var/run/secrets/octogee-gateway-credentials/token"
+            - name: OCTOGEE_SIDECAR_BROKER_TOKEN_PATH
+              value: "/var/run/secrets/octogee-sidecar-broker/token"
+            # NOTE: GCP_PROJECT_ID + GITEA_ORG are NOT set here — the
+            # .Values.gatewayEdge.env range below already provides the
+            # non-secret project/org identifiers. Platform secrets are not
+            # expanded into this sidecar.
+            - name: OCTOGEE_ALLOWED_WS_ORIGINS
+              value: {{ .Values.env.allowedWsOrigins | default "" | quote }}
+            {{- if .Values.env.giteaPublicBaseUrl }}
+            - name: GITEA_PUBLIC_BASE_URL
+              value: {{ .Values.env.giteaPublicBaseUrl | quote }}
+            {{- end }}
+            - name: AGENT_CONTROL_ROUTER_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agent-control-router
+                  key: public-key
+            - name: BYOT_SYNC_INTERNAL_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: byot-sync-internal
+                  key: public-key
+            # Same per-gateway K8s secret as init + gateway container (see
+            # init container env block for the rationale). chat-proxy is
+            # folded into this container and needs the same token openclaw
+            # uses for its in-pod RPC.
+            - name: OPENCLAW_AGENT_STORE_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: gateway-auth-token-{{ .Values.gatewayId }}
+                  key: agent-store-dsn
+            - name: OPENCLAW_GATEWAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gateway-auth-token-{{ .Values.gatewayId }}
+                  key: token
+            {{- /* Platform secrets are intentionally absent. Locality routes
+                that still need platform authority fail closed or are served by
+                octogee-api/fleet controller, while gateway-local callers use the
+                per-gateway token and TokenReview paths. */}}
+            {{- if $isolatedClass }}
+            - name: GATEWAY_EDGE_INTERNAL_URL
+              value: "http://localhost:{{ .Values.gatewayEdge.port }}"
+            {{- end }}
+            {{- range $key, $val := .Values.gatewayEdge.env }}
+            {{- $omitKms := eq $key "OCTOGEE_KMS_KEY_NAME" -}}
+            {{- if and $val (not $omitKms) }}
+            - name: {{ $key }}
+              value: {{ $val | quote }}
+            {{- end }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.gatewayEdge.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /home/node
+            {{- if $isolatedClass }}
+            - name: builder-cache
+              mountPath: /work/cache
+            {{- end }}
+            {{- if $isolatedClass }}
+            - name: project-materializations
+              mountPath: /work/materialized
+              subPath: projects
+            {{- end }}
+            {{- if $x11Desktop }}
+            - name: desktop-node-identity
+              mountPath: /run/octogee/desktop-node-identity
+              readOnly: true
+            {{- end }}
+            - name: tmp
+              mountPath: /tmp
+            - name: openclaw-device-auth
+              mountPath: /var/run/octogee/openclaw-device-auth
+            - name: octogee-api-sa-token
+              mountPath: /var/run/secrets/octogee-api
+              readOnly: true
+            - name: gateway-credential-sa-token
+              mountPath: /var/run/secrets/octogee-gateway-credentials
+              readOnly: true
+            - name: sidecar-broker-sa-token
+              mountPath: /var/run/secrets/octogee-sidecar-broker
+              readOnly: true
+            - name: k8s-api-token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.gatewayEdge.port }}
+            initialDelaySeconds: {{ .Values.gatewayEdge.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.gatewayEdge.probes.readiness.periodSeconds }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.gatewayEdge.port }}
+            initialDelaySeconds: {{ .Values.gatewayEdge.probes.startup.initialDelaySeconds }}
+            periodSeconds: {{ .Values.gatewayEdge.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.gatewayEdge.probes.startup.failureThreshold }}
+            timeoutSeconds: {{ .Values.gatewayEdge.probes.startup.timeoutSeconds }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.gatewayEdge.port }}
+            initialDelaySeconds: {{ .Values.gatewayEdge.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.gatewayEdge.probes.liveness.periodSeconds }}
+        {{- end }}
+      volumes:
+        {{- if $isolatedClass }}
+        - name: builder-cache
+          emptyDir:
+            sizeLimit: 2Gi
+        - name: project-materializations
+          emptyDir:
+            sizeLimit: 2Gi
+        - name: data
+          emptyDir:
+            sizeLimit: 4Gi
+        {{- else }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+        {{- if $x11Desktop }}
+        - name: desktop-node-identity
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+        - name: desktop-runtime
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
+        - name: desktop-shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+        {{- end }}
+        - name: secret-resolver
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: octogee-api-sa-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: octogee-api
+                  expirationSeconds: 3600
+        - name: gateway-broker-sa-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: octogee-api
+                  expirationSeconds: 3600
+        - name: gateway-credential-sa-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: octogee-api-gateway-credentials
+                  expirationSeconds: 3600
+        - name: sidecar-broker-sa-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: octogee-api-sidecar-broker
+                  expirationSeconds: 3600
+        - name: openclaw-device-auth
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+        - name: k8s-api-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt

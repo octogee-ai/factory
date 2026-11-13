@@ -1,0 +1,34 @@
+{
+  "plugins": {
+    "rdf.dock": {
+      "repository": "https://github.com/npenkov/omarchy-dock",
+      "commit": "bd9042da2dcf7753cd1cebf37122eecf0038e0b1",
+      "version": "2.2.0",
+      "license": "MIT",
+      "omitted": [
+        "preview.png",
+        "scripts/",
+        "install.sh",
+        "uninstall.sh",
+        "hypr/",
+        ".gitignore"
+      ],
+      "localEdits": [
+        "Dock.qml: alwaysVisible flag keeps the dock shown, skips the hide timer, and reserves its strip through exclusiveZone"
+      ]
+    },
+    "community.window-switcher": {
+      "repository": "https://github.com/devmobasa/omarchy-window-switcher",
+      "commit": "93d286ab67254d47081aa2b5d684bb5cfa752227",
+      "version": "1.0.0",
+      "license": "MIT",
+      "omitted": [
+        "preview.webp",
+        "test/",
+        "docs/",
+        "CONTEXT.md",
+        ".gitignore"
+      ]
+    }
+  }
+}

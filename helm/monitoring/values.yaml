@@ -1,0 +1,131 @@
+gmp:
+  projectId: octogee
+  frontend:
+    image: gke.gcr.io/prometheus-engine/frontend:v0.18.0-gke.2
+    replicas: 2
+
+monitoredNamespaces:
+  - octogee
+
+environmentNamespaces:
+  - octogee
+
+iap:
+  enabled: false
+  domain: ""
+  staticIpName: grafana-ip
+  oauthSecretName: grafana-iap-oauth
+
+grafana:
+  image:
+    repository: grafana/grafana
+    tag: "13.2.1-distroless@sha256:3600073f45a9895d2e2c4042da0e745819f5b78bf781266952a400c40dcd8d69"
+  grafana.ini:
+    dashboards:
+      default_home_dashboard_path: /etc/grafana/home-dashboard.json
+  extraConfigmapMounts:
+    - name: home-dashboard
+      mountPath: /etc/grafana/home-dashboard.json
+      subPath: octogee-overview.json
+      configMap: grafana-dash-octogee-overview
+      readOnly: true
+  rbac:
+    namespaced: true
+    useExistingRole: octogee-monitoring-grafana-dashboard-reader
+  replicas: 1
+  nodeSelector:
+    kubernetes.io/os: linux
+    cloud.google.com/private-node: "true"
+  deploymentStrategy:
+    type: Recreate
+  extraLabels:
+    app.kubernetes.io/part-of: octogee-monitoring
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 472
+    runAsGroup: 472
+    fsGroup: 472
+    fsGroupChangePolicy: OnRootMismatch
+  initChownData:
+    enabled: false
+  plugins:
+    - googlecloud-logging-datasource@1.7.2
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      deleteDatasources:
+        - name: Cloud Logging
+          orgId: 1
+      datasources:
+        - name: Managed Prometheus
+          type: prometheus
+          uid: gmp
+          url: http://gmp-frontend.monitoring.svc.cluster.local:9090
+          access: proxy
+          isDefault: true
+        - name: Cloud Monitoring
+          type: stackdriver
+          uid: cloud-monitoring
+          access: proxy
+          jsonData:
+            authenticationType: gce
+            defaultProject: octogee
+        - name: Cloud Logging
+          type: googlecloud-logging-datasource
+          uid: cloud-logging
+          access: proxy
+          jsonData:
+            authenticationType: gce
+            defaultProject: octogee
+  sidecar:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      folderAnnotation: grafana_folder
+      provider:
+        foldersFromFilesStructure: true
+        disableDelete: false
+        allowUiUpdates: true
+      searchNamespace: monitoring
+      resource: configmap
+  serviceAccount:
+    create: true
+    name: grafana
+  adminUser: admin
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+  sessionExpireTime: 720h
+  users:
+    auto_assign_org: true
+    auto_assign_org_id: 1
+    auto_assign_org_role: Viewer
+  persistence:
+    enabled: true
+    type: pvc
+    storageClassName: standard-rwo
+    accessModes:
+      - ReadWriteOnce
+    size: 10Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 384Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 3000
+  ingress:
+    enabled: false

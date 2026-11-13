@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+import os
+from pathlib import Path
+import secrets
+import string
+import socket
+import time
+
+port = int(os.environ.get('OCTO_VNC_PORT', '5900'))
+deadline = time.monotonic() + 10
+while True:
+    pid = os.environ.get('OCTO_WAYVNC_PID')
+    if pid:
+        os.kill(int(pid), 0)
+    try:
+        with socket.create_connection(('127.0.0.1', port), timeout=0.2):
+            break
+    except OSError:
+        if time.monotonic() >= deadline:
+            raise TimeoutError('WayVNC did not become ready for the OpenClaw reflector')
+        time.sleep(0.1)
+
+os.umask(0o077)
+state = Path(os.environ["XDG_RUNTIME_DIR"]) / "octogee-openclaw-vnc"
+state.mkdir(mode=0o700, exist_ok=True)
+password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
+(state / 'password').write_text(password + '\n')
+os.execvp('x11vnc', [
+    'x11vnc', '-norc', '-reflect', f'127.0.0.1:{port}',
+    '-listen', '127.0.0.1', '-rfbport', '5901', '-no6', '-forever', '-shared',
+    '-passwdfile', str(state / 'password'), '-noremote',
+])

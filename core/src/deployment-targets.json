@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "activeTargets": {
+    "kind": "kind"
+  },
+  "targets": {
+    "kind": {
+      "environment": "kind",
+      "lifecycle": "active",
+      "clusterName": "kind",
+      "namespace": "octogee-local",
+      "siteOrigin": "http://localhost:4321",
+      "appOrigin": "http://localhost:4322",
+      "apiOrigin": "http://localhost:3001",
+      "gitOrigin": "http://localhost:3000",
+      "mattermostOrigin": "http://localhost:8065",
+      "gatewayValuesFile": "values.yaml"
+    }
+  }
+}

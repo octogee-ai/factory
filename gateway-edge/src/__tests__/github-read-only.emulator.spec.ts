@@ -1,0 +1,87 @@
+import request from "supertest";
+import { promises as fs } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+
+import {
+  getIdTokenForUid,
+  setupEmulatorTest,
+} from "@octogee/test-helpers/firestore-emulator";
+
+import { createApp } from "../index.js";
+import { db } from "../lib/db.js";
+import { resolveFileTarget } from "../lib/fileTarget.js";
+
+setupEmulatorTest();
+
+const UID = "ro-uid";
+const WS = "rowsowner";
+const PID = "ghproj";
+
+let usersRoot = "";
+let originalUsersDir: string | undefined;
+
+async function seedGithubProject(): Promise<void> {
+  await db.collection("workspaces").doc(WS).set({ id: WS, slug: WS, ownerUid: UID });
+  await db.collection("users").doc(UID).set({
+    uid: UID,
+    username: WS,
+    workspaceId: WS,
+    subscription: { tier: "personal", status: "active" },
+  });
+  await db.collection("users").doc(UID).collection("system").doc("config").set({ role: "admin" });
+  await db.doc(`workspaces/${WS}/projects/${PID}`).set({
+    id: PID,
+    ownerUid: UID,
+    workspaceId: WS,
+    slug: PID,
+    name: "GH",
+    visibility: "private",
+    provisioningState: "active",
+    giteaRepoName: null,
+    repoSource: { provider: "github", owner: "octogee-ai", repo: "octogee" },
+    starCount: 0,
+    memberCount: 1,
+  });
+}
+
+beforeAll(async () => {
+  usersRoot = await fs.mkdtemp(path.join(os.tmpdir(), "gh-provider-gate-"));
+  originalUsersDir = process.env.CUSTOMERS_DIR;
+  process.env.CUSTOMERS_DIR = usersRoot;
+});
+
+afterAll(async () => {
+  if (originalUsersDir === undefined) delete process.env.CUSTOMERS_DIR;
+  else process.env.CUSTOMERS_DIR = originalUsersDir;
+  await fs.rm(usersRoot, { recursive: true, force: true });
+});
+
+describe("GitHub-backed project provider gate", () => {
+  let token = "";
+  beforeEach(async () => {
+    await seedGithubProject();
+    token = await getIdTokenForUid(UID);
+  });
+
+  it("the git read lane resolves a github target without a connector token", async () => {
+    const result = await resolveFileTarget(
+      { slug: WS, projectSlug: PID, callerUid: UID, callerWorkspaceSlug: WS },
+      { access: "read", resolveGithubToken: false },
+    );
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    expect(result.target.provider).toBe("github");
+    expect(result.target.githubToken).toBeUndefined();
+  });
+
+  it("/upload refuses a github target (409) — blob writes stay Gitea-only", async () => {
+    const r = await request(createApp())
+      .post(`/api/workspace/upload?slug=${WS}&project=${PID}`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ files: [{ name: "x.txt", content: "aGk=" }] });
+    expect(r.status, r.text).toBe(409);
+    expect(r.body.code).toBe("GITHUB_READ_ONLY");
+  });
+});

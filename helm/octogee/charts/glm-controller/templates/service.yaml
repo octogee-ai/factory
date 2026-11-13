@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: glm-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: glm-controller
+  {{- if eq ((.Values.global).ingressClassName | default "traefik") "gce" }}
+  annotations:
+    cloud.google.com/backend-config: '{"default":"{{ .Values.backendConfig.name | default "glm-controller-backend" }}"}'
+    cloud.google.com/neg: '{"ingress":true}'
+  {{- end }}
+spec:
+  selector:
+    app: glm-controller
+  ports:
+    - port: {{ .Values.http.port }}
+      targetPort: {{ .Values.http.port }}
+      name: http
+  type: ClusterIP

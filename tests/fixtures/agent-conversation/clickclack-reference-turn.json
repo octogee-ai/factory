@@ -1,0 +1,30 @@
+{
+  "source": {
+    "repository": "openclaw/clickclack",
+    "commit": "f441a9c6e05b871e3a8cf7de810d23cc1292ecae",
+    "files": [
+      "apps/web/src/lib/chat/agent-activity.ts",
+      "apps/web/src/components/messages/PreambleBlock.svelte",
+      "tests/e2e/chat.spec.ts"
+    ]
+  },
+  "rows": [
+    {
+      "type": "commentary",
+      "itemId": "commentary-1",
+      "body": "Checking the deployment boundary."
+    },
+    {
+      "type": "tool",
+      "itemId": "tool-1",
+      "name": "bash",
+      "detail": "inspect · validated local target"
+    }
+  ],
+  "expected": {
+    "orderedItemIds": ["commentary-1", "tool-1"],
+    "finalAnswer": "Deployment boundary is healthy.",
+    "complete": true,
+    "defaultExpanded": false
+  }
+}

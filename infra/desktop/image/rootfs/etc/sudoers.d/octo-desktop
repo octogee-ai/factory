@@ -1,0 +1,2 @@
+Defaults:octo verifypw=any
+octo ALL=(ALL) NOPASSWD: ALL

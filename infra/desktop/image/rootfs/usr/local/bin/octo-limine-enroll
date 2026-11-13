@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+conf="${OCTO_LIMINE_CONF:-/boot/limine.conf}"
+marker="${OCTO_LIMINE_MARKER:-/var/lib/octogee/limine-enrolled}"
+uki="${OCTO_LIMINE_UKI:-/boot/EFI/Linux/omarchy_linux-omarchy.efi}"
+current="$(cat /etc/machine-id)"
+[[ "$current" =~ ^[0-9a-f]{32}$ ]] || { echo "octo-limine-enroll: /etc/machine-id is not set yet" >&2; exit 1; }
+
+for id in $(grep -o 'machine-id=[0-9a-f]*' "$conf" | cut -d= -f2 | sort -u); do
+  [[ "$id" == "$current" ]] && continue
+  echo "octo-limine-enroll: removing boot entries enrolled by image build machine $id"
+  limine-entry-tool --remove-entry "$id" --quiet
+done
+
+limine-update
+recorded="$(grep -o "${uki##*/}#[0-9a-f]*" "$conf" | cut -d# -f2 | sort -u)"
+actual="$(b2sum "$uki" | cut -d' ' -f1)"
+[[ "$recorded" == "$actual" ]] || { echo "octo-limine-enroll: $conf records hash ${recorded:-none} for ${uki##*/} but the file hashes to $actual" >&2; exit 1; }
+entries="$(grep -c 'machine-id=' "$conf")"
+[[ "$entries" == 1 ]] || { echo "octo-limine-enroll: expected one OS entry in $conf, found $entries" >&2; exit 1; }
+
+install -d -m 0755 "$(dirname "$marker")"
+: > "$marker"
+echo "octo-limine-enroll: boot entries enrolled for machine $current"

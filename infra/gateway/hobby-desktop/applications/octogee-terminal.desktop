@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Terminal
+Comment=Run commands on this computer
+Exec=sakura
+Icon=octogee-terminal
+Terminal=false
+Categories=System;TerminalEmulator;

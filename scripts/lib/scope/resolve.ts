@@ -29,7 +29,25 @@ function isGlobal(path: string): boolean {
   return GLOBAL_PREFIX.some((pre) => path.startsWith(pre));
 }
 
-function ownerOf(path: string): (typeof OWNERSHIP)[number] | undefined {
+const PRODUCT_DIR = "product/";
+
+function overlaidPlatformPath(path: string): string {
+  if (!path.startsWith(PRODUCT_DIR) || longestOwner(path)?.dir !== PRODUCT_DIR) return path;
+  return `platform/${path.slice(PRODUCT_DIR.length)}`;
+}
+
+const MANIFEST_PATHS: readonly string[] = [
+  ...OWNERSHIP.map((o) => o.dir),
+  ...EDGES.map((edge) => edge.when),
+  ...GLOBAL_EXACT,
+  ...GLOBAL_PREFIX,
+];
+
+function manifestPathsBeneath(path: string): string[] {
+  return MANIFEST_PATHS.filter((entry) => entry.startsWith(`${path}/`));
+}
+
+function longestOwner(path: string): (typeof OWNERSHIP)[number] | undefined {
   let best: (typeof OWNERSHIP)[number] | undefined;
   for (const o of OWNERSHIP) {
     if (path.startsWith(o.dir) && (!best || o.dir.length > best.dir.length)) {
@@ -37,6 +55,10 @@ function ownerOf(path: string): (typeof OWNERSHIP)[number] | undefined {
     }
   }
   return best;
+}
+
+function ownerOf(path: string): (typeof OWNERSHIP)[number] | undefined {
+  return longestOwner(overlaidPlatformPath(path)) ?? longestOwner(path);
 }
 
 export function resolveScope(changedPaths: string[], deletedPaths: ReadonlySet<string> = new Set()): ScopeResult {
@@ -48,11 +70,14 @@ export function resolveScope(changedPaths: string[], deletedPaths: ReadonlySet<s
 
   for (const path of changedPaths) {
     addPathScope(acc, path);
+    addSubmoduleScope(acc, path);
   }
 
-  const unmapped = changedPaths.filter((path) => !deletedPaths.has(path) && !isGlobal(path) && !isInert(path) && !ownerOf(path));
+  const unmapped = changedPaths.filter(
+    (path) => !deletedPaths.has(path) && !isGlobal(path) && !isInert(path) && !ownerOf(path) && !manifestPathsBeneath(path).length,
+  );
   if (unmapped.length) {
-    throw new Error(`No CI owner for ${unmapped.join(", ")}; add it to OWNERSHIP in scripts/lib/scope/manifest.ts`);
+    throw new Error(`No CI owner for ${unmapped.join(", ")}; add it to OWNERSHIP in platform/scripts/lib/scope/manifest.ts`);
   }
 
   if (acc.everything) {
@@ -68,6 +93,13 @@ function addPathScope(acc: ScopeAccumulator, path: string): void {
 
   addOwnerScope(acc, path);
   addEdgeScopes(acc, path);
+}
+
+function addSubmoduleScope(acc: ScopeAccumulator, path: string): void {
+  const beneath = manifestPathsBeneath(path);
+  if (!beneath.length) return;
+  acc.reasons.push(`submodule:${path}`);
+  for (const entry of beneath) addPathScope(acc, entry);
 }
 
 function markGlobalOrInert(acc: ScopeAccumulator, path: string): boolean {
@@ -93,8 +125,9 @@ function addOwnerScope(acc: ScopeAccumulator, path: string): void {
 }
 
 function addEdgeScopes(acc: ScopeAccumulator, path: string): void {
+  const platformPath = overlaidPlatformPath(path);
   for (const edge of EDGES) {
-    if (!path.startsWith(edge.when)) continue;
+    if (!platformPath.startsWith(edge.when)) continue;
     addJobs(acc.jobs, edge.jobs);
     acc.reasons.push(`edge:${edge.when}`);
   }
@@ -112,7 +145,6 @@ export interface GhaOutputs {
   run_app: boolean;
   run_desktop_package: boolean;
   run_firestore_rules: boolean;
-  run_core_emulator: boolean;
   run_customer_lifecycle_emulator: boolean;
   run_functions_emulator: boolean;
   run_gateway_edge_emulator: boolean;
@@ -128,7 +160,6 @@ export function toGhaOutputs(result: ScopeResult): GhaOutputs {
     run_app: has("app"),
     run_desktop_package: has("desktop-package"),
     run_firestore_rules: has("firestore-rules"),
-    run_core_emulator: has("core-emulator"),
     run_customer_lifecycle_emulator: has("customer-lifecycle-emulator"),
     run_functions_emulator: has("functions-emulator"),
     run_gateway_edge_emulator: has("gateway-edge-emulator"),
@@ -144,7 +175,6 @@ export function serializeGhaOutputs(out: GhaOutputs): string {
     `run_app=${out.run_app}`,
     `run_desktop_package=${out.run_desktop_package}`,
     `run_firestore_rules=${out.run_firestore_rules}`,
-    `run_core_emulator=${out.run_core_emulator}`,
     `run_customer_lifecycle_emulator=${out.run_customer_lifecycle_emulator}`,
     `run_functions_emulator=${out.run_functions_emulator}`,
     `run_gateway_edge_emulator=${out.run_gateway_edge_emulator}`,

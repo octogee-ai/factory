@@ -1,0 +1,62 @@
+{{- if .Values.networkPolicy.enforceDefaultDeny }}
+{{- $cidr := required "networkPolicy.privateServicesCidr is required" (.Values.networkPolicy.platformStatePostgresCidr | default .Values.networkPolicy.privateServicesCidr) }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: platform-state-postgres-egress
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values:
+          - octogee-api
+          - llm-broker
+          - glm-controller
+          {{- if ((.Values.global).platformState).expirySweepEnabled }}
+          - platform-state-expiry
+          {{- end }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: {{ $cidr }}
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: platform-state-migrate-egress
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  podSelector:
+    matchLabels:
+      app: platform-state-migrate
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: {{ $cidr }}
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - ipBlock:
+            cidr: {{ required "networkPolicy.nodeLocalDnsCidr is required" .Values.networkPolicy.nodeLocalDnsCidr }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+{{- end }}

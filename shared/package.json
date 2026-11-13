@@ -1,0 +1,448 @@
+{
+  "name": "@octogee/shared",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/types/index.js",
+  "types": "dist/types/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "default": "./dist/types/index.js"
+    },
+    "./types/agent-characters": {
+      "types": "./dist/types/agent-characters.d.ts",
+      "default": "./dist/types/agent-characters.js"
+    },
+    "./types/agent-look": {
+      "types": "./dist/types/agent-look.d.ts",
+      "default": "./dist/types/agent-look.js"
+    },
+    "./types/time-zone": {
+      "types": "./dist/types/time-zone.d.ts",
+      "default": "./dist/types/time-zone.js"
+    },
+    "./types/agent-models": {
+      "types": "./dist/types/agent-models.d.ts",
+      "default": "./dist/types/agent-models.js"
+    },
+    "./types/agent": {
+      "types": "./dist/types/agent.d.ts",
+      "default": "./dist/types/agent.js"
+    },
+    "./types/account-lifecycle": {
+      "types": "./dist/types/account-lifecycle.d.ts",
+      "default": "./dist/types/account-lifecycle.js"
+    },
+    "./types/agent-import": {
+      "types": "./dist/types/agent-import.d.ts",
+      "default": "./dist/types/agent-import.js"
+    },
+    "./types/agent-conversation": {
+      "types": "./dist/types/agent-conversation.d.ts",
+      "default": "./dist/types/agent-conversation.js"
+    },
+    "./types/automations": {
+      "types": "./dist/types/automations.d.ts",
+      "default": "./dist/types/automations.js"
+    },
+    "./types/gateway-control": {
+      "types": "./dist/types/gateway-control.d.ts",
+      "default": "./dist/types/gateway-control.js"
+    },
+    "./types/isolated-gateway-id": {
+      "types": "./dist/types/isolated-gateway-id.d.ts",
+      "default": "./dist/types/isolated-gateway-id.js"
+    },
+    "./types/builder-identity": {
+      "types": "./dist/types/user-identity.d.ts",
+      "default": "./dist/types/user-identity.js"
+    },
+    "./types/placement-receipts": {
+      "types": "./dist/types/placement-receipts.d.ts",
+      "default": "./dist/types/placement-receipts.js"
+    },
+    "./types/channel": {
+      "types": "./dist/types/channel.d.ts",
+      "default": "./dist/types/channel.js"
+    },
+    "./types/channel-session-models": {
+      "types": "./dist/types/channel-session-models.d.ts",
+      "default": "./dist/types/channel-session-models.js"
+    },
+    "./types/connectors": {
+      "types": "./dist/types/connectors.d.ts",
+      "default": "./dist/types/connectors.js"
+    },
+    "./types/google-capabilities": {
+      "types": "./dist/types/google-capabilities.d.ts",
+      "default": "./dist/types/google-capabilities.js"
+    },
+    "./types/cost-estimator": {
+      "types": "./dist/types/cost-estimator.d.ts",
+      "default": "./dist/types/cost-estimator.js"
+    },
+    "./types/device-identity": {
+      "types": "./dist/types/device-identity.d.ts",
+      "default": "./dist/types/device-identity.js"
+    },
+    "./types/developer-toolchain": {
+      "types": "./dist/types/developer-toolchain.d.ts",
+      "default": "./dist/types/developer-toolchain.js"
+    },
+    "./types/display-names": {
+      "types": "./dist/types/display-names.d.ts",
+      "default": "./dist/types/display-names.js"
+    },
+    "./types/fleet-broker": {
+      "types": "./dist/types/fleet-broker.d.ts",
+      "default": "./dist/types/fleet-broker.js"
+    },
+    "./types/fleet-controller": {
+      "types": "./dist/types/fleet-controller.d.ts",
+      "default": "./dist/types/fleet-controller.js"
+    },
+    "./types/feature-flags": {
+      "types": "./dist/types/feature-flags.d.ts",
+      "default": "./dist/types/feature-flags.js"
+    },
+    "./types/gateway-releases": {
+      "types": "./dist/types/gateway-releases.d.ts",
+      "default": "./dist/types/gateway-releases.js"
+    },
+    "./types/gateway-pod-replacements": {
+      "types": "./dist/types/gateway-pod-replacements.d.ts",
+      "default": "./dist/types/gateway-pod-replacements.js"
+    },
+    "./types/gateway-mutable-config": {
+      "types": "./dist/types/gateway-mutable-config.d.ts",
+      "default": "./dist/types/gateway-mutable-config.js"
+    },
+    "./types/gateway-access": {
+      "types": "./dist/types/gateway-access.d.ts",
+      "default": "./dist/types/gateway-access.js"
+    },
+    "./types/glm": {
+      "types": "./dist/types/glm.d.ts",
+      "default": "./dist/types/glm.js"
+    },
+    "./types/identity": {
+      "types": "./dist/types/identity.d.ts",
+      "default": "./dist/types/identity.js"
+    },
+    "./types/mattermost-session-route": {
+      "types": "./dist/types/mattermost-session-route.d.ts",
+      "default": "./dist/types/mattermost-session-route.js"
+    },
+    "./types/mattermost-conversation-projection": {
+      "types": "./dist/types/mattermost-conversation-projection.d.ts",
+      "default": "./dist/types/mattermost-conversation-projection.js"
+    },
+    "./types/image-tag": {
+      "types": "./dist/types/image-tag.d.ts",
+      "default": "./dist/types/image-tag.js"
+    },
+    "./types/index": {
+      "types": "./dist/types/index.d.ts",
+      "default": "./dist/types/index.js"
+    },
+    "./types/member": {
+      "types": "./dist/types/member.d.ts",
+      "default": "./dist/types/member.js"
+    },
+    "./types/model-broker-usage": {
+      "types": "./dist/types/model-broker-usage.d.ts",
+      "default": "./dist/types/model-broker-usage.js"
+    },
+    "./types/model-catalog": {
+      "types": "./dist/types/model-catalog.d.ts",
+      "default": "./dist/types/model-catalog.js"
+    },
+    "./types/orchestrator-placement": {
+      "types": "./dist/types/orchestrator-placement.d.ts",
+      "default": "./dist/types/orchestrator-placement.js"
+    },
+    "./types/shared-gateway-pool": {
+      "types": "./dist/types/shared-gateway-pool.d.ts",
+      "default": "./dist/types/shared-gateway-pool.js"
+    },
+    "./types/model-credentials": {
+      "types": "./dist/types/model-credentials.d.ts",
+      "default": "./dist/types/model-credentials.js"
+    },
+    "./types/platform-config": {
+      "types": "./dist/types/platform-config.d.ts",
+      "default": "./dist/types/platform-config.js"
+    },
+    "./types/user-entitlements": {
+      "types": "./dist/types/user-entitlements.d.ts",
+      "default": "./dist/types/user-entitlements.js"
+    },
+    "./types/secret-redaction": {
+      "types": "./dist/types/secret-redaction.d.ts",
+      "default": "./dist/types/secret-redaction.js"
+    },
+    "./types/tool-format": {
+      "types": "./dist/types/tool-format.d.ts",
+      "default": "./dist/types/tool-format.js"
+    },
+    "./types/openclaw-wire": {
+      "types": "./dist/types/openclaw-wire.d.ts",
+      "default": "./dist/types/openclaw-wire.js"
+    },
+    "./types/openclaw-wire-core": {
+      "types": "./dist/types/openclaw-wire-core.d.ts",
+      "default": "./dist/types/openclaw-wire-core.js"
+    },
+    "./types/openclaw-mattermost-accounts": {
+      "types": "./dist/types/openclaw-mattermost-accounts.d.ts",
+      "default": "./dist/types/openclaw-mattermost-accounts.js"
+    },
+    "./types/openclaw-proxy-identity": {
+      "types": "./dist/types/openclaw-proxy-identity.d.ts",
+      "default": "./dist/types/openclaw-proxy-identity.js"
+    },
+    "./types/project": {
+      "types": "./dist/types/project.d.ts",
+      "default": "./dist/types/project.js"
+    },
+    "./types/project-retention": {
+      "types": "./dist/types/project-retention.d.ts",
+      "default": "./dist/types/project-retention.js"
+    },
+    "./types/sizing": {
+      "types": "./dist/types/sizing.d.ts",
+      "default": "./dist/types/sizing.js"
+    },
+    "./types/social": {
+      "types": "./dist/types/social.d.ts",
+      "default": "./dist/types/social.js"
+    },
+    "./types/workspace": {
+      "types": "./dist/types/workspace.d.ts",
+      "default": "./dist/types/workspace.js"
+    },
+    "./types/voice": {
+      "types": "./dist/types/voice.d.ts",
+      "default": "./dist/types/voice.js"
+    },
+    "./types/workspace-migration": {
+      "types": "./dist/types/workspace-migration.d.ts",
+      "default": "./dist/types/workspace-migration.js"
+    },
+    "./server/service-logger": {
+      "types": "./dist/server/service-logger.d.ts",
+      "default": "./dist/server/service-logger.js"
+    },
+    "./server/repeat-squelch": {
+      "types": "./dist/server/repeat-squelch.d.ts",
+      "default": "./dist/server/repeat-squelch.js"
+    },
+    "./server/user-claim": {
+      "types": "./dist/server/user-claim.d.ts",
+      "default": "./dist/server/user-claim.js"
+    },
+    "./types/native-mobile": {
+      "types": "./dist/types/native-mobile.d.ts",
+      "default": "./dist/types/native-mobile.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "types/native-mobile": [
+        "dist/types/native-mobile.d.ts"
+      ],
+      "types/agent-characters": [
+        "dist/types/agent-characters.d.ts"
+      ],
+      "types/agent-models": [
+        "dist/types/agent-models.d.ts"
+      ],
+      "types/agent": [
+        "dist/types/agent.d.ts"
+      ],
+      "types/agent-import": [
+        "dist/types/agent-import.d.ts"
+      ],
+      "types/agent-conversation": [
+        "dist/types/agent-conversation.d.ts"
+      ],
+      "types/automations": [
+        "dist/types/automations.d.ts"
+      ],
+      "types/gateway-control": [
+        "dist/types/gateway-control.d.ts"
+      ],
+      "types/isolated-gateway-id": [
+        "dist/types/isolated-gateway-id.d.ts"
+      ],
+      "types/builder-identity": [
+        "dist/types/user-identity.d.ts"
+      ],
+      "types/placement-receipts": [
+        "dist/types/placement-receipts.d.ts"
+      ],
+      "types/channel": [
+        "dist/types/channel.d.ts"
+      ],
+      "types/channel-session-models": [
+        "dist/types/channel-session-models.d.ts"
+      ],
+      "types/connectors": [
+        "dist/types/connectors.d.ts"
+      ],
+      "types/google-capabilities": [
+        "dist/types/google-capabilities.d.ts"
+      ],
+      "types/cost-estimator": [
+        "dist/types/cost-estimator.d.ts"
+      ],
+      "types/device-identity": [
+        "dist/types/device-identity.d.ts"
+      ],
+      "types/display-names": [
+        "dist/types/display-names.d.ts"
+      ],
+      "types/fleet-broker": [
+        "dist/types/fleet-broker.d.ts"
+      ],
+      "types/fleet-controller": [
+        "dist/types/fleet-controller.d.ts"
+      ],
+      "types/feature-flags": [
+        "dist/types/feature-flags.d.ts"
+      ],
+      "types/gateway-releases": [
+        "dist/types/gateway-releases.d.ts"
+      ],
+      "types/gateway-mutable-config": [
+        "dist/types/gateway-mutable-config.d.ts"
+      ],
+      "types/gateway-access": [
+        "dist/types/gateway-access.d.ts"
+      ],
+      "types/glm": [
+        "dist/types/glm.d.ts"
+      ],
+      "types/identity": [
+        "dist/types/identity.d.ts"
+      ],
+      "types/mattermost-session-route": [
+        "dist/types/mattermost-session-route.d.ts"
+      ],
+      "types/mattermost-conversation-projection": [
+        "dist/types/mattermost-conversation-projection.d.ts"
+      ],
+      "types/image-tag": [
+        "dist/types/image-tag.d.ts"
+      ],
+      "types/index": [
+        "dist/types/index.d.ts"
+      ],
+      "types/member": [
+        "dist/types/member.d.ts"
+      ],
+      "types/model-broker-usage": [
+        "dist/types/model-broker-usage.d.ts"
+      ],
+      "types/model-catalog": [
+        "dist/types/model-catalog.d.ts"
+      ],
+      "types/orchestrator-placement": [
+        "dist/types/orchestrator-placement.d.ts"
+      ],
+      "types/shared-gateway-pool": [
+        "dist/types/shared-gateway-pool.d.ts"
+      ],
+      "types/model-credentials": [
+        "dist/types/model-credentials.d.ts"
+      ],
+      "types/secret-redaction": [
+        "dist/types/secret-redaction.d.ts"
+      ],
+      "types/tool-format": [
+        "dist/types/tool-format.d.ts"
+      ],
+      "types/openclaw-wire": [
+        "dist/types/openclaw-wire.d.ts"
+      ],
+      "types/openclaw-wire-core": [
+        "dist/types/openclaw-wire-core.d.ts"
+      ],
+      "types/openclaw-mattermost-accounts": [
+        "dist/types/openclaw-mattermost-accounts.d.ts"
+      ],
+      "types/openclaw-proxy-identity": [
+        "dist/types/openclaw-proxy-identity.d.ts"
+      ],
+      "types/project": [
+        "dist/types/project.d.ts"
+      ],
+      "types/project-retention": [
+        "dist/types/project-retention.d.ts"
+      ],
+      "types/sizing": [
+        "dist/types/sizing.d.ts"
+      ],
+      "types/social": [
+        "dist/types/social.d.ts"
+      ],
+      "types/workspace": [
+        "dist/types/workspace.d.ts"
+      ],
+      "types/voice": [
+        "dist/types/voice.d.ts"
+      ],
+      "types/workspace-migration": [
+        "dist/types/workspace-migration.d.ts"
+      ],
+      "server/service-logger": [
+        "dist/server/service-logger.d.ts"
+      ],
+      "server/repeat-squelch": [
+        "dist/server/repeat-squelch.d.ts"
+      ],
+      "server/user-claim": [
+        "dist/server/user-claim.d.ts"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "firebase": "^13.0.0",
+    "firebase-admin": "^14.1.0",
+    "vitest": "^4.0.0 || ^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  },
+  "overrides": {
+    "uuid": "^11.1.1",
+    "protobufjs": "^7.6.3",
+    "postcss": "8.5.25"
+  },
+  "peerDependenciesMeta": {
+    "firebase": {
+      "optional": true
+    },
+    "firebase-admin": {
+      "optional": true
+    },
+    "vitest": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "pino": "10.4.0"
+  }
+}

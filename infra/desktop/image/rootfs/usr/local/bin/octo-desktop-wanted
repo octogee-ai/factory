@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+URL="http://169.254.169.254/computeMetadata/v1/instance/attributes/octogee-computer-desktop"
+ATTEMPTS="${OCTO_DESKTOP_WANTED_ATTEMPTS:-30}"
+RETRY_SECONDS="${OCTO_DESKTOP_WANTED_RETRY_SECONDS:-2}"
+
+response=""
+for _ in $(seq 1 "$ATTEMPTS"); do
+  if response="$(curl -sS --connect-timeout 2 --max-time 5 -H 'Metadata-Flavor: Google' -w '\n%{http_code}' "$URL")"; then
+    break
+  fi
+  response=""
+  sleep "$RETRY_SECONDS"
+done
+if [ -z "$response" ]; then
+  echo "octo-desktop-wanted: metadata server unreachable after $ATTEMPTS attempts" >&2
+  exit 255
+fi
+
+status="${response##*$'\n'}"
+desktop="${response%$'\n'*}"
+case "$status:$desktop" in
+  404:* | 200:omarchy) exit 0 ;;
+  200:x11)
+    echo "octo-desktop-wanted: this computer runs the X11 desktop in its gateway; the host desktop stays off"
+    exit 1
+    ;;
+  *)
+    echo "octo-desktop-wanted: unexpected octogee-computer-desktop (HTTP $status): $desktop" >&2
+    exit 255
+    ;;
+esac

@@ -1,0 +1,162 @@
+{{- $imageRepository := required "mattermost.image.repository is required" .Values.image.repository -}}
+{{- $imageTag := required "mattermost.image.tag is required" .Values.image.tag -}}
+{{- $imageDigest := required "mattermost.image.digest is required" .Values.image.digest -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mattermost
+  labels:
+    app: mattermost
+    {{- include "mattermost.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mattermost
+  template:
+    metadata:
+      labels:
+        app: mattermost
+    spec:
+      {{- $nodeSelector := merge (dict) ((.Values.global).nodeSelector | default (dict)) }}
+      {{- with .Values.architecture }}
+      {{- $_ := set $nodeSelector "kubernetes.io/arch" . }}
+      {{- end }}
+      {{- with $nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ .Values.serviceAccountName }}
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 2000
+        runAsNonRoot: true
+        runAsUser: 2000
+        runAsGroup: 2000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mattermost
+          image: "{{ $imageRepository }}:{{ $imageTag }}@{{ $imageDigest }}"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          ports:
+            - containerPort: 8065
+              name: http
+            - containerPort: 8067
+              name: metrics
+          # MM 11.x's image is distroless (no /bin/sh). Use K8s env var
+          # interpolation via $(VAR) syntax — MM_DB_PASSWORD must appear
+          # BEFORE MM_SQLSETTINGS_DATASOURCE in the env list (K8s resolves
+          # in order). The image's default entrypoint runs `mattermost`.
+          env:
+            - name: MM_LOGSETTINGS_CONSOLELEVEL
+              value: {{ (.Values.global).logLevel | default "info" | upper | quote }}
+            - name: MM_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.passwordSecret }}
+                  key: {{ .Values.db.passwordKey }}
+            - name: MM_SQLSETTINGS_DATASOURCE
+              value: "postgres://{{ .Values.db.user }}:$(MM_DB_PASSWORD)@{{ .Values.db.host }}:{{ .Values.db.port }}/{{ .Values.db.name }}?sslmode=disable&connect_timeout=10"
+            - name: MM_SQLSETTINGS_DRIVERNAME
+              value: postgres
+            - name: MM_SERVICESETTINGS_SITEURL
+              value: {{ .Values.siteUrl | quote }}
+            - name: MM_TEAMSETTINGS_ENABLEOPENSERVER
+              value: "false"
+            - name: MM_TEAMSETTINGS_ENABLEUSERCREATION
+              value: "false"
+            - name: MM_EMAILSETTINGS_ENABLESIGNUPWITHEMAIL
+              value: "false"
+            - name: MM_SERVICESETTINGS_ENABLEBOTACCOUNTCREATION
+              value: "true"
+            - name: MM_SERVICESETTINGS_ENABLEUSERACCESSTOKENS
+              value: "true"
+            - name: MM_SERVICESETTINGS_ENABLELOCALMODE
+              value: "true"
+            # The fleet controller's deprovision-customer permanently deletes the user's
+            # team and MM users; both APIs are hard-gated by these flags
+            # (401 not_enabled.for_admin otherwise). User deletion must be
+            # permanent or the username stays reserved after deprovision.
+            - name: MM_SERVICESETTINGS_ENABLEAPITEAMDELETION
+              value: "true"
+            - name: MM_SERVICESETTINGS_ENABLEAPIUSERDELETION
+              value: "true"
+            - name: MM_FILESETTINGS_DRIVERNAME
+              value: local
+            - name: MM_FILESETTINGS_DIRECTORY
+              value: /mattermost/data
+            - name: MM_EMAILSETTINGS_SENDEMAILNOTIFICATIONS
+              value: "false"
+            - name: MM_EMAILSETTINGS_REQUIREEMAILVERIFICATION
+              value: "false"
+            - name: MM_SERVICESETTINGS_ALLOWEDUNTRUSTEDINTERNALCONNECTIONS
+              value: {{ printf "mattermost-callback-router.%s.svc.cluster.local" .Release.Namespace | quote }}
+            # Browser-direct access (Option C migration): the app at
+            # app.octogee.com talks to mattermost.octogee.com directly. MM's
+            # REST responses + WebSocket handshake reject cross-origin
+            # requests unless the origin is listed here. Space-separated
+            # list, exact matches; configured via .Values.allowedCorsOrigins.
+            - name: MM_SERVICESETTINGS_ALLOWCORSFROM
+              value: {{ .Values.allowedCorsOrigins | default "" | quote }}
+            # Required true — Mattermost's Client4 SDK (used by the app)
+            # issues cross-origin fetches in `credentials: 'include'` mode,
+            # and the browser rejects responses where this header is "false".
+            # The earlier "we use Bearer, no need" reasoning was wrong: the
+            # SDK doesn't expose a way to opt out of credentials mode, so
+            # MM has to permit it at the CORS layer or every chat REST
+            # call fails with "Credentials flag is true, but Access-
+            # Control-Allow-Credentials is not 'true'". CSRF concern is
+            # bounded because auth is Bearer (browsers won't auto-send
+            # Authorization headers cross-origin) and the cookies that
+            # would ride along are MM session cookies that we don't use.
+            - name: MM_SERVICESETTINGS_CORSALLOWCREDENTIALS
+              value: "true"
+            # When true, `POST /api/v4/opengraph` responds 200 with link
+            # metadata. When unset MM 11.x returns 404, which Safari/Chrome
+            # log at the network layer even though the app handles the miss
+            # gracefully. Default lives in values.yaml (.enableLinkPreviews).
+            - name: MM_SERVICESETTINGS_ENABLELINKPREVIEWS
+              value: {{ .Values.enableLinkPreviews | default true | quote }}
+            - name: MM_PLUGINSETTINGS_ENABLEUPLOADS
+              value: "true"
+            - name: MM_METRICSSETTINGS_ENABLE
+              value: "true"
+            - name: MM_METRICSSETTINGS_LISTENADDRESS
+              value: ":8067"
+          # Self-healing: Mattermost had no probes, so a wedged-but-alive server
+          # (DB hang, deadlock) would never be restarted. Ping is the cheap health
+          # endpoint; liveness uses a long initial delay so slow DB migrations on
+          # boot don't trigger a restart loop.
+          readinessProbe:
+            httpGet:
+              path: /api/v4/system/ping
+              port: 8065
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/v4/system/ping
+              port: 8065
+            initialDelaySeconds: 180
+            periodSeconds: 30
+            failureThreshold: 3
+          volumeMounts:
+            - name: data
+              mountPath: /mattermost/data
+            - name: config
+              mountPath: /mattermost/config
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mattermost-data
+        - name: config
+          emptyDir: {}

@@ -1,0 +1,151 @@
+{
+  "accessedAt": "2026-07-11",
+  "sources": [
+    {
+      "provider": "OpenAI",
+      "url": "https://learn.chatgpt.com/docs/changelog",
+      "pins": ["2026-06-02", "2026-02-08", "2026-02-05"],
+      "behaviors": [
+        "follow-ups expose queue and steer intent",
+        "queue is the default follow-up intent",
+        "steer changes active work mid-turn",
+        "thread reconnect and task recovery are explicit product states"
+      ]
+    },
+    {
+      "provider": "OpenAI",
+      "url": "https://help.openai.com/en/articles/20001275",
+      "pins": ["accessed-2026-07-11"],
+      "behaviors": [
+        "projects group related conversations and context",
+        "follow-up work stays in the same conversation",
+        "progress, questions, direction changes, and approvals remain interactive"
+      ]
+    },
+    {
+      "provider": "OpenAI",
+      "url": "https://help.openai.com/en/articles/11752874-chatgpt-agent",
+      "pins": ["accessed-2026-07-11"],
+      "behaviors": [
+        "agent work can pause for clarification or confirmation",
+        "active work can be guided, interrupted, or stopped",
+        "agent history remains attached to its conversation"
+      ]
+    },
+    {
+      "provider": "OpenAI",
+      "url": "https://help.openai.com/en/articles/10500283-deep-research",
+      "pins": ["accessed-2026-07-11"],
+      "behaviors": [
+        "plans are reviewable before execution",
+        "live progress and activity history remain inspectable",
+        "interrupting refines focus without discarding the conversation"
+      ]
+    },
+    {
+      "provider": "Anthropic",
+      "url": "https://code.claude.com/docs/en/interactive-mode",
+      "pins": ["accessed-2026-07-11"],
+      "behaviors": [
+        "interrupt retains completed work",
+        "tool detail is available through an explicit transcript disclosure",
+        "task checklists survive context compaction",
+        "returning users receive a compact session recap"
+      ]
+    },
+    {
+      "provider": "Anthropic",
+      "url": "https://code.claude.com/docs/en/sessions",
+      "pins": ["accessed-2026-07-11"],
+      "behaviors": [
+        "conversation transcripts are saved continuously",
+        "saved sessions can be resumed or branched"
+      ]
+    },
+    {
+      "provider": "Anthropic",
+      "url": "https://code.claude.com/docs/en/changelog",
+      "pins": ["2.1.205-2026-07-08", "0.2.75-2025-04-21"],
+      "behaviors": [
+        "messages submitted during work are queued",
+        "queued messages are retained in the transcript",
+        "blocked and background work expose durable status"
+      ]
+    }
+  ],
+  "octogeeConformance": [
+    {
+      "behavior": "queue-steer",
+      "status": "covered",
+      "evidence": [
+        "app/src/components/chat/MessageList.tsx",
+        "app/src/components/appshell/resolveMainView.tsx"
+      ],
+      "authority": "Mattermost top-level inputs start work and replies continue the selected physical thread"
+    },
+    {
+      "behavior": "durable-ingress",
+      "status": "covered",
+      "evidence": [
+        "app/src/components/chat/MessageList.tsx",
+        "app/src/lib/conversationProjection.ts"
+      ],
+      "authority": "The ordinary Mattermost post is the durable input; no second admission receipt is required"
+    },
+    {
+      "behavior": "native-controls",
+      "status": "covered",
+      "evidence": [
+        "app/src/components/chat/ChatInput.tsx",
+        "app/src/components/appshell/resolveMainView.tsx"
+      ],
+      "authority": "OpenClaw handles ordinary thread replies, native /stop, and approvals received through Mattermost"
+    },
+    {
+      "behavior": "tool-disclosure",
+      "status": "covered",
+      "evidence": [
+        "app/src/components/chat/activity-rows/ActivityRow.tsx",
+        "app/src/components/appshell/OctoActivityPanel.tsx"
+      ],
+      "authority": "Durable Activity posts, collapsed for normal reading and inspectable per run"
+    },
+    {
+      "behavior": "refresh-restart",
+      "status": "covered",
+      "evidence": [
+        "app/src/hooks/useActivityChannel.ts",
+        "app/src/lib/conversationProjection.ts"
+      ],
+      "authority": "Mattermost history plus positively classified Activity posts from the active Agent account"
+    }
+  ],
+  "rejected": [
+    {
+      "behavior": "ephemeral-side-conversation",
+      "reason": "It would hide user-agent context from the durable Mattermost conversation."
+    },
+    {
+      "behavior": "client-only-queue",
+      "reason": "It would make browser state authoritative instead of a Mattermost input and admission."
+    },
+    {
+      "behavior": "default-steer-across-runs",
+      "reason": "A stale client preference could target the wrong work; steering follows the explicitly selected Mattermost thread."
+    },
+    {
+      "behavior": "browser-owned-run-control",
+      "reason": "It would bypass OpenClaw's native Mattermost commands and approval authorization."
+    },
+    {
+      "behavior": "history-rewind",
+      "reason": "Rewriting the local view would misrepresent the append-only Mattermost record."
+    }
+  ],
+  "deferred": [
+    {
+      "behavior": "away-recap",
+      "condition": "Adopt only when a durable producer supplies the recap; never infer it in the browser."
+    }
+  ]
+}

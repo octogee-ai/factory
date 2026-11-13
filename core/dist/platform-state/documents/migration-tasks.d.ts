@@ -1,0 +1,12 @@
+import type { MigrationTransferMode } from "@octogee/shared/types/fleet-controller";
+import { type RecordKey } from "../errors.js";
+import type { MigrationTransferLeasePod, MigrationTransferTask, MigrationTransferTaskStatus } from "../migration-tasks.js";
+import type { Revision, Stored } from "../store.js";
+export declare const TASK_STATUSES: readonly MigrationTransferTaskStatus[];
+export declare const TRANSFER_MODES: readonly MigrationTransferMode[];
+export declare const taskKey: (taskId: string) => RecordKey;
+export declare function isLeasePod(value: unknown): value is MigrationTransferLeasePod;
+export declare function optional<T>(key: RecordKey, data: Readonly<Record<string, unknown>>, field: string, accepts: (value: unknown) => value is T): T | null;
+export declare const isString: (value: unknown) => value is string;
+export declare const isNumber: (value: unknown) => value is number;
+export declare function migrationTransferTaskFromData(id: string, data: Readonly<Record<string, unknown>>, revision: Revision): Stored<MigrationTransferTask>;

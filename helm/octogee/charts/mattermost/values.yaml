@@ -1,0 +1,58 @@
+image:
+  repository: ""
+  tag: ""
+  digest: ""
+
+# Node architecture the image is built for. Empty schedules on any node, for a
+# multi-platform image.
+architecture: amd64
+
+db:
+  host: postgres
+  port: 5432
+  user: mattermost
+  name: mattermost_prod
+  passwordSecret: mattermost-cloud-sql
+  passwordKey: password
+
+siteUrl: "https://mattermost.octogee.com"
+
+# Space-separated list of origins that may call MM cross-origin (REST + WS).
+# Browser-direct path: app.octogee.com → mm.octogee.com requires the app
+# origin here. Set per-env in helm/octogee/values.{test,prod}.yaml.
+allowedCorsOrigins: ""
+
+# Link-preview / OpenGraph fetches. When true, MM's `POST /api/v4/opengraph`
+# handler is active and returns metadata for URLs posted in chat; when
+# false / unset, MM 11.x returns 404 for that endpoint and the browser
+# surfaces the 404 even though the app renders no preview either way.
+# Default true so the env var is authoritative and pods regenerate
+# config.json from env on every restart (config/ is emptyDir).
+enableLinkPreviews: true
+
+serviceAccountName: octogee-gateway
+
+pvc:
+  size: 20Gi
+  storageClass: standard-rwo
+
+ilb:
+  enabled: true
+  staticIp: ""  # Set via terraform output mattermost_ilb_ip
+
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+    ephemeral-storage: "1Gi"
+  limits:
+    cpu: "2000m"
+    memory: "2Gi"
+    ephemeral-storage: "5Gi"
+
+networkPolicy:
+  enabled: true
+
+pdb:
+  enabled: true
+  minAvailable: 1

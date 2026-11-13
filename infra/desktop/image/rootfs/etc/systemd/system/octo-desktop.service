@@ -1,0 +1,30 @@
+[Unit]
+Description=Octogee VM desktop session (Hyprland, wayvnc, noVNC, control API, Chromium)
+After=octo-seatd.service network-online.target user-runtime-dir@1000.service user@1000.service octo-home-migrate.service
+Wants=octo-seatd.service network-online.target user@1000.service
+Requires=user-runtime-dir@1000.service octo-home-migrate.service
+ConditionPathExists=!/srv/octogee/home-restore.gate
+
+[Service]
+User=octo
+Group=octo
+Environment=HOME=/home/octo
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=OCTO_COMPOSITOR=hyprland
+Environment=OCTO_DISPLAY=drm
+Environment=OCTO_RESOLUTION=1440x900
+Environment=OCTO_REFRESH=60
+Environment=OCTO_BIND=127.0.0.1
+Environment=OCTO_HOME_URL=http://127.0.0.1:7777/desk
+ExecCondition=+/usr/local/bin/octo-desktop-wanted
+ExecStart=/usr/local/bin/octo-desktop-session
+ExecStop=/usr/local/bin/octo-desktop-stop
+StandardOutput=journal+console
+StandardError=journal
+Restart=always
+RestartSec=3
+KillMode=mixed
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

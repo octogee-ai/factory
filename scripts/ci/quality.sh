@@ -11,9 +11,11 @@ if [ "${1:-}" = -- ]; then
     if [ -f "$file" ]; then files+=("$file"); fi
   done
 fi
+for hook in */scripts/ci/quality.d/"$check".sh; do
+  if [ -f "$hook" ]; then bash "$hook"; fi
+done
 case "$check" in
   eslint)
-    node scripts/ds-tokens.mjs
     if [ "$scoped" = false ]; then npm run lint -- --format=stylish --max-warnings=0
     elif [ "${#files[@]}" -gt 0 ]; then npx eslint --format=stylish --max-warnings=0 --no-warn-ignored -- "${files[@]}"
     else echo 'No changed lint sources remain'
@@ -28,7 +30,7 @@ case "$check" in
   gitleaks)
     gitleaks detect --config=.gitleaks.toml --source=. \
       --log-opts="${CI_BASE_SHA:?base SHA required}..${CI_HEAD_SHA:?head SHA required}" --redact --verbose --exit-code=1
-    if [ "${CI_INCLUDE_WORKING_TREE:-false}" = true ]; then node scripts/ci/working-tree-scan.mjs; fi
+    if [ "${CI_INCLUDE_WORKING_TREE:-false}" = true ]; then node platform/scripts/ci/working-tree-scan.mjs; fi
     ;;
   osv-scanner)
     args=(--config=osv-scanner.toml)
@@ -42,7 +44,7 @@ case "$check" in
     osv-scanner scan source "${args[@]}"
     ;;
   trivy)
-    args=(config . --skip-dirs '**/node_modules' --skip-dirs '**/dist' --skip-dirs '.claude/worktrees' --skip-dirs '**/.astro' --skip-dirs 'tests/fixtures')
+    args=(config . --skip-dirs '**/node_modules' --skip-dirs '**/dist' --skip-dirs '.claude/worktrees' --skip-dirs '**/.astro' --skip-dirs '**/tests/fixtures')
     trivy "${args[@]}" --severity CRITICAL,HIGH,MEDIUM --exit-code 0
     trivy "${args[@]}" --severity CRITICAL --exit-code 1
     ;;

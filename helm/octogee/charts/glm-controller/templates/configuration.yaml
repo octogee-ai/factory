@@ -1,0 +1,16 @@
+{{- if or .Values.deploymentTargets .Values.gatewayValues }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: glm-controller-configuration
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: glm-controller
+data:
+  {{- with .Values.deploymentTargets }}
+  deployment-targets.json: {{ toJson . | quote }}
+  {{- end }}
+  {{- with .Values.gatewayValues }}
+  gateway-values.yaml: {{ toYaml . | quote }}
+  {{- end }}
+{{- end }}

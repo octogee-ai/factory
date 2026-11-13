@@ -1,0 +1,6 @@
+apiVersion: v2
+name: gateway-edge
+description: Octogee workspace API — consolidated HTTP service (ex Cloud Functions)
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

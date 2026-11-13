@@ -1,0 +1,21 @@
+dependencies:
+- name: cloud-sql-proxy
+  repository: file://charts/cloud-sql-proxy
+  version: 0.1.0
+- name: mattermost
+  repository: file://charts/mattermost
+  version: 0.1.0
+- name: gitea
+  repository: https://dl.gitea.com/charts/
+  version: 12.7.0
+- name: gateway-edge
+  repository: file://charts/gateway-edge
+  version: 0.1.0
+- name: octogee-api
+  repository: file://charts/octogee-api
+  version: 0.1.0
+- name: glm-controller
+  repository: file://charts/glm-controller
+  version: 0.1.0
+digest: sha256:70a326b67412bb89f74074f61cf14aba80587721730bf2495fc849b7d4003a61
+generated: "2026-07-22T09:22:12.217689-07:00"
