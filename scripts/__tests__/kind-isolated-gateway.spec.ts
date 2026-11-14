@@ -25,7 +25,16 @@ interface Scenario {
   markerReadError?: string;
   previousLog?: string;
   kubernetes?: { pods?: unknown[]; events?: Array<{ involvedObject: { name: string } }>; networkPolicies?: unknown[] };
+  migrationToIsolated?: Migration;
+  migrationBack?: Migration;
 }
+
+interface Step { name: string; status: string; error?: unknown }
+interface Migration { finishesAfterMs?: number; ends?: { status: string; steps: Step[]; error?: unknown } }
+
+const SUCCEEDED = { status: "succeeded", steps: [{ name: "import", status: "succeeded" }, { name: "cutover-firestore", status: "succeeded" }] };
+const MIGRATION_TO_ISOLATED = "op-to-isolated";
+const MIGRATION_BACK = "op-back";
 
 const RESUMED_PROCESS_STARTS_MS = 30_000;
 
@@ -44,6 +53,19 @@ function cluster(scenario: Scenario = {}) {
   const running = () => pods > 0 && now >= runningFrom;
   const home = new Map<string, string>();
   let sent = 0;
+  const operations = new Map<string, { finishesAt: number; ends: NonNullable<Migration["ends"]> }>();
+  const startMigration = (id: string, migration: Migration | undefined, defaultMs: number) => {
+    operations.set(id, { finishesAt: now + (migration?.finishesAfterMs ?? defaultMs), ends: migration?.ends ?? SUCCEEDED });
+  };
+  const inFlight = (id: string) => {
+    const operation = operations.get(id);
+    return operation !== undefined && now < operation.finishesAt;
+  };
+  const refuseWhileMigrating = (verb: string) => {
+    if (inFlight(MIGRATION_TO_ISOLATED) || inFlight(MIGRATION_BACK)) {
+      throw new Error(`octogee-fleet --env=kind gateway ${verb} ${ISOLATED} --apply exited with 1: octogee-fleet: the Admin API refused this request (409): user migration is in flight for gateway ${ISOLATED}`);
+    }
+  };
 
   const boot = (identityReady: boolean) => {
     boots += 1;
@@ -85,17 +107,31 @@ function cluster(scenario: Scenario = {}) {
       if (noun === "user" && verb === "migrate" && args[2] === "lin" && args[3] === "--to-isolated=pod-s") {
         runningFrom = now + (scenario.gatewayStartsAfterMs ?? 0);
         boot(scenario.identityReadyAfterBoot !== false);
-        return { dryRun: false, response: { uid: "uid-1", gatewayId: ISOLATED, operationId: "op-1" } };
+        startMigration(MIGRATION_TO_ISOLATED, scenario.migrationToIsolated, 90_000);
+        return { dryRun: false, response: { uid: "uid-1", gatewayId: ISOLATED, operationId: MIGRATION_TO_ISOLATED } };
       }
       if (noun === "user" && verb === "migrate" && args[3] === "--to=shared-a") {
         mounted = "shared-a";
         staleHeartbeats = 2;
-        return { dryRun: false, response: {} };
+        startMigration(MIGRATION_BACK, scenario.migrationBack, 60_000);
+        return { dryRun: false, response: { operationId: MIGRATION_BACK } };
+      }
+      if (noun === "ops" && verb === "inspect") {
+        const operation = operations.get(args[2]);
+        if (!operation) throw new Error(`octogee-fleet --env=kind ops inspect ${args[2]} exited with 1: operation not found`);
+        return { operation: inFlight(args[2])
+          ? { id: args[2], kind: "migrate-user", status: "running", steps: [{ name: "import", status: "succeeded" }, { name: "cutover-firestore", status: "running" }] }
+          : { id: args[2], kind: "migrate-user", ...operation.ends } };
       }
       if (noun === "user" && verb === "issue-passwords") {
         return { dryRun: false, response: { chat: { username: "lin", password: "chat-pass" }, git: { username: "ws-lin", password: "git" } } };
       }
-      if (noun === "gateway" && verb === "park") { pods = 0; mounted = "none"; return { dryRun: false, response: {} }; }
+      if (noun === "gateway" && verb === "park") {
+        refuseWhileMigrating("park");
+        pods = 0;
+        mounted = "none";
+        return { dryRun: false, response: {} };
+      }
       if (noun === "gateway" && verb === "resume") {
         pods = 1;
         runningFrom = now;
@@ -103,6 +139,7 @@ function cluster(scenario: Scenario = {}) {
         return { dryRun: false, response: {} };
       }
       if (noun === "gateway" && verb === "retire") {
+        refuseWhileMigrating("retire");
         if (isolatedMounted.length > 0) {
           throw new Error(`octogee-fleet --env=kind gateway retire ${ISOLATED} --apply exited with 1: gateway ${ISOLATED} still has mounted users: ${isolatedMounted.join(", ")}`);
         }
@@ -179,6 +216,50 @@ describe("kind isolated gateway smoke", () => {
       .toEqual([`gateway park ${ISOLATED}`, `gateway resume ${ISOLATED}`, `gateway retire ${ISOLATED}`]);
     expect(sql.find(entry => entry.sql.includes("model_broker_usage_events"))?.variables).toMatchObject({ gateway: ISOLATED });
     expect(result.evidence).toMatchObject({ calls: 1, provider: "openrouter", model: "meta/muse-ember" });
+  });
+
+  it("waits for each migration to succeed before the Coach round trip, the park and the retire, which the Admin API refuses while a migration is in flight", async () => {
+    const { deps, events } = cluster();
+
+    await run(deps, options);
+
+    const lastInspect = (id: string) => events.lastIndexOf(`ops inspect ${id}`);
+    expect(lastInspect(MIGRATION_TO_ISOLATED)).toBeLessThan(events.indexOf("chat post"));
+    expect(lastInspect(MIGRATION_TO_ISOLATED)).toBeLessThan(events.indexOf(`gateway park ${ISOLATED}`));
+    expect(lastInspect(MIGRATION_BACK)).toBeGreaterThan(events.indexOf("user migrate lin"));
+    expect(lastInspect(MIGRATION_BACK)).toBeLessThan(events.indexOf(`gateway retire ${ISOLATED}`));
+  });
+
+  it.each([
+    ["failed", { status: "failed", steps: [{ name: "import", status: "succeeded" }, { name: "cutover-firestore", status: "failed", error: `target ${ISOLATED} has no accepted system config commit to converge slug on` }] },
+      `migration ${MIGRATION_TO_ISOLATED} to ${ISOLATED} ended failed at step cutover-firestore: target ${ISOLATED} has no accepted system config commit to converge slug on`],
+    ["rolled back", { status: "rolled-back", steps: [{ name: "import", status: "succeeded" }], error: { message: "source retained" } },
+      `migration ${MIGRATION_TO_ISOLATED} to ${ISOLATED} ended rolled-back: {"message":"source retained"}`],
+  ])("names the state of a migration to the isolated gateway that %s, before the Coach round trip", async (_how, ends, message) => {
+    const { deps, events } = cluster({ migrationToIsolated: { ends } });
+
+    await expect(run(deps, options)).rejects.toThrow(message);
+    expect(events).not.toContain("chat post");
+    expect(events).not.toContain(`gateway park ${ISOLATED}`);
+  });
+
+  it("names the step a migration to the isolated gateway is still on when it does not finish", async () => {
+    const { deps, events } = cluster({ migrationToIsolated: { finishesAfterMs: Number.POSITIVE_INFINITY } });
+
+    await expect(run(deps, options)).rejects.toThrow(
+      `Timed out after 600s waiting for migration ${MIGRATION_TO_ISOLATED} to ${ISOLATED} to finish; it is running at step cutover-firestore`,
+    );
+    expect(events).not.toContain("chat post");
+  });
+
+  it("does not retire the isolated gateway when the return to the shared gateway fails", async () => {
+    const ends = { status: "failed", steps: [{ name: "unmount-source", status: "failed", error: "transport failed: fetch failed" }] };
+    const { deps, events } = cluster({ migrationBack: { ends } });
+
+    await expect(run(deps, options)).rejects.toThrow(
+      `migration ${MIGRATION_BACK} to shared-a ended failed at step unmount-source: transport failed: fetch failed`,
+    );
+    expect(events).not.toContain(`gateway retire ${ISOLATED}`);
   });
 
   it("fails before the Coach round trip when the gateway never marks its identities ready, with the gateway's last identity failure", async () => {
