@@ -4,13 +4,13 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
-import { deploymentTargetSettings } from "./deployment-environment.js";
+import { deploymentTargetSettings, requireHostedDeploymentSettings } from "./deployment-environment.js";
 import { renderDeploymentTargetHelmValues } from "./render-deployment-target-helm-values.js";
 
 describe("deployment target Helm values", () => {
   it("renders every active Central value from one exact target", () => {
     const rendered = renderDeploymentTargetHelmValues(
-      deploymentTargetSettings("test-central"),
+      requireHostedDeploymentSettings(deploymentTargetSettings("test-central")),
     );
 
     expect(rendered).toContain('deploymentTargetId: "test-central"');
@@ -71,7 +71,7 @@ describe("deployment target Helm values", () => {
     "renders the canonical ingress identities for %s",
     (targetId, edge, mattermost, gitea, preview) => {
       const rendered = renderDeploymentTargetHelmValues(
-        deploymentTargetSettings(targetId),
+        requireHostedDeploymentSettings(deploymentTargetSettings(targetId)),
       );
 
       expect(rendered).toContain(`edgeIngress:\n  staticIpName: "${edge}"`);
@@ -88,7 +88,7 @@ describe("deployment target Helm values", () => {
   ])(
     "renders the exact central project runner API-server destinations for %s",
     (targetId, apiServer) => {
-      const rendered = renderDeploymentTargetHelmValues(deploymentTargetSettings(targetId));
+      const rendered = renderDeploymentTargetHelmValues(requireHostedDeploymentSettings(deploymentTargetSettings(targetId)));
       expect(rendered).toContain(`projectRunner:
   apiServerEgressCidrs: ["${apiServer}","34.118.224.1/32"]`);
       expect(rendered).toContain("enforceDefaultDeny: false");
@@ -98,7 +98,7 @@ describe("deployment target Helm values", () => {
   it.each(["prod-central", "test-central"])(
     "emits no platform compute class for %s",
     (targetId) => {
-      expect(renderDeploymentTargetHelmValues(deploymentTargetSettings(targetId)))
+      expect(renderDeploymentTargetHelmValues(requireHostedDeploymentSettings(deploymentTargetSettings(targetId))))
         .not.toContain("ComputeClass");
     },
   );

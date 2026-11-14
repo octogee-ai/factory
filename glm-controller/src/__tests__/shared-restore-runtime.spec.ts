@@ -907,7 +907,7 @@ describe('journaled Shared source schema repair', () => {
       }
       return { code: 0, stdout: JSON.stringify(args.includes('pods') ? { items: [h.pod] } : value), stderr: '' };
     });
-    return { ...h, deps: { ...h.deps, runKubectl }, deployment, replicaSet, events, captured,
+    return { ...h, deps: { ...h.deps, runKubectl }, deployment, replicaSet, events, captured, payload,
       setAcknowledgment: (value: typeof acknowledgment) => { acknowledgment = value; }, onEffect: (effect: (event: string) => void) => { afterEffect = effect; } };
   }
   async function schedulerSourceHarness() {
@@ -921,7 +921,7 @@ describe('journaled Shared source schema repair', () => {
     }
     const captured = await readAuthority(h.store, h.op.id);
     expect(captured.schedulerStateRecovery).toBe(true);
-    h.op.input.sourceRecovery = { ...h.op.input.sourceRecovery, ...captured };
+    h.op.input.sourceRecovery = { sourceSha: sha, images, payload: h.payload, ...captured };
     h.store['glmOperations/recover'].input = structuredClone(h.op.input);
     return h;
   }
@@ -1032,7 +1032,7 @@ describe('journaled Shared source schema repair', () => {
   });
   it('refuses an immutable release collision atomically without annotating failed placements or clearing the PostgreSQL fence', async () => {
     const h = await postgresSourceHarness(), collision = { gatewayId: 'shared-1', release: 2, createdAt: 1, createdBy: 'foreign', sourceRelease: 1,
-      note: 'existing', payloadHash: 'existing', payload: structuredClone(h.op.input.sourceRecovery!.payload) };
+      note: 'existing', payloadHash: 'existing', payload: structuredClone(h.payload) };
     h.store['gateways/shared-1/releases/2'] = structuredClone(collision);
     await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('refusing to overwrite immutable history');
     expect(h.store['gateways/shared-1/releases/2']).toEqual(collision);
@@ -1131,7 +1131,7 @@ describe('journaled Shared source schema repair', () => {
     const failedId = continuousPlacementMigrationOperationId({ uid: 'source-0', builderSlug: 'jdog99', fromGatewayId: 'shared-1', toGatewayId: 'shared-2', sourceAssignmentEpoch: 1 });
     h.store[`glmOperations/${failedId}`].error = 'a different maintenance failure';
     await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);
-    const root = h.store['gateways/shared-1'], payload = h.op.input.sourceRecovery!.payload;
+    const root = h.store['gateways/shared-1'], payload = h.payload;
     root.liveRelease = 2;
     h.store['glmGateways/shared-1'] = { docKind: 'runtime', gatewayId: 'shared-1', runtime: 'cluster', release: 2, lifecycle: 'serving',
       heartbeat: { status: 'ready', lastHeartbeatAt: h.deps.now(), mountedCustomers: [], migratingIn: [] },

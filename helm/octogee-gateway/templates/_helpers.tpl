@@ -164,7 +164,7 @@ tier isn't declared in `.Values.tiers`.
 {{- $tier := include "octogee-gateway.effectiveTier" . -}}
 {{- $desktop := .Values.computerDesktop | default "auto" -}}
 {{- if eq $desktop "auto" -}}
-{{- if eq $class "builder" -}}x11{{- else -}}none{{- end -}}
+{{- if and (eq $class "builder") (eq (.Values.runtimeKind | default "cluster") "gce-vm") -}}x11{{- else -}}none{{- end -}}
 {{- else if has $desktop (list "none" "x11" "omarchy") -}}
 {{- $desktop -}}
 {{- else -}}{{- fail "computerDesktop must be auto, none, x11, or omarchy" -}}{{- end -}}

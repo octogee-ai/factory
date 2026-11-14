@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import type { Operation, OperationStep } from "@octogee/shared/types/glm";
+import type { Operation, OperationStep, UserMigrationV2GatewayRootFence, UserMigrationV2State } from "@octogee/shared/types/glm";
 import { operationElapsed, assertActiveOperationClaim, assertUserRestoreSettled, createOperationContext, PendingUserRestoreError } from "../operation-context";
 
 function makeDeps() {
@@ -47,7 +47,7 @@ describe("createOperationContext", () => {
 
   it("reports the elapsed time of a claimed operation", () => {
     expect(operationElapsed({ startedAt: 1_000 }, 3_500)).toBe(" after 2500ms");
-    expect(operationElapsed({}, 3_500)).toBe("");
+    expect(operationElapsed({ startedAt: null }, 3_500)).toBe("");
   });
 
   it.each(["RPC timed out", "restore response does not match"])("retains the durable fence when %s", async (message) => {
@@ -84,23 +84,24 @@ describe("createOperationContext", () => {
       persistUserMigrationV2,
       cancellationRequested,
     });
-    const migration = {
-      phase: "initialized" as const,
+    const rootFence = (gatewayId: string): UserMigrationV2GatewayRootFence => ({
+      gatewayId, updatedAt: 1, latestRelease: 1, desiredRelease: 1, liveRelease: 1,
+      gatewayClass: "builder", ownerUid: "u1", builderSlug: "alice", configHash: "7".repeat(64),
+    });
+    const migration: UserMigrationV2State = {
+      phase: "initialized",
       operationId: "op-1",
       migrationId: "mig-op-1",
       uid: "u1",
       slug: "alice",
       sourceGatewayId: "source",
-      sourceRevisionId: "source-r1",
       sourceRelease: 1,
       sourceEpoch: 1,
+      sourceAssignmentMode: "assigned",
+      sourceRootFence: rootFence("source"),
       targetGatewayId: "target",
-      targetRevisionId: "target-r1",
       targetRelease: 1,
-      sourceImageTag: "image",
-      sourceBuildSha: "build",
-      sourceOpenclawVersion: "oc",
-      targetImageTag: "target-image",
+      targetRootFence: rootFence("target"),
     };
 
     await ctx.persistUserMigrationV2?.(migration);
@@ -219,10 +220,10 @@ await ctx.reportStep({ name: "quiesce-source", status: "done", completedAt: 200 
 });
 
 describe("active operation claim", () => {
-  const claimed = {
-    id: "op-1", kind: "migrate-user", status: "running", startedAt: 100,
+  const claimed: Operation = {
+    id: "op-1", kind: "migrate-user", status: "running", createdBy: "test", createdAt: 90, startedAt: 100, completedAt: null, steps: [],
     input: { uid: "uid-alice", fromGatewayId: "source", toGatewayId: "target" },
-  } as Operation;
+  };
 
   it("accepts the same running uncancelled migration attempt", () => {
     expect(() => assertActiveOperationClaim(claimed, { ...claimed })).not.toThrow();
@@ -257,10 +258,10 @@ describe("active operation claim", () => {
 
 
 describe("settled user restore", () => {
-  const operation = {
-    id: "return-1", kind: "migrate-user", startedAt: 900,
+  const operation: Operation = {
+    id: "return-1", kind: "migrate-user", status: "running", createdBy: "test", createdAt: 890, startedAt: 900, completedAt: null, steps: [],
     input: { uid: "u1", fromGatewayId: "builder-1", toGatewayId: "shared-1", builderSlug: "alice" },
-  } as Operation;
+  };
   const acknowledged = {
     phase: "acknowledged", operationId: "return-1", uid: "u1", fromGatewayId: "builder-1",
     gatewayId: "shared-1", slug: "alice", attemptId: "attempt-1", assignmentEpoch: 4,

@@ -3,6 +3,7 @@
   "name": "Octogee Access Tools",
   "version": "0.1.0",
   "description": "Enforce owner approval for agent computer actions.",
+  "categories": ["security"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

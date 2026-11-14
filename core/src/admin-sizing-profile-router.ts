@@ -7,9 +7,9 @@ import {
   createAdminFleetMutationRunner,
   respondToAdminFleetMutationError,
 } from "./admin-fleet-router.js";
-import { hasVmShape } from "./operator-isolated-gateway.js";
-import type { GatewaySizingProfile } from "./platform-state/config.js";
-import { isGatewaySizingProfile } from "./platform-state/documents/config.js";
+import { hasComputerShape } from "./operator-isolated-gateway.js";
+import type { GatewayComputerProfile, GatewaySizingProfile } from "./platform-state/config.js";
+import { isGatewaySizingProfile } from "./platform-state/config.js";
 import type { PlatformStateStore } from "./platform-state/store.js";
 
 const SIZING_PROFILE_NAME = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
@@ -42,24 +42,30 @@ function isPositiveWhole(value: unknown): boolean {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
+function computerReadFields(computer: GatewayComputerProfile): GatewayComputerProfile {
+  if (computer.runtime === "cluster") return { runtime: computer.runtime, homeSizeGiB: computer.homeSizeGiB };
+  const { runtime, desktop, machineType, provisioningModel, bootDisk, homeSizeGiB } = computer;
+  return {
+    runtime, desktop, machineType, provisioningModel, homeSizeGiB,
+    bootDisk: bootDisk === null ? null : { sizeGb: bootDisk.sizeGb, type: bootDisk.type },
+  };
+}
+
 function onlyReadFields(profile: GatewaySizingProfile): GatewaySizingProfile {
   if (profile.isolation === "shared") return { isolation: "shared" };
-  const { runtime, desktop, machineType, provisioningModel, bootDisk, homeSizeGiB } = profile.computer;
   return {
     isolation: "isolated",
     sizingTier: profile.sizingTier,
-    computer: {
-      runtime, desktop, machineType, provisioningModel, homeSizeGiB,
-      bootDisk: bootDisk === null ? null : { sizeGb: bootDisk.sizeGb, type: bootDisk.type },
-    },
+    computer: computerReadFields(profile.computer),
     fallbackStorageGb: profile.fallbackStorageGb,
   };
 }
 
 function hasWholeSizes(profile: GatewaySizingProfile): boolean {
   if (profile.isolation === "shared") return true;
-  const { bootDisk, homeSizeGiB } = profile.computer;
-  return (bootDisk === null || isPositiveWhole(bootDisk.sizeGb)) && isPositiveWhole(homeSizeGiB) &&
+  const { computer } = profile;
+  const bootDiskWhole = computer.runtime === "cluster" || computer.bootDisk === null || isPositiveWhole(computer.bootDisk.sizeGb);
+  return bootDiskWhole && isPositiveWhole(computer.homeSizeGiB) &&
     (profile.fallbackStorageGb === null || isPositiveWhole(profile.fallbackStorageGb));
 }
 
@@ -69,7 +75,7 @@ function parseProfile(body: unknown): { profile: GatewaySizingProfile } | { refu
       "the body must be {\"isolation\":\"shared\"} or an isolated profile with sizingTier, computer and fallbackStorageGb, " +
       "with sizes in positive whole numbers and no other fields");
   }
-  if (body.isolation === "isolated" && !hasVmShape(body)) {
+  if (body.isolation === "isolated" && !hasComputerShape(body)) {
     return refusal(400, "sizing-profile-no-vm", "an isolated sizing profile needs a VM machine type, provisioning model and boot disk");
   }
   return { profile: body };
@@ -85,7 +91,7 @@ function tierConflict(profiles: Profiles, name: string, profile: GatewaySizingPr
     .sort();
   if (rivals.length === 0) return null;
   return refusal(409, "sizing-tier-conflict",
-    `isolated sizing profiles at tier ${sizingTier} must have the same VM settings, and ${rivals.join(", ")} has different ones`,
+    `isolated sizing profiles at tier ${sizingTier} must have the same computer settings, and ${rivals.join(", ")} has different ones`,
     { sizingTier, sizingProfiles: rivals });
 }
 

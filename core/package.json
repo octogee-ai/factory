@@ -889,7 +889,7 @@
     "prebuild": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "build": "rm -rf dist && tsc -p tsconfig.json",
     "pretypecheck": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.spec.json",
     "pretest": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "test": "vitest run"
   },

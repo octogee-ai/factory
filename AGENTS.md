@@ -117,8 +117,10 @@ the operator asks for them or a current risk to users requires them.
   pushes to `main`. Pull request jobs have read-only repository access and no
   cloud credentials.
 - **Build main** (`.github/workflows/build-main.yml`) builds the platform images
-  for `linux/amd64` and `linux/arm64` on every push to `main`. It pushes them to
-  `ghcr.io/octogee-ai/octogee-cloud/<image>`, tagged with the full and short
+  for `linux/amd64` and `linux/arm64` on every push to `main`. The isolated
+  gateway image (`octogee-gateway-builder`) is `linux/amd64` only; arm64
+  clusters schedule it on amd64 nodes. It pushes them
+  to `ghcr.io/octogee-ai/octogee-cloud/<image>`, tagged with the full and short
   commit SHA, and keeps a manifest of every digest as a workflow artifact.
   Building never deploys.
 - Deploying a build is an operator command. [SHIP.md](SHIP.md) shows the shape

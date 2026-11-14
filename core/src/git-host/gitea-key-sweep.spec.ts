@@ -297,7 +297,7 @@ describe("createGiteaKeyAdminClient", () => {
   }
 
   it("lists users and keys page by page with the admin token", async () => {
-    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+    const fetchImpl = vi.fn<typeof fetch>(async (url) => {
       const href = String(url);
       if (href.startsWith(`${API}/admin/users?`)) return json(200, [{ login: "ws-jack" }, { login: "ws-jill" }]);
       return json(200, [
@@ -316,7 +316,7 @@ describe("createGiteaKeyAdminClient", () => {
       `${API}/admin/users?limit=50&page=2`,
       `${API}/users/ws-jack/keys?limit=50&page=3`,
     ]);
-    expect((fetchImpl.mock.calls[0][1] as RequestInit).headers).toMatchObject({ Authorization: "token admin-tok" });
+    expect(fetchImpl.mock.calls[0][1]?.headers).toMatchObject({ Authorization: "token admin-tok" });
   });
 
   it("deletes a key through the admin API and treats an already-gone key as not deleted", async () => {

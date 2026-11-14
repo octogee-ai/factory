@@ -88,7 +88,7 @@ describe("createFleetStateFetcher", () => {
   });
 
   it("binds each read to a fresh requestId", async () => {
-    const fetchImpl = vi.fn(async () => okResponse());
+    const fetchImpl = vi.fn<typeof fetch>(async () => okResponse());
     let n = 0;
     const fetchState = createFleetStateFetcher({
       privateKey: FLEET_KEY_PAIR.privateKey,

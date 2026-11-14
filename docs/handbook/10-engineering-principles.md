@@ -5,7 +5,7 @@ order: 10
 part: Dev Workflow
 audience: [agent]
 description: Reliable code with risk-based tests, explicit failures, root-cause fixes, and proportional effort.
-updated: 2026-07-08
+updated: 2026-11-13
 ---
 
 # Engineering Principles
@@ -101,8 +101,7 @@ actually earns its keep.
   restore it — don't architect an SSOT + guard + multi-PR program. If you catch
   yourself writing "Phase 1/2/3" for a regression repair, shrink it.
 - **No premature perf optimization.** No pacing/queues/sync-vs-async splits in the
-  provisioner/fleet path without a concrete trace showing the bottleneck. (#936
-  added both against hypothetical load; both broke TEST and were reverted in #943.)
+  provisioner/fleet path without a concrete trace showing the bottleneck.
 - **Right net for the bug class.** Index-presence and render-time-env bugs are not
   caught by more emulator tests — they need declarative config + fail-loud-at-boot
   + a live exercise. Reach for the net that actually catches the class.

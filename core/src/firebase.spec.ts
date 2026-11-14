@@ -29,7 +29,7 @@ function installFirebaseAdminMocks(apps: unknown[]) {
 async function loadFirebase(apps: unknown[] = []) {
   vi.resetModules();
   const mocks = installFirebaseAdminMocks(apps);
-  const module = await import("./firebase");
+  const module = await import("./firebase.js");
   return { module, mocks };
 }
 

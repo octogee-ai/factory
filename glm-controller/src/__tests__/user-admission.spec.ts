@@ -12,7 +12,7 @@ const bob: UserAdmissionRequest = { uid: "bob", slug: "bob", persona: null };
 
 function alreadyAdmitted(uid: string): FenceMismatchError {
   return new FenceMismatchError(
-    { aggregate: "builders", key: uid },
+    { aggregate: "builder", key: uid },
     "absent",
     { provisioningStatus: null },
     { provisioningStatus: "in_progress" },
@@ -20,7 +20,7 @@ function alreadyAdmitted(uid: string): FenceMismatchError {
 }
 
 function slugConflict(uid: string): FenceMismatchError {
-  return new FenceMismatchError({ aggregate: "builders", key: uid }, "present", { slug: uid }, { slug: "someone-else" });
+  return new FenceMismatchError({ aggregate: "builder", key: uid }, "present", { slug: uid }, { slug: "someone-else" });
 }
 
 function harness(requests: readonly UserAdmissionRequest[]) {

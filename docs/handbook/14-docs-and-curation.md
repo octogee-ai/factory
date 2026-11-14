@@ -5,25 +5,23 @@ order: 14
 part: Dev Workflow
 audience: [ops, agent]
 description: Keep documentation small, current, and useful.
-updated: 2026-07-28
+updated: 2026-11-13
 ---
 
 # Docs & Curation
 
-Documentation describes the current product and the current way to operate it.
+Documentation describes the current platform and the current way to run it.
 Git is the archive.
 
 ## Where information belongs
 
 | Information | Home |
 | --- | --- |
-| Session orientation | `CLAUDE.md` / `AGENTS.md` |
-| Operator and engineering procedures | `docs/handbook/` |
-| Durable system shape | `docs/architecture/` |
-| Deep service reference | `docs/operations/` |
-| Current non-obvious choices | `docs/decisions/DECISIONS.md` |
-| Material work still being designed or built | `docs/specs/` |
-| Brand and positioning | `docs/brand/` |
+| What the repository is and how to start | `README.md` |
+| How to contribute and sign off | `CONTRIBUTING.md` |
+| Session orientation for agents | `AGENTS.md` |
+| Engineering workflow | `docs/handbook/` |
+| Installing, requirements, running in the cloud, OpenClaw compatibility, the trust model | `docs/*.md`, starting at `docs/getting-started.md` |
 
 Use the narrowest useful home and link to it. Do not copy the same procedure
 across several files.
@@ -31,8 +29,8 @@ across several files.
 ## Lifecycle
 
 - Update a document in the same change that makes it untrue.
-- Delete a spec when its work lands, is abandoned, or is mostly complete.
-- Replace or delete a superseded decision; do not append a counter-decision.
+- Delete a design note when its work lands, is abandoned, or is mostly complete.
+- Replace a superseded explanation; do not append a counter-explanation.
 - Delete retired runbooks, experiment ledgers, release notes, proof packets,
   audit snapshots, and migration history. Git retains them.
 - Do not add tombstones explaining that a deleted document or process was
@@ -40,9 +38,8 @@ across several files.
 - Do not write tests that assert exact handbook prose. Test executable
   configuration and behavior instead.
 
-Keep `CLAUDE.md` short because every agent pays its context cost. Keep
-`docs/INDEX.md` as an entry map, not an exhaustive ledger that must be updated
-for every temporary spec.
+Keep `AGENTS.md` short because every agent pays its context cost. Keep
+`docs/getting-started.md` an entry point, not an exhaustive ledger.
 
 ## What earns a document
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { gatewayScopedJobId, signFleetRequest } from "./fleet-signature";
-import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys";
+import { gatewayScopedJobId, signFleetRequest } from "./fleet-signature.js";
+import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 import {
   CONFIG_PATCH_DEADLINE_MS,
   SIGNATURE_HEADER,
@@ -13,7 +13,7 @@ import {
   reportMigrationProgress,
   isDefinitiveConfigRpcRejection,
   MigrationTransportError,
-} from "./fleet-migration-client";
+} from "./fleet-migration-client.js";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 
 interface CapturedCall {
@@ -88,7 +88,8 @@ const transferNotUnderTest = async (): Promise<never> => {
 const SNAPSHOT: FleetBrokerUserSnapshot = {
   uid: "uid-alice",
   slug: "alice",
-  tier: "trial",
+  contextTemplateKey: "default",
+  planInputs: {},
   gatewayId: "gw-blue",
   status: "complete",
   agentIds: ["octogee-alice-coach"],
@@ -104,7 +105,7 @@ const SNAPSHOT: FleetBrokerUserSnapshot = {
   photoURL: "",
   persona: null,
   coachToken: "coach-token",
-  defaultAgentMmUserId: "mm-coach",
+  coachMmUserId: "mm-coach",
 };
 
 describe("isDefinitiveConfigRpcRejection", () => {
@@ -688,7 +689,7 @@ describe("MigrationClient.resume", () => {
 
   it.each([true, false])("requires an acknowledged restart (resumed=%s)", async (resumed) => {
     const { calls, fakeFetch } = captureFetch(() => new Response(JSON.stringify({ resumed }), { status: 200 }));
-    const client = createMigrationClient({ privateKey: PRIVATE_KEY, resolveGatewayUrl: () => "https://source.example.com", fetch: fakeFetch });
+    const client = createMigrationClient({ privateKey: PRIVATE_KEY, resolveGatewayUrl: () => "https://source.example.com", fetch: fakeFetch, transferState: transferNotUnderTest });
     const result = client.resume({ migrationId: "m1", gatewayId: "source", slug: "alice" });
     if (resumed) await expect(result).resolves.toBeUndefined();
     else await expect(result).rejects.toThrow("did not resume");
@@ -794,7 +795,7 @@ describe("MigrationClient.scheduler", () => {
   it("carries the partial-handoff flag on a scheduler command", async () => {
     const result = { operationId: "handoff-1", phase: "export", agentIds: ["octogee-alice-coach"], drained: true, snapshot: { retainedJobIds: ["desktop-watch"] } };
     const { fakeFetch, calls } = captureFetch(() => new Response(JSON.stringify(result), { status: 200 }));
-    const client = createMigrationClient({ privateKey: PRIVATE_KEY, resolveGatewayUrl: () => "https://fleet-test.example.com", fetch: fakeFetch });
+    const client = createMigrationClient({ privateKey: PRIVATE_KEY, resolveGatewayUrl: () => "https://fleet-test.example.com", fetch: fakeFetch, transferState: transferNotUnderTest });
     await expect(client.scheduler({ migrationId: "handoff-1", slug: "alice", gatewayId: "gw-source", phase: "export", retainNonportable: true })).resolves.toEqual(result);
     expect(JSON.parse(calls[0].body!)).toEqual({ migrationId: "handoff-1", slug: "alice", phase: "export", retainNonportable: true });
   });
@@ -802,7 +803,7 @@ describe("MigrationClient.scheduler", () => {
   it("signs the scheduler command for its exact gateway and operation", async () => {
     const result = { operationId: "handoff-1", phase: "hold", agentIds: ["octogee-alice-coach"], drained: true };
     const { fakeFetch, calls } = captureFetch(() => new Response(JSON.stringify(result), { status: 200 }));
-    const client = createMigrationClient({ privateKey: PRIVATE_KEY, resolveGatewayUrl: () => "https://fleet-test.example.com", fetch: fakeFetch });
+    const client = createMigrationClient({ privateKey: PRIVATE_KEY, resolveGatewayUrl: () => "https://fleet-test.example.com", fetch: fakeFetch, transferState: transferNotUnderTest });
     await expect(client.scheduler({ migrationId: "handoff-1", slug: "alice", gatewayId: "gw-source", phase: "hold" })).resolves.toEqual(result);
     expect(calls[0].url).toBe("https://fleet-test.example.com/scheduler/gw-source");
     expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBe(signFleetRequest(PRIVATE_KEY, gatewayScopedJobId("handoff-1", "gw-source"), calls[0].body!));
@@ -815,7 +816,7 @@ describe("MigrationClient.scheduler", () => {
     { operationId: "handoff-1", phase: "stage", agentIds: [], drained: true },
   ])("refuses an unproven scheduler acknowledgement %j", async (payload) => {
     const { fakeFetch } = captureFetch(() => new Response(JSON.stringify(payload), { status: 200 }));
-    const client = createMigrationClient({ privateKey: PRIVATE_KEY, resolveGatewayUrl: () => "https://fleet-test.example.com", fetch: fakeFetch });
+    const client = createMigrationClient({ privateKey: PRIVATE_KEY, resolveGatewayUrl: () => "https://fleet-test.example.com", fetch: fakeFetch, transferState: transferNotUnderTest });
     await expect(client.scheduler({ migrationId: "handoff-1", slug: "alice", gatewayId: "gw-source", phase: "hold" })).rejects.toThrow("did not prove");
   });
 });

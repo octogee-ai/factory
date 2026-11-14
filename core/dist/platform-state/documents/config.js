@@ -1,8 +1,7 @@
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
-import { GATEWAY_VM_PROVISIONING_MODELS, isGatewayVmBootDiskType, isGatewayVmDesktop } from "@octogee/shared/types/glm";
 import { DEFAULT_HOUSE_MODEL_REF, DEFAULT_OPS_AGENT_MODEL_REF, DEFAULT_USER_AGENT_FALLBACK_MODEL_REF, DEFAULT_USER_AGENT_MODEL_REF, parsePlatformConnectConfig, parsePlatformFreeConfig, parsePlatformModelConfig } from "@octogee/shared/types/platform-config";
 import { parseSharedGatewayAutoscalingConfig } from "@octogee/shared/types/shared-gateway-pool";
-import { isSizingTier } from "@octogee/shared/types/sizing";
+import { isGatewaySizingProfile } from "../config.js";
 import { MalformedRecordError } from "../errors.js";
 export function parseStoredPlatformModelConfig(value) {
     if (typeof value !== "object" || value === null || Array.isArray(value))
@@ -33,28 +32,6 @@ export function isPlainMap(value) {
 }
 export function isNonNegativeSafeInteger(value) {
     return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-export function isVmProfile(value) {
-    if (!isPlainMap(value))
-        return false;
-    const { runtime, desktop, machineType, provisioningModel, bootDisk, homeSizeGiB } = value;
-    return (runtime === "gce-vm" &&
-        isGatewayVmDesktop(desktop) &&
-        (machineType === null || typeof machineType === "string") &&
-        (provisioningModel === null || GATEWAY_VM_PROVISIONING_MODELS.includes(provisioningModel)) &&
-        (bootDisk === null ||
-            (isPlainMap(bootDisk) && typeof bootDisk.sizeGb === "number" && isGatewayVmBootDiskType(bootDisk.type))) &&
-        typeof homeSizeGiB === "number");
-}
-export function isGatewaySizingProfile(value) {
-    if (!isPlainMap(value))
-        return false;
-    if (value.isolation === "shared")
-        return true;
-    return (value.isolation === "isolated" &&
-        isSizingTier(value.sizingTier) &&
-        isVmProfile(value.computer) &&
-        (value.fallbackStorageGb === null || typeof value.fallbackStorageGb === "number"));
 }
 export function seedSizingProfiles(tiers) {
     const profiles = {};

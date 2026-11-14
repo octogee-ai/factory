@@ -1,0 +1,94 @@
+name: Publish plugin
+
+on:
+  push:
+    tags:
+      - "octogee-*-tools-v*"
+  workflow_dispatch:
+    inputs:
+      plugin:
+        description: Plugin id, a folder under infra/gateway/extensions/platform
+        required: true
+        type: string
+      dry_run:
+        description: Preview the release without publishing it
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-plugin-${{ github.ref }}-${{ inputs.plugin }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: clawhub
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+          package-manager-cache: false
+      - name: Select the release
+        id: release
+        env:
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ github.ref_name }}
+          PLUGIN: ${{ inputs.plugin }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [[ "$EVENT" == push ]]; then
+            [[ "$TAG" =~ ^(octogee-[a-z0-9-]+-tools)-v([0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?)$ ]] \
+              || { echo "::error::Release tags look like octogee-access-tools-v1.2.3, not $TAG"; exit 1; }
+            PLUGIN="${BASH_REMATCH[1]}"
+            EXPECTED_VERSION="${BASH_REMATCH[2]}"
+            DRY_RUN=false
+          fi
+          if [[ "$DRY_RUN" != true ]] && ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::$(git rev-parse HEAD) is not on main; publish only merged commits"
+            exit 1
+          fi
+          {
+            echo "plugin=$PLUGIN"
+            echo "expected-version=${EXPECTED_VERSION:-}"
+            echo "dry-run=$DRY_RUN"
+          } >> "$GITHUB_OUTPUT"
+      - name: Install the build and ClawHub tools
+        run: |
+          npm ci --prefix scripts --no-audit --no-fund
+          npm ci --prefix .github/clawhub-cli --no-audit --no-fund
+      - name: Sign in to ClawHub
+        if: steps.release.outputs.dry-run != 'true'
+        env:
+          CLAWHUB_CONFIG_PATH: ${{ runner.temp }}/clawhub/config.json
+          CLAWHUB_DISABLE_TELEMETRY: "1"
+          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+        run: |
+          if [[ -z "$CLAWHUB_TOKEN" ]]; then
+            echo "::error::The clawhub environment has no CLAWHUB_TOKEN secret"
+            exit 1
+          fi
+          .github/clawhub-cli/node_modules/.bin/clawhub --no-input login --token "$CLAWHUB_TOKEN"
+      - name: Publish
+        env:
+          CLAWHUB: ${{ github.workspace }}/.github/clawhub-cli/node_modules/.bin/clawhub
+          CLAWHUB_CONFIG_PATH: ${{ runner.temp }}/clawhub/config.json
+          CLAWHUB_DISABLE_TELEMETRY: "1"
+          PLUGIN: ${{ steps.release.outputs.plugin }}
+          EXPECTED_VERSION: ${{ steps.release.outputs.expected-version }}
+          DRY_RUN: ${{ steps.release.outputs.dry-run }}
+        run: |
+          if [[ "$DRY_RUN" == true ]]; then
+            bash infra/gateway/publish-plugin.sh "$PLUGIN" --dry-run
+          else
+            bash infra/gateway/publish-plugin.sh "$PLUGIN"
+          fi

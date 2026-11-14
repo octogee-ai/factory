@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GLM_OPERATIONS_COLLECTION, type Operation } from "@octogee/shared/types/glm";
+import { GLM_OPERATIONS_COLLECTION, type Operation, type OperationAttemptRecord } from "@octogee/shared/types/glm";
 import {
   drainPendingOperationsOnce,
   processOperation,
@@ -766,7 +766,7 @@ describe("gateway operation queue — automatic retry with backoff", () => {
   ])("keeps an automatic user return pending beyond the generic cap after %s", async (error) => {
     vi.setSystemTime(1_000_000);
     const handler: OperationHandler = vi.fn(async () => { throw new Error(error); });
-    const priorAttempts = [
+    const priorAttempts: OperationAttemptRecord[] = [
       { attempt: 1, startedAt: 1, completedAt: 2, error: "fetch failed", classification: "transient", steps: [] },
       { attempt: 2, startedAt: 3, completedAt: 4, error: "fetch failed", classification: "transient", steps: [] },
       { attempt: 3, startedAt: 5, completedAt: 6, error: "fetch failed", classification: "transient", steps: [] },
@@ -941,7 +941,7 @@ describe("completion bookkeeping reads the fresh doc, not the caller's snapshot"
   });
 
   it("a stale worker snapshot cannot reset attempts or drop attemptHistory", async () => {
-    const priorAttempts = [
+    const priorAttempts: OperationAttemptRecord[] = [
       { attempt: 1, startedAt: 1, completedAt: 2, error: "e1", classification: "transient", steps: [] },
       { attempt: 2, startedAt: 3, completedAt: 4, error: "e2", classification: "transient", steps: [] },
     ];

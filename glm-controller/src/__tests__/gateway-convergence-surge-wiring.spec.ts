@@ -59,7 +59,7 @@ function passDeps(
   current = gateway(),
 ) {
   return {
-    store: createDocumentFixtureStore({ [`gateways/${current.gatewayId}`]: current }),
+    store: createDocumentFixtureStore({ [`gateways/${current.gatewayId}`]: { ...current } }),
     reconcileSurgeHandoff,
   };
 }
@@ -249,8 +249,6 @@ describe("gateway convergence surge wiring", () => {
         imageRepository: userRepository,
         imageTag: builderImageTag,
         replicas: 1,
-        ownerUid: "uid-walter",
-        builderSlug: "walter",
       },
       action: { kind: "steady" },
     })).resolves.toEqual({ kind: "mark-live" });
@@ -311,8 +309,6 @@ describe("gateway convergence surge wiring", () => {
         imageRepository: userRepository,
         imageTag: builderImageTag,
         replicas: 1,
-        ownerUid: "uid-walter",
-        builderSlug: "walter",
       },
       action: { kind: "steady" },
     })).resolves.toEqual({ kind: "mark-live" });
@@ -362,8 +358,6 @@ describe("gateway convergence surge wiring", () => {
         imageRepository: userRepository,
         imageTag: builderImageTag,
         replicas: 1,
-        ownerUid: "uid-walter",
-        builderSlug: "walter",
       },
       action: { kind: "steady" },
     })).resolves.toEqual({ kind: "mark-live" });

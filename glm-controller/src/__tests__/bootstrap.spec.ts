@@ -4,60 +4,20 @@ import {
   bootstrapGlmGateways,
   versionFromImageTag,
 } from "../index";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
+import type { AuthSecretEnsurer } from "../auth-secret-ensurer";
+import { createLoggingHelmRunner } from "../helm-runner";
+import { operationHandlers } from "./fixtures/operation-handlers";
 
-function firestore(seed: Record<string, Record<string, unknown>> = {}) {
-  const store = new Map(Object.entries(seed));
-  let operation = 0;
-  const snapshot = (path: string) => ({
-    exists: store.has(path),
-    data: () => store.get(path),
-  });
-  const document = (path: string) => ({
-    id: path.split("/").at(-1),
-    path,
-    get: async () => snapshot(path),
-    collection: (name: string) => collection(`${path}/${name}`),
-  });
-  const collection = (path: string) => ({
-    doc: (id?: string) => document(`${path}/${id ?? `op-${++operation}`}`),
-  });
-  const db = {
-    collection,
-    runTransaction: async (
-      body: (transaction: {
-        get: (ref: { path: string }) => Promise<ReturnType<typeof snapshot>>;
-        set: (
-          ref: { path: string },
-          data: Record<string, unknown>,
-          options?: { merge?: boolean },
-        ) => void;
-      }) => Promise<void>,
-    ) => {
-      await body({
-        get: async (ref) => snapshot(ref.path),
-        set: (ref, data, options) => {
-          store.set(
-            ref.path,
-            options?.merge ? { ...store.get(ref.path), ...data } : data,
-          );
-        },
-      });
-    },
-  };
-  return { db, store };
-}
-
-function controllerDeps(seed: Record<string, Record<string, unknown>> = {}) {
-  const { db, store } = firestore(seed);
+function controllerDeps() {
+  const log = vi.fn();
+  const helm = createLoggingHelmRunner(log);
   return {
-    db: db as unknown as Parameters<typeof bootstrapGlmGateways>[0]["db"],
-    store,
-    helm: {
-      readDeployedInstances: vi.fn(async () => ({})),
-    } as Parameters<typeof bootstrapGlmGateways>[0]["helm"],
-    handlers: {} as Parameters<typeof bootstrapGlmGateways>[0]["handlers"],
-    log: vi.fn(),
-    ensureGatewayAuthSecret: vi.fn(async () => ({ token: "test-token" })),
+    store: createDocumentFixtureStore({}),
+    helm: { ...helm, readDeployedInstances: vi.fn(helm.readDeployedInstances) },
+    handlers: operationHandlers(),
+    log,
+    ensureGatewayAuthSecret: vi.fn<AuthSecretEnsurer["ensureAuthSecret"]>(async () => {}),
   };
 }
 

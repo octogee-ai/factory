@@ -95,7 +95,7 @@ export interface SourcePlacement {
 
 type PlacementResolution =
   | { ok: true; release: number | null; gatewayClass: GatewayClass }
-  | { ok: false; reason: string };
+  | { ok: false; reason: string; blocker?: string };
 
 export interface MigrateUserDeps {
   reportMigrationProgress: (gatewayId: string, event: MigrationProgressRequestBody) => Promise<void>;
@@ -615,7 +615,8 @@ async function resolveMigrationTargets(
     return { error: `target gateway ${toGatewayId} has no durable placement` };
   }
   if (placement.ok === false) {
-    return { error: `placement rejected for ${toGatewayId}: ${placement.reason}` };
+    const blocker = placement.blocker ? ` (${placement.blocker})` : "";
+    return { error: `placement rejected for ${toGatewayId}: ${placement.reason}${blocker}` };
   }
 
   return {
@@ -1961,7 +1962,7 @@ async function clearFailedSourcePreparation(input: {
 }
 
 function migrationPlacementFailure(op: Operation, failure: { error: string }): { error: string; rolledBack?: false } {
-  if (op.schedulerHandoff?.forwardRecovery && failure.error.endsWith(": revision-not-ready")) {
+  if (op.schedulerHandoff?.forwardRecovery && /: revision-not-ready(?: \(.+\))?$/u.test(failure.error)) {
     return { error: `migration forward recovery pending: status 503: ${failure.error}`, rolledBack: false };
   }
   return failure;
