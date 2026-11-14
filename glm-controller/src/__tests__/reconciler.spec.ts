@@ -1063,6 +1063,25 @@ describe("gateway convergence pass outcomes", () => {
     expect(h.upserted("healthy")).toMatchObject({ rollStrategy: "surge" });
   });
 
+  it("neither claims nor checks a pod gateway's home once its runtime mutation stops being allowed during the pass", async () => {
+    const roots: Record<string, Record<string, unknown>> = {
+      pod: durableRoot({ gatewayId: "pod", gatewayClass: "builder", profile: null, imageProfile: "builder", sizingTier: "s", ownerUid: "u", builderSlug: "alice", liveRelease: null }),
+    };
+    const h = isolatedPodPass(roots, {}, { pod: POD_PROFILE });
+    h.ensureIsolatedPodHome.mockRejectedValue(new Error("isolated gateway pod is served but its home claim octogee-gateway-pod-data is missing"));
+    const transaction = h.deps.store.transaction.bind(h.deps.store);
+    h.deps.store.transaction = (async (options, work) => {
+      const result = await transaction(options, work);
+      if (options.label === "converge-gateway.upsert-runtime") delete roots.pod;
+      return result;
+    }) as typeof h.deps.store.transaction;
+
+    await runGatewayConvergencePass(h.deps);
+
+    expect(h.ensureIsolatedPodHome).not.toHaveBeenCalled();
+    expect(h.helm.upsertInstance).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["no profile at its tier", { pod: POD_PROFILE }, "isolated gateway pod runs as a pod, and no isolated sizing profile at tier m describes one"],
     ["a VM profile at its tier", { vm: VM_PROFILE }, "isolated gateway pod runs as a pod, but the isolated sizing profile at tier m describes a gce-vm computer"],

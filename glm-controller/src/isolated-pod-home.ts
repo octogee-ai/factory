@@ -150,6 +150,10 @@ export interface IsolatedPodBlockerObserverDeps {
   log: (message: string) => void;
 }
 
+function oneLine(blocker: string | null): string | null {
+  return blocker === null ? null : blocker.replace(/\s+/gu, " ").trim();
+}
+
 export async function observeIsolatedPodBlockers(deps: IsolatedPodBlockerObserverDeps): Promise<void> {
   const runtimes = await deps.store.fleetRegistry.list({ runtime: "cluster" });
   const roots = await deps.store.gateways.roots.getMany(runtimes.map((runtime) => runtime.gatewayId));
@@ -158,7 +162,7 @@ export async function observeIsolatedPodBlockers(deps: IsolatedPodBlockerObserve
     if (root?.gatewayClass !== "builder" || root.desiredStatus !== "running") continue;
     let blocker: string | null;
     try {
-      blocker = await deps.readBlocker(runtime.gatewayId);
+      blocker = oneLine(await deps.readBlocker(runtime.gatewayId));
     } catch (error) {
       deps.log(`[isolated-pod] ⚠ ${runtime.gatewayId}: blocker unreadable: ${error instanceof Error ? error.message : String(error)}`);
       continue;
