@@ -8,5 +8,4 @@ export { DEFAULT_PLATFORM_STATE_SCHEMA, migratePlatformState, } from "./postgres
 export { migratePlatformStateFromEnvironment } from "./postgres/migrate-from-environment.js";
 export { PLATFORM_STATE_MIGRATIONS } from "./postgres/migrations.js";
 export { createPostgresPlatformStateStore } from "./postgres/store.js";
-export { lazyPlatformStateStore } from "./lazy-store.js";
 export { platformStateStoreForDeploymentTarget, platformStateStoreFromEnvironment, } from "./postgres/store-from-environment.js";

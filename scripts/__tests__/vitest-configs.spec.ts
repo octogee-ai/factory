@@ -3,7 +3,6 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { configDefaults } from "vitest/config";
 import unitConfig from "../vitest.config.js";
-import emulatorConfig from "../vitest.emulator.config.js";
 
 interface ScriptsVitestConfig {
   resolve?: { alias?: Record<string, string> };
@@ -53,7 +52,7 @@ describe("scripts vitest configs", () => {
     const linux = await unitExcludesOn("linux");
     const darwin = await unitExcludesOn("darwin");
 
-    expect(linux).toEqual([...configDefaults.exclude, "**/*.emulator.spec.ts"]);
+    expect(linux).toEqual([...configDefaults.exclude, "**/*.emulator.spec.ts", "__tests__/firebase-reach.spec.ts"]);
     expect(darwin).toEqual(expect.arrayContaining([...linux, "__tests__/rsync-staged-symlinks.spec.ts"]));
   });
 
@@ -62,7 +61,7 @@ describe("scripts vitest configs", () => {
     const standalone = await unitExcludesOn("linux", { productCheckout: false });
 
     expect(inside).not.toContain("__tests__/source-checkout-workflows.spec.ts");
-    expect(standalone).toEqual(expect.arrayContaining([...inside, "__tests__/source-checkout-workflows.spec.ts", "__tests__/scope-resolve.spec.ts"]));
+    expect(standalone).toEqual(expect.arrayContaining(["__tests__/source-checkout-workflows.spec.ts", "__tests__/scope-resolve.spec.ts"]));
   });
 
   it("runs specs that read this repository's commits only in its git checkout", async () => {
@@ -73,13 +72,11 @@ describe("scripts vitest configs", () => {
     expect(overlay).toEqual([...checkout, "__tests__/publish-plugin.spec.ts"]);
   });
 
-  it("runs emulator specs serially with the longer timeout", () => {
-    const cfg = emulatorConfig as ScriptsVitestConfig;
-    const alias = cfg.resolve?.alias as Record<string, string>;
+  it("runs the platform's Firebase reach ratchet only when the platform stands alone", async () => {
+    const inside = await unitExcludesOn("linux");
+    const standalone = await unitExcludesOn("linux", { productCheckout: false });
 
-    expect(alias["@shared"]).toBe(path.resolve(__dirname, "../../shared"));
-    expect(cfg.test?.include).toEqual(["__tests__/**/*.emulator.spec.ts"]);
-    expect(cfg.test?.fileParallelism).toBe(false);
-    expect(cfg.test?.testTimeout).toBe(15_000);
+    expect(inside).toContain("__tests__/firebase-reach.spec.ts");
+    expect(standalone).not.toContain("__tests__/firebase-reach.spec.ts");
   });
 });

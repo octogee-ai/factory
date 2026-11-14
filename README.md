@@ -29,7 +29,9 @@ on a local kind cluster from the images this repository publishes. See
 [The full platform on kind](docs/kind.md). It has not yet run on a cloud
 account, so there is no production install of it yet. Users on a shared
 gateway work through Mattermost and Gitea; the OpenClaw Control UI is for
-isolated gateways only.
+isolated gateways only. The platform API knows a user by their Mattermost
+session or personal access token; see
+[Call the platform API as a user](docs/kind.md#call-the-platform-api-as-a-user).
 
 Some features start switched off, among them agent import and export, the
 OpenClaw dashboard, project repository sources and voice. List the ones you
@@ -47,7 +49,7 @@ and a domain. [See every account and tier](docs/getting-started.md#what-you-need
 
 - `AGENTS.md` is the contract every agent loads.
 - `docs/handbook/` holds the Dev Workflow chapters of the handbook.
-- The platform packages: `core`, `shared`, `test-helpers`, the fleet controller
+- The platform packages: `core`, `shared`, the fleet controller
   in `glm-controller`, `gateway-edge`, and `octogee-api`, with `infra`, `helm`,
   `terraform`, `templates` and `scripts` beside them. `tests/` holds the
   cross-package platform specs.

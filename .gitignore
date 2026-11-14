@@ -4,8 +4,6 @@ dist/
 !core/dist/**
 !shared/dist/
 !shared/dist/**
-!test-helpers/dist/
-!test-helpers/dist/**
 target/
 .env
 .env.*

@@ -2,7 +2,6 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../../gateway-edge/src/lib/db', () => ({
-  auth: { verifyIdToken: vi.fn() },
   db: {
     collection: () => ({
       doc: () => ({

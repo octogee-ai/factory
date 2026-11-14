@@ -29,7 +29,6 @@ vi.mock("../lib/db.js", () => ({
   db: {
     doc: (path: string) => h.dbDoc(path),
   },
-  auth: { verifyIdToken: vi.fn() },
   FieldValue: { serverTimestamp: vi.fn() },
 }));
 

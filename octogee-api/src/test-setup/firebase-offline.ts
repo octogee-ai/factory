@@ -1,13 +1,12 @@
 import { vi } from "vitest";
 
 // Keep firebase-admin out of the `npm test` (non-emulator) unit suite.
-// gateway-edge/src/lib/db calls initializeApp()/getFirestore()/getAuth() at
-// import, so any spec that loads it unmocked builds LIVE clients whose
-// ADC/metadata work hangs and — under the forks pool — bleeds across sibling
-// files. Mock the module inert globally (specs that declare their own vi.mock
-// for it still win, so seeded fakes are unaffected); the offline env is a
-// backstop so a stray direct firebase-admin call (e.g. a route's getStorage)
-// fails fast instead of hanging on ADC. vitest.emulator.config.ts doesn't load
+// gateway-edge/src/lib/db builds LIVE Firebase clients at first use, so any
+// spec that uses it unmocked starts ADC/metadata work that hangs and — under
+// the forks pool — bleeds across sibling files. Mock the module inert globally
+// (specs that declare their own vi.mock for it still win, so seeded fakes are
+// unaffected); the offline env is a backstop so a stray direct firebase-admin
+// call fails fast instead of hanging on ADC. An emulator config doesn't load
 // this setup, so real-emulator specs are unaffected.
 vi.mock("../../../gateway-edge/src/lib/db", () => {
   const inertDoc: Record<string, unknown> = {};

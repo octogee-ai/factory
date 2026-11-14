@@ -365,6 +365,10 @@
       "types": "./dist/firebase.d.ts",
       "default": "./dist/firebase.js"
     },
+    "./lazy-instance": {
+      "types": "./dist/lazy-instance.d.ts",
+      "default": "./dist/lazy-instance.js"
+    },
     "./gateway": {
       "types": "./dist/gateway.d.ts",
       "default": "./dist/gateway.js"
@@ -533,6 +537,10 @@
     "./identity-provider": {
       "types": "./dist/identity-provider.d.ts",
       "default": "./dist/identity-provider.js"
+    },
+    "./user-identity-provider": {
+      "types": "./dist/user-identity-provider.d.ts",
+      "default": "./dist/user-identity-provider.js"
     },
     "./operator-token": {
       "types": "./dist/operator-token.d.ts",
@@ -865,6 +873,9 @@
       ],
       "identity-provider": [
         "dist/identity-provider.d.ts"
+      ],
+      "user-identity-provider": [
+        "dist/user-identity-provider.d.ts"
       ],
       "operator-token": [
         "dist/operator-token.d.ts"

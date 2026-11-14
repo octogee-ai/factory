@@ -298,11 +298,76 @@ The user's workspace clones over the same port-forward, with the username
 git clone http://localhost:3000/lin/workspace.git
 ```
 
+If the clone fails with `Authentication failed` after you reinstall, git
+offered a password it saved for `localhost:3000` from an earlier cluster. Git
+forgets that password when it fails, so run the clone again.
+
 Both services keep their in-cluster addresses as their configured URLs, for
 example `http://octogee-gitea-http.octogee-local.svc.cluster.local:3000`. Your
 machine cannot resolve those names. Pages you open through a port-forward use
 `localhost`, but if a link takes you to an in-cluster address, open the same
 path on `localhost` with that service's port.
+
+## Call the platform API as a user
+
+The platform API knows a user by their Mattermost sign-in. A request carries
+`Authorization: Bearer <token>`, where the token is one of the user's Mattermost
+tokens. The API asks Mattermost whose token it is and finds the platform user
+created for that Mattermost account. It trusts only the account's Mattermost id:
+the username, email and Mattermost roles play no part. A Mattermost system admin
+is not a platform admin; only the platform's own role decides that. Tokens of bot
+accounts and deactivated accounts are refused.
+
+There are two kinds of token:
+
+- **A session token.** Sign in through the Mattermost API with the user's chat
+  password, and take the `Token` header of the answer. The session lasts as long
+  as Mattermost's session settings allow, and signing out ends it.
+
+  ```bash
+  read -rs MM_PASSWORD
+  MM_TOKEN=$(printf '{"login_id":"lin","password":"%s"}' "$MM_PASSWORD" \
+    | curl -sS -D - -o /dev/null http://localhost:8065/api/v4/users/login \
+        -H 'content-type: application/json' --data @- \
+    | sed -n 's/^[Tt]oken: //p' | tr -d '\r')
+  ```
+
+- **A personal access token.** The chart turns on Mattermost's
+  `EnableUserAccessTokens` setting. Mattermost still lets a user create a token
+  only after a system admin allows it, under **System Console > User Management >
+  Users > Manage Roles > Allow this account to generate personal access tokens**.
+  The user then creates one under **Profile > Security > Personal Access
+  Tokens**, and it lasts until they revoke it.
+
+Forward the API in a terminal of its own, then call it:
+
+```bash
+kubectl --kubeconfig="$STATE/kubeconfig" --context=kind-octogee -n octogee-local \
+  port-forward svc/octogee-api 3001:3001
+```
+
+```bash
+curl -sS -H "authorization: Bearer $MM_TOKEN" http://localhost:3001/api/features
+```
+
+A token Mattermost does not accept gets `401`. If Mattermost does not answer
+within 5 seconds, the API answers `503` and logs it.
+
+The API remembers a token it has checked for up to 60 seconds. A sign-out, a
+revoked token or a deactivated Mattermost account can therefore keep working for
+up to 60 seconds. A suspended platform user is refused at once, because the API
+reads the user's platform state on every request.
+
+A gateway's routes under `/g/<gateway>/` accept the same tokens. The gateway
+has no Mattermost or platform state of its own, so it asks the platform API
+whose token it is and remembers the answer for up to 60 seconds. On a gateway,
+a revoked token can keep working for up to 120 seconds: 60 at the API plus 60 at
+the gateway. A suspension reaches a gateway within 60 seconds.
+
+The API answers at most 6,000 of a gateway's verify calls a minute, counting
+rejected tokens too. Past that it answers `429` and logs the gateway id once a
+minute. The gateway then answers `503` to a token it has not remembered, while
+tokens it remembers keep working.
 
 ## Talk to the agent
 

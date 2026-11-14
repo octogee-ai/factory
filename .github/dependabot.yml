@@ -19,7 +19,6 @@ updates:
       - /octogee-api
       - /scripts
       - /shared
-      - /test-helpers
       - /tests
     schedule:
       interval: weekly

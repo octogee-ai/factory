@@ -88,7 +88,7 @@ jobs:
               npm test
           - name: libraries
             installs: >-
-              shared test-helpers scripts glm-controller
+              shared scripts glm-controller
               infra/gateway/extensions/platform/octogee-access-tools
               infra/gateway/extensions/platform/octogee-activity-tools
               infra/gateway/extensions/platform/octogee-broker-tools
@@ -98,9 +98,7 @@ jobs:
               infra/gateway/extensions/platform/octogee-web-tools
               infra/gateway/extensions/platform/octogee-workspace-tools
             run: |
-              for package in shared test-helpers; do
-                (cd "$package" && npm run typecheck && npm run build && node ../scripts/ops/verify-committed-dist.mjs && npm test)
-              done
+              (cd shared && npm run typecheck && npm run build && node ../scripts/ops/verify-committed-dist.mjs && npm test)
               (cd glm-controller && npm run typecheck && npm test)
               (cd infra/gateway/extensions/platform/octogee-access-tools && npm test)
               (cd infra/gateway/extensions/platform/octogee-activity-tools && npm run typecheck && npm test)

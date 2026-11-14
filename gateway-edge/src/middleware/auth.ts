@@ -1,10 +1,14 @@
 import { withLogContext } from "@octogee/shared/server/service-logger";
 import * as crypto from "crypto";
 import { Request, Response, NextFunction } from "express";
-import { auth, db } from "../lib/db.js";
+import {
+  isUserCredentialRejected,
+  type UserDocument,
+  type UserIdentityProvider,
+  type VerifiedUser,
+} from "@octogee/core/user-identity-provider";
 import { resolveCanonicalWorkspaceSlug } from "../lib/canonical-workspace.js";
 import { platformStateStore } from "../lib/platform-state.js";
-import { userDataWithUserState } from "../lib/user-platform-state.js";
 import { logger } from "./logging.js";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 
@@ -14,11 +18,34 @@ declare global {
     interface Request {
       uid?: string;
       authTime?: number;
-      user?: FirebaseFirestore.DocumentData;
+      user?: UserDocument;
       workspaceSlug?: string | null;
       isAdmin?: boolean;
     }
   }
+}
+
+let installedProvider: UserIdentityProvider | null = null;
+
+export function installUserIdentityProvider(provider: UserIdentityProvider): void {
+  installedProvider = provider;
+}
+
+export async function loadUserWithInstalledProvider(uid: string): Promise<UserDocument | null> {
+  if (installedProvider === null) throw new Error("no user identity provider is installed");
+  return installedProvider.loadUser(uid);
+}
+
+function userIdentityProvider(res: Response): UserIdentityProvider | null {
+  if (installedProvider === null) {
+    logger.error("User authentication is unavailable: no user identity provider is installed");
+    res.status(503).json({ error: "Authentication unavailable" });
+  }
+  return installedProvider;
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 function authenticateUid(
@@ -31,19 +58,26 @@ function authenticateUid(
     res.status(401).json({ error: "Unauthenticated" });
     return;
   }
+  const provider = userIdentityProvider(res);
+  if (provider === null) return;
 
   const token = header.slice(7);
   void (async () => {
-    let decoded: Awaited<ReturnType<typeof auth.verifyIdToken>>;
+    let verified: VerifiedUser;
     try {
-      decoded = await auth.verifyIdToken(token);
+      verified = await provider.verifyBearer(token);
     } catch (err) {
-      logger.warn(`Auth failed: ${(err as Error).message}`);
-      res.status(401).json({ error: "Invalid token" });
+      if (isUserCredentialRejected(err)) {
+        logger.warn(`Auth failed: ${err.message}`);
+        res.status(401).json({ error: "Invalid token" });
+        return;
+      }
+      logger.error(`User authentication is unavailable: ${errorMessage(err)}`);
+      res.status(503).json({ error: "Authentication lookup unavailable" });
       return;
     }
-    req.uid = decoded.uid;
-    req.authTime = Number.isSafeInteger(decoded.auth_time) ? decoded.auth_time : undefined;
+    req.uid = verified.uid;
+    req.authTime = verified.authTime ?? undefined;
     next();
   })();
 }
@@ -81,12 +115,11 @@ function attachActiveUser(
   next: NextFunction,
   allowUnregistered: boolean,
 ): void {
+  const provider = userIdentityProvider(res);
+  if (provider === null) return;
   void (async () => {
-    const [userSnap, userRecord] = await Promise.all([
-      db.collection("users").doc(req.uid!).get(),
-      platformStateStore.users.records.get(req.uid!),
-    ]);
-    if (!userSnap.exists) {
+    const userData = await provider.loadUser(req.uid!);
+    if (userData === null) {
       if (allowUnregistered) {
         req.user = undefined;
         next();
@@ -95,7 +128,6 @@ function attachActiveUser(
       res.status(403).json({ error: "Account is not active" });
       return;
     }
-    const userData = userDataWithUserState(userSnap.data()!, userRecord);
     if (!accountAllowsInteractiveAccess(userData)) {
       res.status(403).json({ error: "Account is not active" });
       return;
@@ -103,7 +135,7 @@ function attachActiveUser(
     req.user = userData;
     next();
   })().catch((err) => {
-    logger.warn(`Auth lookup failed: ${(err as Error).message}`);
+    logger.warn(`Auth lookup failed: ${errorMessage(err)}`);
     res.status(503).json({ error: "Authentication lookup unavailable" });
   });
 }

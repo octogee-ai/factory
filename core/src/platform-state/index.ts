@@ -45,7 +45,6 @@ export { PLATFORM_STATE_MIGRATIONS, type PlatformStateMigration } from "./postgr
 export type { PlatformStateLogger, PostgresRetryPolicy } from "./postgres/session.js";
 export { createPostgresPlatformStateStore, type PostgresPlatformStateStoreOptions } from "./postgres/store.js";
 export type { PostgresWatchTiming } from "./postgres/watch.js";
-export { lazyPlatformStateStore } from "./lazy-store.js";
 export {
   platformStateStoreForDeploymentTarget,
   platformStateStoreFromEnvironment,

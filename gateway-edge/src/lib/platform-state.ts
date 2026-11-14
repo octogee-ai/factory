@@ -1,9 +1,10 @@
 import { firestoreSizingKeyReader } from "@octogee/core/user-activation-lease";
-import { lazyPlatformStateStore, platformStateStoreFromEnvironment } from "@octogee/core/platform-state";
+import { lazyInstance } from "@octogee/core/lazy-instance";
+import { platformStateStoreFromEnvironment } from "@octogee/core/platform-state";
 import { logger } from "../middleware/logging.js";
 import { db } from "./db.js";
 
-export const platformStateStore = lazyPlatformStateStore(() => platformStateStoreFromEnvironment({
+export const platformStateStore = lazyInstance(() => platformStateStoreFromEnvironment({
   applicationName: "octogee-api",
   logger: {
     warn: (message, detail) => logger.warn(message, detail),

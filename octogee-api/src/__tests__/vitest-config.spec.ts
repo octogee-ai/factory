@@ -4,7 +4,6 @@ import type { AddressInfo } from "node:net";
 import request from "supertest";
 import { describe, expect, it } from "vitest";
 import unitConfig from "../../vitest.config.js";
-import emulatorConfig from "../../vitest.emulator.config.js";
 
 interface VitestConfig {
   test?: {
@@ -12,7 +11,6 @@ interface VitestConfig {
     fileParallelism?: boolean;
     testTimeout?: number;
     exclude?: string[];
-    include?: string[];
   };
 }
 
@@ -30,24 +28,6 @@ describe("octogee-api vitest configs", () => {
     expect(cfg.test?.fileParallelism).toBe(false);
     expect(cfg.test?.testTimeout).toBe(15_000);
     expect(cfg.test?.exclude).toContain("../gateway-edge/**");
-  });
-
-  it("runs emulator specs serially with the emulator glob", () => {
-    const cfg = emulatorConfig as VitestConfig;
-
-    expect(cfg.test?.include).toEqual(["src/__tests__/**/*.emulator.spec.ts"]);
-    expect(cfg.test?.fileParallelism).toBe(false);
-    expect(cfg.test?.testTimeout).toBe(15_000);
-  });
-
-  it("loads the deployment target fixture, the loopback listen shim, the runtime env and the platform-store reset for emulator specs", () => {
-    expect((emulatorConfig as VitestConfig).test?.setupFiles).toEqual([
-      "./src/test-setup/deployment-targets.ts",
-      "./src/test-setup/octogee-entitlements.ts",
-      "./src/test-setup/loopback-listen.ts",
-      "./src/test-setup/runtime-env.ts",
-      "./src/test-setup/platform-state-reset.ts",
-    ]);
   });
 });
 

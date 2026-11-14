@@ -3,6 +3,7 @@ import {
   isGatewayVmHomeCheckpoint,
   type GatewayVmHomeCheckpoint,
 } from "@octogee/shared/types/glm";
+import { storage } from "../../../gateway-edge/src/lib/db.js";
 
 export class VmHomeCheckpointError extends Error {
   constructor(
@@ -82,8 +83,7 @@ function parseCurrent(raw: string, currentPath: string): GatewayVmHomeCheckpoint
 }
 
 async function bucket() {
-  const { getStorage } = await import("firebase-admin/storage");
-  return getStorage().bucket();
+  return storage.bucket();
 }
 
 type VmHomeBucket = Awaited<ReturnType<typeof bucket>>;

@@ -47,7 +47,8 @@ env:
   # returned by the credential mint (mmUrl) + the OpenClaw control
   # ticket endpoints as the WS base; the browser pins WS to the home pod
   # via /g/<gw>/. MM_INTERNAL_URL is the in-cluster Mattermost the REST
-  # proxy (/api/v4/*) forwards to.
+  # proxy (/api/v4/*) forwards to, and the one the API asks to verify a
+  # user's Mattermost token. The API refuses to start without it.
   API_PUBLIC_URL: "https://api.example.com"
   MM_INTERNAL_URL: "http://mattermost.octogee.svc.cluster.local:8065"
   # Envelope-encryption key for per-user connector tokens (users/{uid}/secrets/*).
