@@ -544,7 +544,12 @@ at the same time:
 The job reads the identity markers only while the gateway's container is
 running. It fails at once if they can't be read three times in a row while the
 container runs. If the identities never become ready, the job prints the
-gateway's last `Workspace identity initialization failed` log line.
+gateway's last `Workspace identity initialization failed` log line. When any
+step after the gateway is created fails, the job adds the gateway's pod and
+container states, its events, the network policies that select its pod, and the
+last 40 lines of its gateway container's log, and of the previous container's
+log when the container restarted. Tokens, keys, passwords and URL credentials
+in that output are redacted.
 
 Both jobs run in the `agent-round-trip` environment, which only `main` can use;
 the installer stores the environment's `OPENROUTER_API_KEY` secret in the

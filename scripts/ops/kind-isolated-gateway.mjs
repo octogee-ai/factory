@@ -29,6 +29,15 @@ const IDENTITY_READY = "/home/node/.openclaw/workspace-identity-ready";
 const HOME_MARKER = "/home/node/kind-isolated-gateway-marker";
 const BOOT_TIMEOUT_MS = 900_000;
 const MARKER_READ_FAILURE_LIMIT = 3;
+const LOG_TAIL_LINES = 40;
+const EVENT_LIMIT = 20;
+const SECRET_PATTERNS = [
+  [/\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+/gi, "$1 [redacted]"],
+  [/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "[redacted]"],
+  [/\b(?:sk|ghp|gho|ghs|ghu|github_pat)[-_][A-Za-z0-9_-]{16,}/g, "[redacted]"],
+  [/(\/\/)[^\s/:@]+:[^\s/@]+@/g, "$1[redacted]@"],
+  [/\b([\w-]*(?:token|secret|password|passwd|api[_-]?key)[\w-]*)(["']?\s*[:=]\s*["']?)[^\s"',&}]+/gi, "$1$2[redacted]"],
+];
 
 const GATEWAY_LEDGER_SQL = `SELECT event::text FROM platform.model_broker_usage_events
 WHERE event->>'gatewayId' = :'gateway' AND created_at >= :'since'::bigint ORDER BY created_at;
@@ -97,13 +106,98 @@ export async function waitForWorkspaceIdentities(deps, gatewayId, bootBeforePark
   deps.log(`${gatewayId} marked its workspace identities ready for this boot`);
 }
 
+export function redactSecrets(text) {
+  return SECRET_PATTERNS.reduce((redacted, [pattern, replacement]) => redacted.replace(pattern, replacement), text);
+}
+
+function containerLine(status) {
+  const { running, waiting, terminated } = status.state ?? {};
+  const now = running ? `running since ${running.startedAt}`
+    : waiting ? `waiting: ${waiting.reason}${waiting.message ? ` (${waiting.message})` : ""}`
+    : terminated ? `exited ${terminated.exitCode} (${terminated.reason})` : "in no state";
+  const last = status.lastState?.terminated;
+  const lastExit = last ? `, last exited ${last.exitCode} (${last.reason}) at ${last.finishedAt}` : "";
+  return `${status.name}: ${status.ready ? "ready" : "not ready"}, ${status.restartCount} restarts, ${now}${lastExit}`;
+}
+
+function podLines(pods) {
+  if (pods.length === 0) return ["none"];
+  return pods.flatMap(pod => [
+    `pod ${pod.metadata.name}: ${pod.status?.phase ?? "no phase"}`,
+    ...[...(pod.status?.initContainerStatuses ?? []), ...(pod.status?.containerStatuses ?? [])]
+      .map(status => `  ${containerLine(status)}`),
+  ]);
+}
+
+function eventLines(events) {
+  if (events.length === 0) return ["none"];
+  return events
+    .map(event => ({ at: event.lastTimestamp ?? event.eventTime ?? event.firstTimestamp ?? "", event }))
+    .sort((a, b) => a.at.localeCompare(b.at))
+    .slice(-EVENT_LIMIT)
+    .map(({ at, event }) => `${at} ${event.type} ${event.reason} ${event.involvedObject.kind.toLowerCase()}/`
+      + `${event.involvedObject.name}${event.count > 1 ? ` (${event.count} times)` : ""}: ${event.message}`);
+}
+
+function selects(selector, labels) {
+  return Object.entries(selector?.matchLabels ?? {}).every(([key, value]) => labels[key] === value)
+    && (selector?.matchExpressions ?? []).every(({ key, operator, values = [] }) => {
+      if (operator === "In") return values.includes(labels[key]);
+      if (operator === "NotIn") return !values.includes(labels[key]);
+      if (operator === "Exists") return Object.hasOwn(labels, key);
+      return !Object.hasOwn(labels, key);
+    });
+}
+
+function policyLines(policies, pods) {
+  const labels = pods[0]?.metadata?.labels;
+  if (!labels) return ["no pod to match them against"];
+  const selecting = policies.filter(policy => selects(policy.spec?.podSelector, labels));
+  if (selecting.length === 0) return ["none"];
+  return selecting.map(policy => {
+    const types = policy.spec.policyTypes ?? (policy.spec.egress ? ["Ingress", "Egress"] : ["Ingress"]);
+    return `${policy.metadata.name} (${types.join(", ")})`;
+  });
+}
+
+function tail(log) {
+  const lines = log.trimEnd().split("\n");
+  return lines.slice(-LOG_TAIL_LINES);
+}
+
+function section(title, read) {
+  try {
+    return [`${title}:`, ...read().map(line => `  ${line}`)];
+  } catch (error) {
+    return [`${title} could not be read: ${error.message}`];
+  }
+}
+
+export function gatewayDiagnostics(deps, gatewayId) {
+  let pods = [];
+  const lines = [
+    `Diagnostics for ${gatewayId}, with secrets redacted:`,
+    ...section("Its pods", () => podLines(pods = deps.gatewayPods(gatewayId))),
+    ...section("Its events, oldest first", () => eventLines(deps.gatewayEvents(gatewayId))),
+    ...section("Network policies that select its pod", () => policyLines(deps.networkPolicies(), pods)),
+    ...section(`The last ${LOG_TAIL_LINES} lines of its gateway container's log`, () => tail(deps.gatewayLog(gatewayId))),
+  ];
+  const restarted = pods.some(pod => (pod.status?.containerStatuses ?? [])
+    .some(status => status.name === "gateway" && status.restartCount > 0));
+  if (restarted) {
+    lines.push(...section(`The last ${LOG_TAIL_LINES} lines of its previous gateway container's log`,
+      () => tail(deps.previousGatewayLog(gatewayId))));
+  }
+  return redactSecrets(lines.join("\n"));
+}
+
 function requireBoundHome(deps, gatewayId) {
   const phase = deps.homeClaimPhase(gatewayId);
   if (phase !== "Bound") throw new Error(`${gatewayId}'s home claim is ${phase ?? "missing"}, not Bound`);
 }
 
 export async function run(deps, options) {
-  const { log, clock } = deps;
+  const { log } = deps;
   pinModel(deps, options);
   await placeOnSharedGateway(deps, options);
 
@@ -115,7 +209,15 @@ export async function run(deps, options) {
     throw new Error(`user migrate --to-isolated=${POD_SIZING_PROFILE} answered without a gateway id`);
   }
   log(`Gave ${options.user} isolated gateway ${gatewayId}`);
+  try {
+    return await serveParkResumeAndRetire(deps, options, gatewayId);
+  } catch (error) {
+    throw new Error(`${error.message}\n${gatewayDiagnostics(deps, gatewayId)}`);
+  }
+}
 
+async function serveParkResumeAndRetire(deps, options, gatewayId) {
+  const { log, clock } = deps;
   await waitForWorkspaceIdentities(deps, gatewayId);
   await waitForUserMount(deps, options, gatewayId);
   requireBoundHome(deps, gatewayId);
@@ -174,6 +276,13 @@ export function isolatedDependencies(base, options) {
       gatewayExec(gatewayId, 'cat > "$1"', [path], content);
     },
     gatewayLog: gatewayId => command("kubectl", [...kubectl, "logs", deployment(gatewayId), "-c", "gateway", "--tail=5000"]),
+    previousGatewayLog: gatewayId => command("kubectl",
+      [...kubectl, "logs", deployment(gatewayId), "-c", "gateway", "--previous", `--tail=${LOG_TAIL_LINES}`]),
+    gatewayPods: gatewayId => JSON.parse(command("kubectl",
+      [...kubectl, "get", "pods", "-l", `gateway-instance=${gatewayId}`, "-o", "json"])).items,
+    gatewayEvents: gatewayId => JSON.parse(command("kubectl", [...kubectl, "get", "events", "-o", "json"])).items
+      .filter(event => event.involvedObject?.name?.startsWith(`octogee-gateway-${gatewayId}`)),
+    networkPolicies: () => JSON.parse(command("kubectl", [...kubectl, "get", "networkpolicies", "-o", "json"])).items,
     homeClaimPhase: gatewayId => command("kubectl",
       [...kubectl, "get", "pvc", `octogee-gateway-${gatewayId}-data`, "--ignore-not-found", "-o", "jsonpath={.status.phase}"])
       .trim() || null,

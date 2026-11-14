@@ -4,6 +4,7 @@ import {
   POD_PROFILE,
   identityReady,
   lastIdentityFailure,
+  redactSecrets,
   run,
 } from "../ops/kind-isolated-gateway.mjs";
 
@@ -22,6 +23,8 @@ interface Scenario {
   homeSurvives?: boolean;
   gatewayStartsAfterMs?: number;
   markerReadError?: string;
+  previousLog?: string;
+  kubernetes?: { pods?: unknown[]; events?: unknown[]; networkPolicies?: unknown[] };
 }
 
 const RESUMED_PROCESS_STARTS_MS = 30_000;
@@ -146,6 +149,13 @@ function cluster(scenario: Scenario = {}) {
     },
     writeGatewayFile: (_gatewayId: string, path: string, content: string) => { home.set(path, content); },
     gatewayLog: () => scenario.log ?? "",
+    previousGatewayLog: () => {
+      if (scenario.previousLog === undefined) throw new Error("previous terminated container \"gateway\" not found");
+      return scenario.previousLog;
+    },
+    gatewayPods: () => scenario.kubernetes?.pods ?? [],
+    gatewayEvents: () => scenario.kubernetes?.events ?? [],
+    networkPolicies: () => scenario.kubernetes?.networkPolicies ?? [],
     homeClaimPhase: () => claim,
     gatewayPodCount: () => pods,
     gatewayRunning: () => { settle(); return running(); },
@@ -189,6 +199,86 @@ describe("kind isolated gateway smoke", () => {
       `The gateway log has no "${IDENTITY_FAILURE}" line. `
         + `${ISOLATED} is blocked: the isolated gateway image is linux/amd64 only, and this cluster has no amd64 node`,
     );
+  });
+
+  it("adds the pod's status, its events, the network policies that select it and the gateway log's redacted tail to a failure", async () => {
+    const pod = {
+      metadata: { name: `octogee-gateway-${ISOLATED}-b7db69b87-lbr56`, labels: { app: "octogee-gateway", "gateway-instance": ISOLATED } },
+      status: {
+        phase: "Running",
+        containerStatuses: [
+          {
+            name: "gateway", ready: false, restartCount: 1,
+            state: { running: { startedAt: "2026-11-14T03:51:58Z" } },
+            lastState: { terminated: { exitCode: 137, reason: "Error", finishedAt: "2026-11-14T03:51:56Z" } },
+          },
+          { name: "gateway-edge", ready: true, restartCount: 0, state: { running: { startedAt: "2026-11-14T03:41:12Z" } } },
+        ],
+      },
+    };
+    const events = [
+      {
+        type: "Normal", reason: "Killing", lastTimestamp: "2026-11-14T03:51:37Z",
+        involvedObject: { kind: "Pod", name: pod.metadata.name }, message: "Container gateway failed startup probe, will be restarted",
+      },
+      {
+        type: "Warning", reason: "Unhealthy", lastTimestamp: "2026-11-14T03:46:57Z", count: 30,
+        involvedObject: { kind: "Pod", name: pod.metadata.name }, message: "Startup probe failed: connect: connection refused",
+      },
+    ];
+    const networkPolicies = [
+      {
+        metadata: { name: `octogee-gateway-apiserver-egress-${ISOLATED}` },
+        spec: { podSelector: { matchLabels: { app: "octogee-gateway", "gateway-instance": ISOLATED } }, policyTypes: ["Egress"] },
+      },
+      {
+        metadata: { name: "isolated-gateways" },
+        spec: { podSelector: { matchExpressions: [{ key: "gateway-instance", operator: "In", values: [ISOLATED] }] }, ingress: [] },
+      },
+      {
+        metadata: { name: "shared-a-ingress" },
+        spec: { podSelector: { matchLabels: { app: "octogee-gateway", "gateway-instance": "shared-a" } }, policyTypes: ["Ingress"] },
+      },
+    ];
+    const log = [
+      "[entrypoint] Pre-boot: reading user identity",
+      "[builder-identity] broker read failed: fetch failed",
+      "[entrypoint] Pre-boot: User identity unavailable; retrying in 5s...",
+      "[mm] connecting with authorization: Bearer mm-session-1f2e3d",
+    ].join("\n");
+    const previousLog = "[provisioner] issued token=gitea-token-9a8b7c for lin";
+    const { deps } = cluster({ identityReadyAfterBoot: false, log, previousLog, kubernetes: { pods: [pod], events, networkPolicies } });
+
+    const failure = await run(deps, options).then(() => null, (error: Error) => error.message);
+
+    expect(failure).toContain(`Timed out after 900s waiting for ${ISOLATED} to mark its workspace identities ready for this boot`);
+    expect(failure).toContain(`pod ${pod.metadata.name}: Running`);
+    expect(failure).toContain("gateway: not ready, 1 restarts, running since 2026-11-14T03:51:58Z, last exited 137 (Error) at 2026-11-14T03:51:56Z");
+    expect(failure).toContain("gateway-edge: ready, 0 restarts, running since 2026-11-14T03:41:12Z");
+    expect(failure.indexOf("Unhealthy")).toBeLessThan(failure.indexOf("Killing"));
+    expect(failure).toContain(`2026-11-14T03:46:57Z Warning Unhealthy pod/${pod.metadata.name} (30 times): Startup probe failed: connect: connection refused`);
+    expect(failure).toContain(`octogee-gateway-apiserver-egress-${ISOLATED} (Egress)`);
+    expect(failure).toContain("isolated-gateways (Ingress)");
+    expect(failure).not.toContain("shared-a-ingress");
+    expect(failure).toContain("[builder-identity] broker read failed: fetch failed");
+    expect(failure).toContain("previous gateway container");
+    expect(failure).not.toContain("mm-session-1f2e3d");
+    expect(failure).not.toContain("gitea-token-9a8b7c");
+  });
+
+  it("still fails with the original error when the diagnostics cannot be read", async () => {
+    const { deps } = cluster({ identityReadyAfterBoot: false });
+    const broken = {
+      ...deps,
+      gatewayPods: () => { throw new Error("kubectl get pods exited with 1: connection refused"); },
+      networkPolicies: () => { throw new Error("kubectl get networkpolicies exited with 1: forbidden"); },
+    };
+
+    const failure = await run(broken, options).then(() => null, (error: Error) => error.message);
+
+    expect(failure).toContain(`Timed out after 900s waiting for ${ISOLATED} to mark its workspace identities ready for this boot`);
+    expect(failure).toContain("could not be read: kubectl get pods exited with 1: connection refused");
+    expect(failure).toContain("could not be read: kubectl get networkpolicies exited with 1: forbidden");
   });
 
   it("fails when the home does not survive park and resume", async () => {
@@ -245,5 +335,18 @@ describe("lastIdentityFailure", () => {
   it("takes the last failure line, or none", () => {
     expect(lastIdentityFailure(`a\n${IDENTITY_FAILURE}: one\nb\n${IDENTITY_FAILURE}: two\nc`)).toBe(`${IDENTITY_FAILURE}: two`);
     expect(lastIdentityFailure("a\nb")).toBeNull();
+  });
+});
+
+describe("redactSecrets", () => {
+  it("hides bearer and basic credentials, tokens, keys, passwords and URL credentials, and leaves the rest", () => {
+    expect(redactSecrets("authorization: Bearer abc.def-ghi")).toBe("authorization: Bearer [redacted]");
+    expect(redactSecrets("Authorization: Basic dXNlcjpwYXNz")).toBe("Authorization: Basic [redacted]");
+    expect(redactSecrets("ok eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl ok")).toBe("ok [redacted] ok");
+    expect(redactSecrets("OPENROUTER_API_KEY=sk-or-v1-0123456789abcdef0123")).toBe("OPENROUTER_API_KEY=[redacted]");
+    expect(redactSecrets("key sk-or-v1-0123456789abcdef0123 used")).toBe("key [redacted] used");
+    expect(redactSecrets('{"password":"chat-pass","user":"lin"}')).toBe('{"password":"[redacted]","user":"lin"}');
+    expect(redactSecrets("clone http://ws-lin:git-pass@gitea:3000/x.git")).toBe("clone http://[redacted]@gitea:3000/x.git");
+    expect(redactSecrets("[builder-identity] broker read failed: fetch failed")).toBe("[builder-identity] broker read failed: fetch failed");
   });
 });
