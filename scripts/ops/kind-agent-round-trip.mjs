@@ -68,7 +68,7 @@ export function agentReply(postList, { botUserId, after }) {
     .sort((a, b) => a.create_at - b.create_at)[0] ?? null;
 }
 
-export function ledgerEvidence(rows, expected) {
+export function ledgerEvidence(rows, expected, caller = "the user") {
   const calls = rows.filter(event => Number(event.upstreamStatus) === 200);
   const matching = expected
     ? calls.filter(event => event.provider === expected.provider && event.model === expected.model)
@@ -76,7 +76,7 @@ export function ledgerEvidence(rows, expected) {
   if (matching.length === 0) {
     const seen = rows.map(event => `${event.provider}/${event.model} HTTP ${event.upstreamStatus}`).join(", ") || "none";
     const wanted = expected ? `${expected.provider}/${expected.model}` : "any model";
-    throw new Error(`The broker's usage ledger has no successful call to ${wanted} for the user (recorded: ${seen})`);
+    throw new Error(`The broker's usage ledger has no successful call to ${wanted} for ${caller} (recorded: ${seen})`);
   }
   return {
     calls: matching.length,
@@ -106,13 +106,23 @@ const LEDGER_SQL = `SELECT event::text FROM platform.model_broker_usage_events
 WHERE owner_key = :'owner' AND created_at >= :'since'::bigint ORDER BY created_at;
 `;
 
-export async function run(deps, options) {
-  const { log, clock } = deps;
-  if (options.model) {
-    deps.sql(PIN_MODEL_SQL, { value: JSON.stringify(pinnedModels(options.model)), now: String(clock.now()) });
-    log(`Pinned the agent model to ${options.model}`);
-  }
+export function pinModel(deps, options) {
+  if (!options.model) return;
+  deps.sql(PIN_MODEL_SQL, { value: JSON.stringify(pinnedModels(options.model)), now: String(deps.clock.now()) });
+  deps.log(`Pinned the agent model to ${options.model}`);
+}
 
+export async function waitForUserMount(deps, options, gatewayId, timeoutMs = 600_000) {
+  const user = await waitFor(() => {
+    const current = deps.fleet(["user", "inspect", options.user]).user;
+    return userMounted(current, gatewayId) ? current : null;
+  }, { timeoutMs, intervalMs: 10_000, label: `${options.user} to be provisioned and mounted on ${gatewayId}` }, deps.clock);
+  deps.log(`${options.user} is provisioned and mounted on ${gatewayId}`);
+  return user;
+}
+
+export async function placeOnSharedGateway(deps, options) {
+  const { log, clock } = deps;
   if (!(deps.fleet(["gateway", "ls"]).gateways ?? []).some(gateway => gateway.gatewayId === options.gateway)) {
     deps.fleet(["gateway", "add", `--id=${options.gateway}`, "--apply"]);
     log(`Added shared gateway ${options.gateway}`);
@@ -132,12 +142,11 @@ export async function run(deps, options) {
     deps.fleet(["user", "assign", options.user, `--to=${options.gateway}`, "--apply"]);
     log(`Assigned ${options.user} to ${options.gateway}`);
   }
-  user = await waitFor(() => {
-    const current = deps.fleet(["user", "inspect", options.user]).user;
-    return userMounted(current, options.gateway) ? current : null;
-  }, { timeoutMs: 600_000, intervalMs: 10_000, label: `${options.user} to be provisioned and mounted on ${options.gateway}` }, clock);
-  log(`${options.user} is provisioned and mounted on ${options.gateway}`);
+  return waitForUserMount(deps, options, options.gateway);
+}
 
+export async function coachRoundTrip(deps, options, ledger) {
+  const { log, clock } = deps;
   const issued = deps.fleet(["user", "issue-passwords", options.user, "--apply"]).response;
   const chat = await deps.signIn(issued.chat.username, issued.chat.password);
   const bot = await chat.get(`/api/v4/users/username/${options.user}-coach`);
@@ -161,10 +170,10 @@ export async function run(deps, options) {
   const expected = options.model ? upstreamModel(options.model) : null;
   const ledgerDeadline = clock.now() + 60_000;
   const evidence = await waitFor(() => {
-    const rows = deps.sql(LEDGER_SQL, { owner: user.id, since: String(sent.create_at) })
+    const rows = deps.sql(ledger.sql, { ...ledger.variables, since: String(sent.create_at) })
       .split("\n").filter(Boolean).map(line => JSON.parse(line));
     try {
-      return ledgerEvidence(rows, expected);
+      return ledgerEvidence(rows, expected, ledger.caller);
     } catch (error) {
       if (clock.now() < ledgerDeadline) return null;
       throw new Error(`${error.message}. ${bot.username} replied: ${JSON.stringify(reply.message.trim().slice(0, 200))}`);
@@ -172,6 +181,12 @@ export async function run(deps, options) {
   }, { timeoutMs: 60_000, intervalMs: 5_000, label: "the broker's usage ledger" }, clock);
   log(`Ledger: ${evidence.calls} call(s) to ${evidence.provider}/${evidence.model}, ${evidence.totalTokens} tokens, $${evidence.costUsd.toFixed(6)}`);
   return { reply, evidence };
+}
+
+export async function run(deps, options) {
+  pinModel(deps, options);
+  const user = await placeOnSharedGateway(deps, options);
+  return coachRoundTrip(deps, options, { sql: LEDGER_SQL, variables: { owner: user.id }, caller: "the user" });
 }
 
 function portForward(kubectl, service, remotePort) {
@@ -194,7 +209,7 @@ function portForward(kubectl, service, remotePort) {
   });
 }
 
-function command(file, args, { input, env } = {}) {
+export function command(file, args, { input, env } = {}) {
   const result = spawnSync(file, args, { encoding: "utf8", input, env, maxBuffer: 16 * 1024 * 1024 });
   if (result.error) throw result.error;
   if (result.status !== 0) {
@@ -231,9 +246,12 @@ async function mattermostSession(origin, username, password) {
   return { get: path => call("GET", path), post: (path, body) => call("POST", path, body) };
 }
 
+export function kubectlArgs(state) {
+  return [`--kubeconfig=${join(state, "kubeconfig")}`, `--context=kind-${basename(state)}`, "-n", NAMESPACE];
+}
+
 export async function kindDependencies(options) {
-  const name = basename(options.state);
-  const kubectl = [`--kubeconfig=${join(options.state, "kubeconfig")}`, `--context=kind-${name}`, "-n", NAMESPACE];
+  const kubectl = kubectlArgs(options.state);
   const forwards = [];
   const scratch = mkdtempSync(join(tmpdir(), "kind-agent-round-trip-"));
   const close = () => {
@@ -250,6 +268,7 @@ export async function kindDependencies(options) {
     const fleetEnv = { ...process.env, OCTOGEE_FLEET_CONFIG: fleetConfig };
     return {
       close,
+      scratch,
       log: line => console.log(`[agent-round-trip] ${line}`),
       clock: { now: () => Date.now(), sleep: ms => new Promise(done => setTimeout(done, ms)) },
       fleet: args => fleetJson(args, command(options.fleet, ["--env=kind", ...args, "--format=json"], { env: fleetEnv })),
