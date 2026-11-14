@@ -110,6 +110,20 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     expect(restoreIdx).toBeLessThan(openclawStartIdx);
   });
 
+  it("recovers an earlier gateway container's locks once OpenClaw's config path is set and before any step can take them", () => {
+    const step = `GATEWAY_CLASS="$GATEWAY_CLASS_EFFECTIVE" "$TSX" /octogee/scripts/entrypoints/recover-restarted-gateway-container-locks.ts\n`;
+    const recoverIdx = entrypoint.indexOf(step);
+    expect(recoverIdx).toBeGreaterThan(-1);
+    const configPathIdx = entrypoint.indexOf(`export OPENCLAW_CONFIG_PATH="\${OPENCLAW_CONFIG_PATH:-$OPENCLAW_DIR/openclaw.json}"\nfi\n`);
+    expect(configPathIdx).toBeGreaterThan(-1);
+    expect(recoverIdx).toBeGreaterThan(configPathIdx);
+    for (const later of ["system-config-restore.ts", "isolated-runtime-state-restore.ts", "agent-anchor-restore.ts", "pre-boot-config.ts",
+      "surge-openclaw-supervisor.ts", "openclaw gateway run"]) {
+      expect(entrypoint.indexOf(later)).toBeGreaterThan(recoverIdx);
+    }
+    expect(entrypoint.lastIndexOf("\nif [", recoverIdx)).toBeLessThan(entrypoint.lastIndexOf("\nfi\n", recoverIdx));
+  });
+
   it("hydrates the configured user credential after restore and before OpenClaw", () => {
     const restoreIdx = entrypoint.indexOf("system-config-restore.ts");
     const hydrateIdx = entrypoint.indexOf("configured-user-bootstrap.ts");
