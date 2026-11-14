@@ -28,6 +28,7 @@ mattermost:
     host: postgres
     name: mattermost
   siteUrl: http://mattermost.octogee-local.svc.cluster.local:8065
+  allowedCorsOrigins: http://localhost:8065
   pvc:
     size: 2Gi
     storageClass: standard

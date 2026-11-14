@@ -298,6 +298,10 @@ The user's workspace clones over the same port-forward, with the username
 git clone http://localhost:3000/lin/workspace.git
 ```
 
+If the clone fails with `Authentication failed` after you reinstall, git
+offered a password it saved for `localhost:3000` from an earlier cluster. Git
+forgets that password when it fails, so run the clone again.
+
 Both services keep their in-cluster addresses as their configured URLs, for
 example `http://octogee-gitea-http.octogee-local.svc.cluster.local:3000`. Your
 machine cannot resolve those names. Pages you open through a port-forward use
