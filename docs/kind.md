@@ -466,8 +466,9 @@ at the same time:
 2. It requires the gateway to mark its workspace identities ready for its
    boot (`workspace-identity-ready`). Then it runs a Coach round trip whose
    broker call the ledger records from that gateway.
-3. It writes a file to the gateway's home, parks and resumes the gateway, and
-   checks the file.
+3. It writes a file to the gateway's home, then parks and resumes the gateway.
+   It requires the resumed boot, not the one before park, to mark its
+   identities ready, and then checks the file.
 4. It returns the user to the shared gateway, retires the isolated one, and
    checks its home claim is gone.
 

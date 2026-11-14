@@ -33,8 +33,8 @@ const GATEWAY_LEDGER_SQL = `SELECT event::text FROM platform.model_broker_usage_
 WHERE event->>'gatewayId' = :'gateway' AND created_at >= :'since'::bigint ORDER BY created_at;
 `;
 
-export function identityReady({ boot, ready }) {
-  return Boolean(boot) && boot === ready;
+export function identityReady({ boot, ready }, bootBeforePark = null) {
+  return Boolean(boot) && boot === ready && boot !== bootBeforePark;
 }
 
 export function lastIdentityFailure(log) {
@@ -60,7 +60,7 @@ function blockerNote(deps, gatewayId) {
   }
 }
 
-export async function waitForWorkspaceIdentities(deps, gatewayId) {
+export async function waitForWorkspaceIdentities(deps, gatewayId, bootBeforePark = null) {
   let readFailure = null;
   try {
     await waitFor(() => {
@@ -70,7 +70,7 @@ export async function waitForWorkspaceIdentities(deps, gatewayId) {
           ready: deps.readGatewayFile(gatewayId, IDENTITY_READY),
         };
         readFailure = null;
-        return identityReady(markers);
+        return identityReady(markers, bootBeforePark);
       } catch (error) {
         readFailure = error.message;
         return false;
@@ -115,6 +115,7 @@ export async function run(deps, options) {
 
   const marker = `${gatewayId}-${clock.now()}`;
   deps.writeGatewayFile(gatewayId, HOME_MARKER, marker);
+  const bootBeforePark = deps.readGatewayFile(gatewayId, IDENTITY_BOOT);
   deps.fleet(["gateway", "park", gatewayId, "--apply"]);
   await waitFor(() => deps.gatewayPodCount(gatewayId) === 0,
     { timeoutMs: 300_000, intervalMs: 5_000, label: `${gatewayId}'s pod to stop after park` }, clock);
@@ -122,7 +123,7 @@ export async function run(deps, options) {
   log(`Parked ${gatewayId}; its pod stopped and its home claim stayed Bound`);
 
   deps.fleet(["gateway", "resume", gatewayId, "--apply"]);
-  await waitForWorkspaceIdentities(deps, gatewayId);
+  await waitForWorkspaceIdentities(deps, gatewayId, bootBeforePark);
   await waitForUserMount(deps, options, gatewayId);
   if (deps.readGatewayFile(gatewayId, HOME_MARKER) !== marker) {
     throw new Error(`${gatewayId} lost its home across park and resume: ${HOME_MARKER} no longer holds what was written before park`);

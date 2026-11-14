@@ -16,10 +16,13 @@ const FAILURE_LINE = `2026-11-13T10:00:02Z [octogee-identity-tools] ${IDENTITY_F
 
 interface Scenario {
   identityReadyAfterBoot?: boolean;
+  identityReadyAfterResume?: boolean;
   log?: string;
   lastError?: string | null;
   homeSurvives?: boolean;
 }
+
+const RESUMED_PROCESS_STARTS_MS = 30_000;
 
 function cluster(scenario: Scenario = {}) {
   let now = 0;
@@ -31,24 +34,31 @@ function cluster(scenario: Scenario = {}) {
   let pods = 0;
   let claim: string | null = null;
   let boots = 0;
+  let resumedProcessStartsAt: number | null = null;
   const home = new Map<string, string>();
   let sent = 0;
 
-  const boot = () => {
+  const boot = (identityReady: boolean) => {
     boots += 1;
     pods = 1;
     claim = "Bound";
     if (scenario.homeSurvives === false) home.clear();
     home.set(BOOT_FILE, `boot-${boots}`);
-    home.set(READY_FILE, scenario.identityReadyAfterBoot === false ? `boot-${boots - 1}` : `boot-${boots}`);
+    if (identityReady) home.set(READY_FILE, `boot-${boots}`);
     mounted = ISOLATED;
     isolatedMounted = ["lin"];
+  };
+  const settle = () => {
+    if (resumedProcessStartsAt === null || now < resumedProcessStartsAt) return;
+    resumedProcessStartsAt = null;
+    boot(scenario.identityReadyAfterResume !== false);
   };
 
   const deps = {
     log: () => {},
     clock: { now: () => now, sleep: async (ms: number) => { now += ms; } },
     fleet: (args: string[]) => {
+      settle();
       events.push(args.slice(0, 3).join(" "));
       const [noun, verb] = args;
       if (noun === "gateway" && verb === "ls") {
@@ -66,7 +76,7 @@ function cluster(scenario: Scenario = {}) {
         return { user: { id: "uid-1", name: "lin", provisioningStatus: "complete", mountedGatewayId: mounted } };
       }
       if (noun === "user" && verb === "migrate" && args[2] === "lin" && args[3] === "--to-isolated=pod-s") {
-        boot();
+        boot(scenario.identityReadyAfterBoot !== false);
         return { dryRun: false, response: { uid: "uid-1", gatewayId: ISOLATED, operationId: "op-1" } };
       }
       if (noun === "user" && verb === "migrate" && args[3] === "--to=shared-a") {
@@ -78,7 +88,11 @@ function cluster(scenario: Scenario = {}) {
         return { dryRun: false, response: { chat: { username: "lin", password: "chat-pass" }, git: { username: "ws-lin", password: "git" } } };
       }
       if (noun === "gateway" && verb === "park") { pods = 0; mounted = "none"; return { dryRun: false, response: {} }; }
-      if (noun === "gateway" && verb === "resume") { boot(); return { dryRun: false, response: {} }; }
+      if (noun === "gateway" && verb === "resume") {
+        pods = 1;
+        resumedProcessStartsAt = now + RESUMED_PROCESS_STARTS_MS;
+        return { dryRun: false, response: {} };
+      }
       if (noun === "gateway" && verb === "retire") {
         if (isolatedMounted.length > 0) {
           throw new Error(`octogee-fleet --env=kind gateway retire ${ISOLATED} --apply exited with 1: gateway ${ISOLATED} still has mounted users: ${isolatedMounted.join(", ")}`);
@@ -115,6 +129,7 @@ function cluster(scenario: Scenario = {}) {
     }),
     setSizingProfile: (name: string, profile: unknown) => { events.push(`sizing set ${name}`); expect(profile).toEqual(POD_PROFILE); },
     readGatewayFile: (gatewayId: string, path: string) => {
+      settle();
       expect(gatewayId).toBe(ISOLATED);
       if (pods === 0) throw new Error(`no running pod for ${gatewayId}`);
       if (path === BOOT_FILE || path === READY_FILE) events.push("identity read");
@@ -172,6 +187,15 @@ describe("kind isolated gateway smoke", () => {
     await expect(run(deps, options)).rejects.toThrow(`${ISOLATED} lost its home across park and resume`);
     expect(events).not.toContain(`gateway retire ${ISOLATED}`);
   });
+
+  it("does not take the previous boot's identity markers, which the home keeps through park, as the resumed boot's", async () => {
+    const { deps, events } = cluster({ identityReadyAfterResume: false });
+
+    await expect(run(deps, options)).rejects.toThrow(
+      `Timed out after 900s waiting for ${ISOLATED} to mark its workspace identities ready for this boot`,
+    );
+    expect(events.filter(event => event === "user migrate lin")).toHaveLength(1);
+  });
 });
 
 describe("identityReady", () => {
@@ -180,6 +204,12 @@ describe("identityReady", () => {
     expect(identityReady({ boot: "boot-2", ready: "boot-1" })).toBe(false);
     expect(identityReady({ boot: "boot-2", ready: null })).toBe(false);
     expect(identityReady({ boot: null, ready: null })).toBe(false);
+  });
+
+  it("needs a boot after the one before park, even when that earlier boot's markers still match", () => {
+    expect(identityReady({ boot: "boot-1", ready: "boot-1" }, "boot-1")).toBe(false);
+    expect(identityReady({ boot: "boot-2", ready: "boot-1" }, "boot-1")).toBe(false);
+    expect(identityReady({ boot: "boot-2", ready: "boot-2" }, "boot-1")).toBe(true);
   });
 });
 
