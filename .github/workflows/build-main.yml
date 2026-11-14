@@ -258,3 +258,12 @@ jobs:
             kubectl --kubeconfig="$kubeconfig" -n octogee-local logs deployment/glm-controller --tail=300 || true
           fi
           df -h /
+
+  stock-openclaw:
+    name: Stock OpenClaw
+    needs: publish
+    permissions:
+      contents: read
+    uses: ./.github/workflows/stock-openclaw.yml
+    with:
+      image-manifest: image-manifest-${{ github.sha }}

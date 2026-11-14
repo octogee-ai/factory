@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -349,6 +349,120 @@ ${KUBECTL}`);
 
       expect(result.status, result.stderr).toBe(0);
       expect(resolveHouseModel(written()[0].value.builderAgentModelRef)?.provider).toBe("openai");
+    });
+  });
+
+  describe("gateway images built from unpinned OpenClaw packages", () => {
+    const STOCK = "d".repeat(40);
+    const BUILT = (name: string) => `sha256:${(name === "octogee-gateway" ? "e" : "f").repeat(64)}`;
+    const LOCAL = ["octogee-gateway", "octogee-gateway-builder"];
+    let scratch: string;
+    let packages: string;
+    let context: string;
+
+    const overlay = (source: string, target: string, path: string[]) => {
+      mkdirSync(target);
+      for (const entry of readdirSync(source)) {
+        if (entry === ".git" || entry === "node_modules" || (path.length === 0 && entry.endsWith(".tgz"))) continue;
+        if (entry === path[0]) overlay(join(source, entry), join(target, entry), path.slice(1));
+        else symlinkSync(join(source, entry), join(target, entry));
+      }
+    };
+
+    beforeEach(() => {
+      scratch = mkdtempSync(join(tmpdir(), "kind-install-openclaw-"));
+      for (const tool of ["bash", "cp", "gzip", "mktemp", "mv", "tar"]) {
+        const found = [`/usr/bin/${tool}`, `/bin/${tool}`].find(path => existsSync(path));
+        if (found && !existsSync(join(host.bin, tool))) symlinkSync(found, join(host.bin, tool));
+      }
+      const tree = join(scratch, "tree");
+      mkdirSync(join(tree, "package/dist"), { recursive: true });
+      mkdirSync(join(tree, "package/vendor"));
+      writeFileSync(join(tree, "package/dist/build-info.json"), JSON.stringify({ commit: STOCK }));
+      writeFileSync(join(tree, "package/vendor/npm.tgz"), "npm");
+      packages = join(scratch, "packages");
+      mkdirSync(packages);
+      spawnSync("tar", ["-czf", join(packages, "openclaw-fork.tgz"), "-C", tree, "package"]);
+      writeFileSync(join(packages, "openclaw-mattermost-fork.tgz"), "mattermost");
+      context = join(scratch, "context");
+      overlay(REPO_ROOT, context, ["infra", "gateway", "openclaw-tarball"]);
+      host.stub("docker", `case " $* " in
+  *" bake "*)
+    for arg in "$@"; do [[ "$arg" == --metadata-file=* ]] && metadata="\${arg#--metadata-file=}"; done
+    printf '{"octogee-gateway":{"containerimage.digest":"${BUILT("octogee-gateway")}"},"octogee-gateway-builder":{"containerimage.digest":"${BUILT("octogee-gateway-builder")}"}}' > "$metadata"
+    exit 0 ;;
+esac
+${DOCKER}`);
+    });
+
+    afterEach(() => {
+      rmSync(scratch, { recursive: true, force: true });
+    });
+
+    const withPackages = (extra: string[] = []) => run(["up", "--pull", `--manifest=${manifest(CHECKOUT, AMD64_IMAGES)}`,
+      `--build=${LOCAL.join(",")}`, `--openclaw-tarballs=${packages}`, `--context-dir=${context}`, ...extra], "x86_64");
+
+    it("copies the other images from Build main and builds the gateway images from the given packages", () => {
+      const result = withPackages();
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(copies().map(call => call.split(" ").at(-1)!.split("@")[0])).toEqual(
+        ["glm-controller", "octogee-api", "gateway-edge"].map(name => `${REGISTRY}/${name}`));
+      const bakes = host.calls().filter(call => call.includes(" bake "));
+      expect(bakes).toHaveLength(1);
+      expect(json("bake.json").group.default.targets).toEqual(LOCAL);
+      expect(readFileSync(join(context, "infra/gateway/openclaw-tarball/openclaw-mattermost-fork.tgz"), "utf8")).toBe("mattermost");
+      expect(readFileSync(join(context, "infra/gateway/openclaw-tarball/npm-fork.tgz"), "utf8")).toBe("npm");
+      expect(result.stdout).toContain(`Building the gateway images from unpinned OpenClaw ${STOCK}`);
+      const values = json("images.yaml");
+      expect(values["glm-controller"].image.digest).toBe(`sha256:${"3".repeat(64)}`);
+      expect(values["glm-controller"].platformRelease).toMatchObject({
+        gatewayImageTag: `ccccccc@${BUILT("octogee-gateway")}`,
+        builderImageTag: `ccccccc@${BUILT("octogee-gateway-builder")}`,
+        openclawSourceSha: STOCK,
+      });
+    });
+
+    it("keeps the unpinned OpenClaw commit on a rerun with --skip-build", () => {
+      expect(withPackages().status).toBe(0);
+      const result = run(["up", "--skip-build"], "x86_64");
+      expect(result.status, result.stderr).toBe(0);
+      expect(json("images.yaml")["glm-controller"].platformRelease.openclawSourceSha).toBe(STOCK);
+    });
+
+    it("labels a pulled gateway image with the pinned OpenClaw commit again", () => {
+      expect(withPackages().status).toBe(0);
+      const result = run(["up", "--pull", `--manifest=${manifest(CHECKOUT, AMD64_IMAGES)}`], "x86_64");
+      expect(result.status, result.stderr).toBe(0);
+      const pinned = JSON.parse(readFileSync(join(REPO_ROOT, "infra/gateway/openclaw-tarball/current.json"), "utf8")).sourceSha;
+      expect(json("images.yaml")["glm-controller"].platformRelease.openclawSourceSha).toBe(pinned);
+    });
+
+    it("refuses packages that name no source commit", () => {
+      writeFileSync(join(packages, "openclaw-fork.tgz"), "");
+      const tree = join(scratch, "tree");
+      writeFileSync(join(tree, "package/dist/build-info.json"), "{}");
+      spawnSync("tar", ["-czf", join(packages, "openclaw-fork.tgz"), "-C", tree, "package"]);
+      const result = withPackages();
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("names no full source commit");
+    });
+
+    it.each([
+      [["--pull", "--build=octogee-gateway,octogee-api,glm-controller,gateway-edge,octogee-gateway-builder"], "--build names every image"],
+      [["--pull", "--build=vm-bridge"], "--build names vm-bridge, which is not among the images to install"],
+      [["--build=octogee-gateway"], "--build needs --pull"],
+      [["--pull", "--openclaw-tarballs=PACKAGES"], "--openclaw-tarballs needs a build of the gateway images"],
+      [["--skip-build", "--openclaw-tarballs=PACKAGES"], "--openclaw-tarballs needs a build of the gateway images"],
+      [["--openclaw-tarballs=PACKAGES", "--openclaw-dir=PACKAGES"], "Choose either --openclaw-dir or --openclaw-tarballs"],
+      [["--openclaw-tarballs=EMPTY"], "--openclaw-tarballs needs openclaw-fork.tgz"],
+    ])("refuses up %j before touching anything", (args, message) => {
+      mkdirSync(join(scratch, "empty"));
+      const resolved = args.map(arg => arg.replace("PACKAGES", packages).replace("EMPTY", join(scratch, "empty")));
+      const result = run(["up", ...resolved], "x86_64");
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(message);
+      expect(host.calls().filter(call => !/^(git|uname) /.test(call))).toEqual([]);
     });
   });
 

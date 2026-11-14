@@ -12,7 +12,9 @@ SHA=""
 MANIFEST=""
 CONTEXT_DIR="$ROOT"
 OPENCLAW_DIR=""
+OPENCLAW_TARBALLS=""
 IMAGES=""
+LOCAL_IMAGES=""
 
 log() { printf '\n== %s\n' "$*"; }
 die() { printf 'kind-install: %s\n' "$*" >&2; exit 1; }
@@ -31,12 +33,25 @@ for arg in "$@"; do
       ;;
     --context-dir=*) CONTEXT_DIR="$(cd "${arg#*=}" && pwd)" ;;
     --openclaw-dir=*) OPENCLAW_DIR="$(cd "${arg#*=}" && pwd)" ;;
+    --openclaw-tarballs=*) OPENCLAW_TARBALLS="$(cd "${arg#*=}" && pwd)" ;;
     --images=*) IMAGES="${arg#*=}" ;;
+    --build=*)
+      LOCAL_IMAGES="${arg#*=}"
+      [[ -n "$LOCAL_IMAGES" ]] || die "--build needs image names"
+      ;;
     *) echo "Unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
 if $PULL && ! $BUILD; then die "Choose either --pull or --skip-build"; fi
 if [[ -n "$MANIFEST" ]] && ! $PULL; then die "--manifest needs --pull"; fi
+if [[ -n "$LOCAL_IMAGES" ]] && ! $PULL; then die "--build needs --pull; without --pull every image is built"; fi
+if [[ -n "$OPENCLAW_TARBALLS" ]]; then
+  [[ -z "$OPENCLAW_DIR" ]] || die "Choose either --openclaw-dir or --openclaw-tarballs"
+  if ! $BUILD || { $PULL && [[ -z "$LOCAL_IMAGES" ]]; }; then die "--openclaw-tarballs needs a build of the gateway images"; fi
+  for package in openclaw-fork.tgz openclaw-mattermost-fork.tgz; do
+    [[ -s "$OPENCLAW_TARBALLS/$package" ]] || die "--openclaw-tarballs needs $package in $OPENCLAW_TARBALLS"
+  done
+fi
 if [[ -n "$SHA" ]]; then
   $PULL || die "--sha needs --pull"
   [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || die "--sha needs a full commit SHA"
@@ -64,10 +79,24 @@ if [[ -z "$IMAGES" ]]; then
   IMAGES="glm-controller,octogee-api,gateway-edge,octogee-gateway"
   if [[ "$PLATFORM" == linux/amd64 ]]; then IMAGES+=",octogee-gateway-builder"; else ISOLATED_SKIPPED=true; fi
 fi
+PULLED_IMAGES="$IMAGES"
+if [[ -n "$LOCAL_IMAGES" ]]; then
+  PULLED_IMAGES=""
+  IFS=, read -r -a selected <<<"$IMAGES"
+  IFS=, read -r -a local_images <<<"$LOCAL_IMAGES"
+  for image in "${local_images[@]}"; do
+    [[ ",$IMAGES," == *",$image,"* ]] || die "--build names $image, which is not among the images to install ($IMAGES)"
+  done
+  for image in "${selected[@]}"; do
+    [[ ",$LOCAL_IMAGES," == *",$image,"* ]] || PULLED_IMAGES+="${PULLED_IMAGES:+,}$image"
+  done
+  [[ -n "$PULLED_IMAGES" ]] || die "--build names every image; run up without --pull instead"
+fi
 
 k() { kubectl --kubeconfig="$KUBECONFIG_FILE" --context="$KUBE_CONTEXT" -n "$NAMESPACE" "$@"; }
 h() { helm --kubeconfig="$KUBECONFIG_FILE" --kube-context="$KUBE_CONTEXT" -n "$NAMESPACE" "$@"; }
 random_hex() { openssl rand -hex "$1"; }
+pin_openclaw_sha() { node -p "require('$ROOT/infra/gateway/openclaw-tarball/current.json').sourceSha"; }
 
 require_tools() {
   local tool
@@ -126,12 +155,24 @@ EOF
 
 stage_openclaw() {
   local tarballs="$CONTEXT_DIR/infra/gateway/openclaw-tarball"
-  if [[ -n "$OPENCLAW_DIR" ]]; then
+  if [[ -n "$OPENCLAW_TARBALLS" ]]; then
+    cp "$OPENCLAW_TARBALLS/openclaw-fork.tgz" "$OPENCLAW_TARBALLS/openclaw-mattermost-fork.tgz" "$tarballs/"
+  elif [[ -n "$OPENCLAW_DIR" ]]; then
     node "$ROOT/infra/gateway/openclaw-tarball/fetch-release.mjs" --from="$OPENCLAW_DIR" --to="$tarballs"
   else
     node "$ROOT/infra/gateway/openclaw-tarball/fetch-release.mjs" --to="$tarballs"
   fi
   bash "$ROOT/infra/gateway/openclaw-tarball/extract-npm.sh" "$tarballs/openclaw-fork.tgz"
+  if [[ -n "$OPENCLAW_TARBALLS" ]]; then
+    tar -xzOf "$tarballs/openclaw-fork.tgz" package/dist/build-info.json | node -e '
+      const { commit } = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+      if (!/^[a-f0-9]{40}$/.test(commit ?? "")) throw new Error("The OpenClaw package names no full source commit in dist/build-info.json");
+      console.log(commit);
+    ' > "$STATE/openclaw-source-sha"
+    printf 'Building the gateway images from unpinned OpenClaw %s\n' "$(cat "$STATE/openclaw-source-sha")"
+  else
+    pin_openclaw_sha > "$STATE/openclaw-source-sha"
+  fi
 }
 
 ensure_builder() {
@@ -142,22 +183,23 @@ ensure_builder() {
 }
 
 build_images() {
-  local plan="$STATE/bake.json" metadata="$STATE/bake-metadata.json"
+  local images="$1" plan="$STATE/bake.json" metadata="$STATE/bake-metadata.json"
   stage_openclaw
   ensure_builder
   node "$ROOT/scripts/ci/cloud-build.mjs" plan --registry="$PUBLISHED" --sha="$SHA" \
-    --platform="$PLATFORM" --root="$CONTEXT_DIR" --push --tag-prefix="$PUSH_PREFIX" --images="$IMAGES" > "$plan"
+    --platform="$PLATFORM" --root="$CONTEXT_DIR" --push --tag-prefix="$PUSH_PREFIX" --images="$images" > "$plan"
   docker buildx bake --builder="$BUILDER" --allow=fs.read="$CONTEXT_DIR" --file="$plan" --metadata-file="$metadata"
-  node "$ROOT/scripts/ci/cloud-build.mjs" digests --platform="$PLATFORM" --metadata="$metadata" --images="$IMAGES" > "$STATE/digests.built.json"
+  node "$ROOT/scripts/ci/cloud-build.mjs" digests --platform="$PLATFORM" --metadata="$metadata" --images="$images" > "$STATE/digests.built.json"
   record_digests "$STATE/digests.built.json"
 }
 
 pull_images() {
-  local options=(--images="$IMAGES")
+  local options=(--images="$PULLED_IMAGES")
   [[ -n "$MANIFEST" ]] && options+=(--manifest="$MANIFEST")
   node "$ROOT/scripts/ci/cloud-build.mjs" copy --registry="$PUBLISHED" --sha="$SHA" --platform="$PLATFORM" \
     --tag-prefix="$IMAGE_PREFIX" ${options[@]+"${options[@]}"} > "$STATE/digests.pulled.json"
   record_digests "$STATE/digests.pulled.json"
+  if [[ ",$PULLED_IMAGES," == *",octogee-gateway,"* ]]; then pin_openclaw_sha > "$STATE/openclaw-source-sha"; fi
 }
 
 record_digests() {
@@ -172,8 +214,9 @@ record_digests() {
 }
 
 image_values() {
-  node --input-type=module - "$STATE/digests.json" "$IMAGE_PREFIX" \
-    "$(node -p "require('$ROOT/infra/gateway/openclaw-tarball/current.json').sourceSha")" > "$STATE/images.yaml" <<'JS'
+  local openclaw
+  if [[ -s "$STATE/openclaw-source-sha" ]]; then openclaw="$(cat "$STATE/openclaw-source-sha")"; else openclaw="$(pin_openclaw_sha)"; fi
+  node --input-type=module - "$STATE/digests.json" "$IMAGE_PREFIX" "$openclaw" > "$STATE/images.yaml" <<'JS'
 import { readFileSync } from "node:fs";
 const [file, prefix, openclaw] = process.argv.slice(2);
 const { sha, images } = JSON.parse(readFileSync(file, "utf8"));
@@ -451,9 +494,13 @@ up() {
   if $PULL; then
     log "Copying the $PLATFORM images published at $SHORT"
     pull_images
+    if [[ -n "$LOCAL_IMAGES" ]]; then
+      log "Building $LOCAL_IMAGES for $PLATFORM at $SHORT"
+      build_images "$LOCAL_IMAGES"
+    fi
   elif $BUILD; then
     log "Building $PLATFORM images at $SHORT"
-    build_images
+    build_images "$IMAGES"
   fi
   [[ -s "$STATE/digests.json" ]] || die "No images yet; run up without --skip-build, or with --pull"
   image_values
@@ -524,5 +571,5 @@ case "$COMMAND" in
   up) up ;;
   down) down ;;
   status) status ;;
-  *) echo "Usage: $0 {up|down|status} [--name=NAME] [--skip-build | --pull [--sha=SHA] [--manifest=FILE]] [--images=A,B] [--context-dir=DIR] [--openclaw-dir=DIR]" >&2; exit 2 ;;
+  *) echo "Usage: $0 {up|down|status} [--name=NAME] [--skip-build | --pull [--sha=SHA] [--manifest=FILE] [--build=A,B]] [--images=A,B] [--context-dir=DIR] [--openclaw-dir=DIR | --openclaw-tarballs=DIR]" >&2; exit 2 ;;
 esac

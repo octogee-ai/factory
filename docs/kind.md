@@ -171,6 +171,8 @@ port 18080.
 | `--images=<a,b>` | Build or copy only these platform images. The default is every image except `vm-bridge`; on an arm64 host it also leaves out `octogee-gateway-builder` and says so. |
 | `--context-dir=<dir>` | Build from another platform tree. |
 | `--openclaw-dir=<dir>` | Take the OpenClaw build from local files instead of downloading it. The files keep their release names. |
+| `--build=<a,b>` | With `--pull`, build these images from the checkout and copy the rest. |
+| `--openclaw-tarballs=<dir>` | Build the gateway images from `openclaw-fork.tgz` and `openclaw-mattermost-fork.tgz` in this folder, without checking them against the pin. The platform labels the build with the commit in its `dist/build-info.json`. Build main's [stock OpenClaw lane](openclaw-compatibility.md#the-stock-openclaw-lane) uses this. |
 
 To use kubectl against the cluster, always name its kubeconfig and context.
 `STATE` is the state directory. `up` ends by printing the line that sets it,

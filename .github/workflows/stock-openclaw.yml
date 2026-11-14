@@ -1,0 +1,253 @@
+name: Stock OpenClaw
+
+on:
+  workflow_call:
+    inputs:
+      image-manifest:
+        description: This run's image manifest artifact; the platform images come from it
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      kind:
+        description: Also install on kind and run the agent round trip and migration (main only; spends one model call)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PACKAGES: stock-openclaw-packages-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  package:
+    name: Stock OpenClaw packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    continue-on-error: true
+    outputs:
+      upstream: ${{ steps.resolve.outputs.upstream }}
+      fork: ${{ steps.resolve.outputs.fork }}
+      base: ${{ steps.resolve.outputs.base }}
+      overlay: ${{ steps.resolve.outputs.overlay }}
+      commits: ${{ steps.resolve.outputs.commits }}
+      version: ${{ steps.pack.outputs.version }}
+      resolve: ${{ steps.resolve.outcome }}
+      install: ${{ steps.install.outcome }}
+      build: ${{ steps.build.outcome }}
+      pack: ${{ steps.pack.outcome }}
+    env:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+    steps:
+      - name: Free runner disk for the OpenClaw build
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - name: Name the working directories
+        run: |
+          {
+            echo "LOGS=$RUNNER_TEMP/stock-openclaw-logs"
+            echo "OPENCLAW=$RUNNER_TEMP/openclaw"
+            echo "OUT=$RUNNER_TEMP/stock-openclaw"
+          } >> "$GITHUB_ENV"
+      - name: Find the upstream commit the pinned overlay is based on
+        id: resolve
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$LOGS"
+          {
+            pin=infra/gateway/openclaw-tarball/current.json
+            overlay="$(jq -r .sourceSha "$pin")"
+            ref="$(jq -r .upstreamRef "$pin")"
+            fork="$(jq -r .releaseRepository "$pin")"
+            upstream=openclaw/openclaw
+            gh api "repos/$upstream/compare/$ref...${fork%%/*}:${fork#*/}:$overlay" \
+              --jq '{base: .merge_base_commit.sha, ahead: .ahead_by}' > "$RUNNER_TEMP/compare.json"
+            base="$(jq -r .base "$RUNNER_TEMP/compare.json")"
+            commits="$(jq -r .ahead "$RUNNER_TEMP/compare.json")"
+            [[ "$base" =~ ^[0-9a-f]{40}$ && "$base" != "$overlay" && "$commits" -gt 0 ]] \
+              || { echo "Comparing $upstream $ref with $fork $overlay gave no distinct base: $(cat "$RUNNER_TEMP/compare.json")"; exit 1; }
+            echo "The overlay $fork@$overlay is $commits commits on $upstream@$base ($ref)"
+            printf 'upstream=%s\nfork=%s\nbase=%s\noverlay=%s\ncommits=%s\n' "$upstream" "$fork" "$base" "$overlay" "$commits" >> "$GITHUB_OUTPUT"
+            git init -q "$OPENCLAW"
+            git -C "$OPENCLAW" fetch -q --depth=1 "https://github.com/$upstream" "$base"
+            git -C "$OPENCLAW" checkout -q FETCH_HEAD
+            test "$(git -C "$OPENCLAW" rev-parse HEAD)" = "$base"
+          } 2>&1 | tee "$LOGS/resolve.log"
+      - name: Install the upstream commit's dependencies
+        id: install
+        if: steps.resolve.outcome == 'success'
+        continue-on-error: true
+        run: |
+          {
+            corepack enable
+            cd "$OPENCLAW"
+            pnpm --version
+            pnpm install --frozen-lockfile
+          } 2>&1 | tee "$LOGS/install.log"
+      - name: Build OpenClaw
+        id: build
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: |
+          { cd "$OPENCLAW" && pnpm build:package; } 2>&1 | tee "$LOGS/build.log"
+      - name: Pack the core and Mattermost packages
+        id: pack
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        env:
+          BASE: ${{ steps.resolve.outputs.base }}
+        run: |
+          {
+            npm ci --prefix tests --no-audit --no-fund
+            ln -sfn "$GITHUB_WORKSPACE/tests" "$GITHUB_WORKSPACE/../tests"
+            mkdir -p "$OUT" "$RUNNER_TEMP/packed"
+            root="$(OPENCLAW_SKIP_BUILD=1 bash infra/gateway/openclaw-tarball/pack-fork-tarball.sh "$OPENCLAW" "$RUNNER_TEMP/packed")"
+            mattermost="$(bash infra/gateway/openclaw-tarball/pack-mattermost-tarball.sh "$OPENCLAW" "$RUNNER_TEMP/packed")"
+            mv "$root" "$OUT/openclaw-fork.tgz"
+            mv "$mattermost" "$OUT/openclaw-mattermost-fork.tgz"
+            commit="$(tar -xzOf "$OUT/openclaw-fork.tgz" package/dist/build-info.json | jq -r .commit)"
+            [[ "$commit" == "$BASE" ]] || { echo "The packed build-info names $commit, not $BASE"; exit 1; }
+            version="$(tar -xzOf "$OUT/openclaw-fork.tgz" package/package.json | jq -r .version)"
+            echo "Packed OpenClaw $version from $BASE"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            ls -l "$OUT"
+          } 2>&1 | tee "$LOGS/pack.log"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.pack.outcome == 'success'
+        with:
+          name: ${{ env.PACKAGES }}
+          path: ${{ runner.temp }}/stock-openclaw
+          if-no-files-found: error
+          retention-days: 3
+      - name: Show the end of the failed step's log
+        if: always()
+        env:
+          STEPS: ${{ toJSON(steps) }}
+        run: node scripts/ci/stock-openclaw-summary.mjs tail "$LOGS" >> "$GITHUB_STEP_SUMMARY"
+
+  kind:
+    name: Stock OpenClaw on kind (amd64)
+    needs: package
+    if: needs.package.outputs.pack == 'success' && (inputs.kind || inputs.image-manifest)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    continue-on-error: true
+    environment: agent-round-trip
+    outputs:
+      install: ${{ steps.install.outcome }}
+      report: ${{ steps.report.outputs.report }}
+    steps:
+      - name: Free runner disk for the gateway image builds
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/share/swift
+          docker image prune --all --force > /dev/null
+          df -h /
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.4'
+          cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: inputs.image-manifest
+        with:
+          name: ${{ inputs.image-manifest }}
+          path: ${{ runner.temp }}/build-manifest
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ env.PACKAGES }}
+          path: ${{ runner.temp }}/stock-openclaw
+      - name: Name the working directories
+        run: |
+          {
+            echo "LOGS=$RUNNER_TEMP/stock-openclaw-logs"
+            echo "STATE=$RUNNER_TEMP/kind-state"
+          } >> "$GITHUB_ENV"
+      - name: Install octogee-fleet
+        run: GOBIN="$RUNNER_TEMP/bin" go install github.com/octogee-ai/octogee-fleet@ee8f09e909d7c45e9a2a9c3b889468ec4b5fa5c8 # main after v0.1.0, with sizing
+      - name: Build the gateway images from stock OpenClaw and install the platform
+        id: install
+        continue-on-error: true
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          MANIFEST: ${{ inputs.image-manifest && format('{0}/build-manifest/image-manifest.json', runner.temp) || '' }}
+        run: |
+          mkdir -p "$LOGS"
+          {
+            if [[ -z "$OPENROUTER_API_KEY" ]]; then
+              echo "::error::The agent-round-trip environment has no OPENROUTER_API_KEY secret"
+              exit 1
+            fi
+            OCTOGEE_KIND_STATE="$STATE" scripts/ops/kind-install.sh up --pull ${MANIFEST:+"--manifest=$MANIFEST"} \
+              --build=octogee-gateway,octogee-gateway-builder --openclaw-tarballs="$RUNNER_TEMP/stock-openclaw"
+          } 2>&1 | tee "$LOGS/install.log"
+      - name: Round trip on a shared gateway, then migrate the user to an isolated gateway
+        id: steps
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: |
+          node scripts/ops/kind-stock-openclaw.mjs --state="$STATE/octogee" --fleet="$RUNNER_TEMP/bin/octogee-fleet" \
+            --model=platform-openrouter/meta/muse-ember --report="$RUNNER_TEMP/stock-openclaw-report.json" 2>&1 | tee "$LOGS/steps.log"
+      - name: Record the steps on kind
+        id: report
+        if: always()
+        run: |
+          if [[ -s "$RUNNER_TEMP/stock-openclaw-report.json" ]]; then
+            printf 'report=%s\n' "$(jq -c . "$RUNNER_TEMP/stock-openclaw-report.json")" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Show the end of the failed step's log
+        if: always()
+        env:
+          STEPS: ${{ toJSON(steps) }}
+        run: node scripts/ci/stock-openclaw-summary.mjs tail "$LOGS" >> "$GITHUB_STEP_SUMMARY"
+      - name: Show cluster status after a failure
+        if: steps.install.outcome == 'failure' || steps.steps.outcome == 'failure'
+        run: |
+          kubeconfig="$STATE/octogee/kubeconfig"
+          if [[ -f "$kubeconfig" ]]; then
+            kubectl --kubeconfig="$kubeconfig" -n octogee-local get pods,pvc,events
+            for deployment in $(kubectl --kubeconfig="$kubeconfig" -n octogee-local get deployments -o name); do
+              if [[ "$deployment" == deployment.apps/octogee-gateway-* ]]; then
+                kubectl --kubeconfig="$kubeconfig" -n octogee-local logs "$deployment" --all-containers --tail=200 || true
+              fi
+            done
+            kubectl --kubeconfig="$kubeconfig" -n octogee-local logs deployment/glm-controller --tail=300 || true
+          fi
+          df -h /
+
+  report:
+    name: Stock OpenClaw report
+    needs: [package, kind]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.1
+      - name: Write the results to the run summary
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: node scripts/ci/stock-openclaw-summary.mjs report >> "$GITHUB_STEP_SUMMARY"
