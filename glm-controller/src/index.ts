@@ -186,7 +186,7 @@ import { schedulerHandoffAwaitingRelease, startSchedulerHandoffRelease } from ".
 import { createRecycleGatewayHandler } from "./handlers/recycle-gateway.js";
 import { createGatewayVmHandler } from "./handlers/gateway-vm.js";
 import { createGatewayVmClient } from "./lib/compute-vm.js";
-import { pausedNativeRetirementSourceFencedOff } from "./lib/native-retirement-telemetry.js";
+import { pausedIsolatedRetirementSourceFencedOff } from "./lib/native-retirement-telemetry.js";
 import { clearHomeCheckpointRequest, readHomeCheckpointCompletedAt, requestHomeCheckpoint } from "./lib/home-checkpoint.js";
 import { clearParkedVm, readParkedVm } from "./lib/parked-vm.js";
 import {
@@ -3398,9 +3398,11 @@ async function buildHandlers(
 
   const retireGateway = createRetireGatewayHandler({
     revokeAgentStoreCredentials: createAgentStoreCredentialRevoker(requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "Gateway retirement requires the controller-only administration URL")),
-    isPausedNativeSourceFencedOff: (input) => pausedNativeRetirementSourceFencedOff({
+    isPausedIsolatedSourceFencedOff: (input) => pausedIsolatedRetirementSourceFencedOff({
       store,
       describe: (name, zone) => createGatewayComputeClient(store, logFn).describe(name, zone),
+      podsAbsent: async (gatewayId) =>
+        (await kubeOps.readGatewayPodDiagnostics({ namespace: NAMESPACE, gatewayId })).status === "missing",
     }, input),
     verifyRetirementClaim: ({ gatewayId, operationId, version }) =>
       verifyGatewayRetirementClaimAtomic({

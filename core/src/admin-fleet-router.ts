@@ -22,6 +22,7 @@ import {
   resolveGatewayClass,
   resolveGatewayImageProfile,
   resolveGatewayRuntime,
+  isGatewayRuntime,
   deriveGatewayIdentity,
   type GatewayClass,
   type GlmOperationRecord,
@@ -1463,9 +1464,9 @@ async function mountedUsersBlockingRetirement(
   gatewayId: string,
   runtime: DurableGatewayRuntime,
 ): Promise<string[]> {
-  const parkedVm = runtime.root.desiredStatus === "paused" &&
-    resolveGatewayRuntime((await store.fleetRegistry.get(gatewayId))?.runtime) === "gce-vm";
-  return parkedVm ? [] : [...readMountedSlugs(runtime.heartbeat ?? undefined)];
+  const parkedIsolated = runtime.root.desiredStatus === "paused" && runtime.root.gatewayClass === "builder" &&
+    isGatewayRuntime((await store.fleetRegistry.get(gatewayId))?.runtime);
+  return parkedIsolated ? [] : [...readMountedSlugs(runtime.heartbeat ?? undefined)];
 }
 
 function gatewayRetirementBlocker(
