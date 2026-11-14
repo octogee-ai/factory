@@ -48,7 +48,7 @@ describe("scripts vitest configs", () => {
     const linux = await unitExcludesOn("linux");
     const darwin = await unitExcludesOn("darwin");
 
-    expect(linux).toEqual([...configDefaults.exclude, "**/*.emulator.spec.ts"]);
+    expect(linux).toEqual([...configDefaults.exclude, "**/*.emulator.spec.ts", "__tests__/firebase-reach.spec.ts"]);
     expect(darwin).toEqual(expect.arrayContaining([...linux, "__tests__/rsync-staged-symlinks.spec.ts"]));
   });
 
@@ -57,7 +57,15 @@ describe("scripts vitest configs", () => {
     const standalone = await unitExcludesOn("linux", { productCheckout: false });
 
     expect(inside).not.toContain("__tests__/source-checkout-workflows.spec.ts");
-    expect(standalone).toEqual(expect.arrayContaining([...inside, "__tests__/source-checkout-workflows.spec.ts", "__tests__/scope-resolve.spec.ts"]));
+    expect(standalone).toEqual(expect.arrayContaining(["__tests__/source-checkout-workflows.spec.ts", "__tests__/scope-resolve.spec.ts"]));
+  });
+
+  it("runs the platform's Firebase reach ratchet only when the platform stands alone", async () => {
+    const inside = await unitExcludesOn("linux");
+    const standalone = await unitExcludesOn("linux", { productCheckout: false });
+
+    expect(inside).toContain("__tests__/firebase-reach.spec.ts");
+    expect(standalone).not.toContain("__tests__/firebase-reach.spec.ts");
   });
 
   it("runs emulator specs serially with the longer timeout", () => {

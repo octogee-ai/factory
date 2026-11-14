@@ -39,6 +39,10 @@ const PRODUCT_CHECKOUT_SPECS = [
   "__tests__/vite-third-party-licenses.spec.ts",
 ];
 
+const STANDALONE_PLATFORM_SPECS = [
+  "__tests__/firebase-reach.spec.ts",
+];
+
 const insideProductCheckout = existsSync(path.resolve(__dirname, "../../product"));
 
 export default defineConfig({
@@ -53,7 +57,7 @@ export default defineConfig({
       ...configDefaults.exclude,
       "**/*.emulator.spec.ts",
       ...(process.platform === "linux" ? [] : LINUX_HOST_SPECS),
-      ...(insideProductCheckout ? [] : PRODUCT_CHECKOUT_SPECS),
+      ...(insideProductCheckout ? STANDALONE_PLATFORM_SPECS : PRODUCT_CHECKOUT_SPECS),
     ],
     setupFiles: ["./test-setup/deployment-targets.ts", "./test-setup/user-entitlements.ts", "./test-setup/loopback-listen.ts"],
     // Operator-tooling specs spawn real subprocesses (kubectl shims, tsx
