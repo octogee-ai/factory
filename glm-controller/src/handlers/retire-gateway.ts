@@ -18,7 +18,7 @@ export interface RetireGatewayDeps {
   // refuses while any user is still mounted.
   readMountedUsers: (gatewayId: string) => Promise<string[]>;
 
-  isPausedNativeSourceFencedOff?: (input: {
+  isPausedIsolatedSourceFencedOff?: (input: {
     gatewayId: string;
     operationId: string;
     version: number;
@@ -215,14 +215,14 @@ async function assertNoMountedUsers(
   const mounted = [...(await deps.readMountedUsers(gatewayId))].sort(compareStrings);
   if (mounted.length === 0) return null;
   try {
-    if (await deps.isPausedNativeSourceFencedOff?.({ gatewayId, operationId, version })) {
+    if (await deps.isPausedIsolatedSourceFencedOff?.({ gatewayId, operationId, version })) {
       const claimFailure = await verifyRetirementClaim(deps, gatewayId, operationId, version);
       if (claimFailure) return claimFailure;
-      deps.log(`[retire-gateway] ${gatewayId}: paused native source is fenced off; ignoring its final mounted telemetry`);
+      deps.log(`[retire-gateway] ${gatewayId}: paused isolated source is fenced off; ignoring its final mounted telemetry`);
       return null;
     }
   } catch (error) {
-    return failure(`gateway ${gatewayId} native retirement fence unreadable: ${error instanceof Error ? error.message : String(error)}`);
+    return failure(`gateway ${gatewayId} isolated retirement fence unreadable: ${error instanceof Error ? error.message : String(error)}`);
   }
   return failure(
     `gateway ${gatewayId} still has ${mounted.length} mounted user(s): ` +

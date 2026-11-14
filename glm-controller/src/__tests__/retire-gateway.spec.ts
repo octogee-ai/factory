@@ -195,10 +195,10 @@ describe("createRetireGatewayHandler — simple-roll retirement", () => {
     expect(state.helmUninstalled).toEqual([]);
   });
 
-  it("retires a claimed paused native source with stale mounts only after Compute proves it fenced off", async () => {
+  it("retires a claimed paused source with stale mounts only after its runtime proves it fenced off", async () => {
     const state = baseState({ mounted: ["ceckert"] });
     const fenced = vi.fn(async () => true);
-    const deps = makeDeps(state, { isPausedNativeSourceFencedOff: fenced });
+    const deps = makeDeps(state, { isPausedIsolatedSourceFencedOff: fenced });
 
     const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
 
@@ -208,9 +208,9 @@ describe("createRetireGatewayHandler — simple-roll retirement", () => {
     expect(state.helmUninstalled).toEqual(["canary"]);
   });
 
-  it("preserves stale mount refusal when the paused native source is not proven fenced off", async () => {
+  it("preserves stale mount refusal when the paused source is not proven fenced off", async () => {
     const state = baseState({ mounted: ["ceckert"] });
-    const deps = makeDeps(state, { isPausedNativeSourceFencedOff: vi.fn(async () => false) });
+    const deps = makeDeps(state, { isPausedIsolatedSourceFencedOff: vi.fn(async () => false) });
 
     const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
 
@@ -219,9 +219,9 @@ describe("createRetireGatewayHandler — simple-roll retirement", () => {
     expect(state.helmUninstalled).toEqual([]);
   });
 
-  it("refuses unreadable native fencing proof before any teardown", async () => {
+  it("refuses unreadable fencing proof before any teardown", async () => {
     const state = baseState({ mounted: ["ceckert"] });
-    const deps = makeDeps(state, { isPausedNativeSourceFencedOff: vi.fn(async () => { throw new Error("Compute denied"); }) });
+    const deps = makeDeps(state, { isPausedIsolatedSourceFencedOff: vi.fn(async () => { throw new Error("Compute denied"); }) });
 
     const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
 
@@ -230,9 +230,9 @@ describe("createRetireGatewayHandler — simple-roll retirement", () => {
     expect(state.helmUninstalled).toEqual([]);
   });
 
-  it("rechecks the retirement claim after Compute proof before teardown", async () => {
+  it("rechecks the retirement claim after the fencing proof before teardown", async () => {
     const state = baseState({ mounted: ["ceckert"] });
-    const deps = makeDeps(state, { isPausedNativeSourceFencedOff: vi.fn(async () => { state.claimOk = false; return true; }) });
+    const deps = makeDeps(state, { isPausedIsolatedSourceFencedOff: vi.fn(async () => { state.claimOk = false; return true; }) });
 
     const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
 

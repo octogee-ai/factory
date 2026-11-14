@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MalformedRecordError } from "@octogee/core/platform-state";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
-import { pausedNativeRetirementSourceFencedOff } from "../lib/native-retirement-telemetry.js";
+import { pausedIsolatedRetirementSourceFencedOff } from "../lib/native-retirement-telemetry.js";
 import type { GatewayVmDescription } from "../lib/compute-vm.js";
 
 const input = { gatewayId: "builder-old", operationId: "retire-old", version: 2 };
@@ -27,6 +27,8 @@ function fixture() {
   };
   const store = createDocumentFixtureStore(records);
   const describeVm = vi.fn(async () => current);
+  let pods: "missing" | "present" = "missing";
+  const podsAbsent = vi.fn(async () => pods === "missing");
   return {
     root,
     runtime: () => runtime!,
@@ -34,11 +36,14 @@ function fixture() {
     removeRuntime: () => { runtime = undefined; },
     removeVm: () => { current = null; },
     describeVm,
-    check: () => pausedNativeRetirementSourceFencedOff({ store, describe: describeVm }, input),
+    podsAbsent,
+    asPod: () => { runtime = { ...runtime!, runtime: "cluster" }; delete runtime.vm; },
+    podRemains: () => { pods = "present"; },
+    check: () => pausedIsolatedRetirementSourceFencedOff({ store, describe: describeVm, podsAbsent }, input),
   };
 }
 
-describe("paused native retirement telemetry", () => {
+describe("paused isolated retirement telemetry", () => {
   it("accepts exact stopped Compute identity despite stale mounted telemetry", async () => {
     const h = fixture();
     expect(await h.check()).toBe(true);
@@ -127,10 +132,30 @@ describe("paused native retirement telemetry", () => {
     expect(await h.check()).toBe(false);
   });
 
-  it.each(["cluster", undefined])("rejects non-native runtime %s", async (runtime) => {
-    const h = fixture(); h.runtime().runtime = runtime;
+  it("rejects an unstamped runtime before Compute or pod reads", async () => {
+    const h = fixture(); h.runtime().runtime = undefined;
     expect(await h.check()).toBe(false);
     expect(h.describeVm).not.toHaveBeenCalled();
+    expect(h.podsAbsent).not.toHaveBeenCalled();
+  });
+
+  it("accepts a parked pod gateway with no pod left despite stale mounted telemetry", async () => {
+    const h = fixture(); h.asPod();
+    expect(await h.check()).toBe(true);
+    expect(h.podsAbsent).toHaveBeenCalledWith(input.gatewayId);
+    expect(h.describeVm).not.toHaveBeenCalled();
+  });
+
+  it("rejects a parked pod gateway while one of its pods remains", async () => {
+    const h = fixture(); h.asPod(); h.podRemains();
+    expect(await h.check()).toBe(false);
+  });
+
+  it("rejects a pod gateway whose retirement claim was not taken while paused", async () => {
+    const h = fixture(); h.asPod();
+    (h.root.retirementClaim as Record<string, unknown>).previousDesiredStatus = "running";
+    expect(await h.check()).toBe(false);
+    expect(h.podsAbsent).not.toHaveBeenCalled();
   });
 
   it.each(["instanceId", "instanceName", "zone"])("rejects missing recorded %s even when Compute is absent", async (field) => {
