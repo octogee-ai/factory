@@ -7,7 +7,7 @@ vi.mock("../lib/firebase.js", () => ({
   db: { collection: vi.fn() },
 }));
 
-import { applyGatewayDefaults } from "../lib/gateway.js";
+import { applyGatewayDefaults } from "@octogee/core/gateway";
 
 describe("advisory mode removal", () => {
   const libDir = path.resolve(__dirname, "..", "lib");
@@ -29,7 +29,7 @@ describe("advisory mode removal", () => {
   });
 
   it("no advisorySlugs references in gateway module", () => {
-    const gatewayPath = path.join(libDir, "gateway.ts");
+    const gatewayPath = path.resolve(__dirname, "..", "..", "core", "src", "gateway.ts");
     const content = fs.readFileSync(gatewayPath, "utf-8");
     expect(content).not.toContain("advisorySlugs");
     expect(content).not.toContain("advisoryMode");
