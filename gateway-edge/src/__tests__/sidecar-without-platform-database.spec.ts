@@ -7,6 +7,8 @@ describe("gateway-edge sidecar without platform database settings", () => {
     for (const name of Object.keys(process.env)) {
       if (PLATFORM_ENV.test(name)) vi.stubEnv(name, undefined);
     }
+    vi.stubEnv("GATEWAY_ID", "walter");
+    vi.stubEnv("OPENCLAW_RUNTIME_BROKER_URL", "http://octogee-api:3001");
   });
 
   it("loads its entry module graph", async () => {

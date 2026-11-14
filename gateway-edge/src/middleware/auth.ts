@@ -31,6 +31,11 @@ export function installUserIdentityProvider(provider: UserIdentityProvider): voi
   installedProvider = provider;
 }
 
+export async function loadUserWithInstalledProvider(uid: string): Promise<UserDocument | null> {
+  if (installedProvider === null) throw new Error("no user identity provider is installed");
+  return installedProvider.loadUser(uid);
+}
+
 function userIdentityProvider(res: Response): UserIdentityProvider | null {
   if (installedProvider === null) {
     logger.error("User authentication is unavailable: no user identity provider is installed");
