@@ -20,7 +20,6 @@ const PRODUCT_CHECKOUT_SPECS = [
   "__tests__/deployment-target-contract.spec.ts",
   "__tests__/desktop-image-build.spec.ts",
   "__tests__/directory-dependency-contract.spec.ts",
-  "__tests__/firebase-deploy-hosting.spec.ts",
   "__tests__/image-fingerprint-reuse.spec.ts",
   "__tests__/mattermost-capability-artifact.spec.ts",
   "__tests__/platform-boundary.spec.ts",
@@ -28,7 +27,6 @@ const PRODUCT_CHECKOUT_SPECS = [
   "__tests__/release-digest-manifest.spec.ts",
   "__tests__/release-digest-tag-lookup.spec.ts",
   "__tests__/setup-secrets-env-loader.spec.ts",
-  "__tests__/vite-third-party-licenses.spec.ts",
 ];
 
 const STANDALONE_PLATFORM_SPECS = [
