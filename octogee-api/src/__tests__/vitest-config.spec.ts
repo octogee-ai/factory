@@ -40,13 +40,14 @@ describe("octogee-api vitest configs", () => {
     expect(cfg.test?.testTimeout).toBe(15_000);
   });
 
-  it("loads the deployment target fixture, the loopback listen shim, the runtime env and the platform-store reset for emulator specs", () => {
+  it("loads the deployment target fixture, the loopback listen shim, the runtime env, the platform-store reset and Firebase sign-in for emulator specs", () => {
     expect((emulatorConfig as VitestConfig).test?.setupFiles).toEqual([
       "./src/test-setup/deployment-targets.ts",
       "./src/test-setup/octogee-entitlements.ts",
       "./src/test-setup/loopback-listen.ts",
       "./src/test-setup/runtime-env.ts",
       "./src/test-setup/platform-state-reset.ts",
+      "../gateway-edge/src/test-setup/firebase-user-identity.ts",
     ]);
   });
 });

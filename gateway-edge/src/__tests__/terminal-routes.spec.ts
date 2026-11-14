@@ -6,10 +6,9 @@ import { WebSocket, WebSocketServer } from "ws";
 import { WsUpgradeRouter } from "@octogee/core/ws/upgrade-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { verifyIdToken } = vi.hoisted(() => ({ verifyIdToken: vi.fn() }));
+const { uidForBearer } = vi.hoisted(() => ({ uidForBearer: vi.fn<(token: string) => Promise<string>>() }));
 
 vi.mock("../lib/db", () => ({
-  auth: { verifyIdToken },
   db: {},
 }));
 vi.mock("../middleware/logging", () => ({
@@ -29,6 +28,9 @@ import {
 import { applyGatewayPrefixStripInPlace } from "../chat-proxy/gateway-prefix.js";
 import type { NativeAdminAccessOutcome } from "../lib/native-admin-access.js";
 import { WS_TICKET_TTL_MS, createWsTicketStore } from "../lib/ws-ticket-store.js";
+import { installBearerUids } from "./helpers/user-bearer.js";
+
+installBearerUids(uidForBearer);
 
 const OWNER = "uid-owner";
 const GATEWAY = "b-x";
@@ -65,9 +67,9 @@ function as(principal: keyof typeof ACCESS) {
 }
 
 beforeEach(() => {
-  verifyIdToken.mockReset();
-  verifyIdToken.mockImplementation(async (token: string) => {
-    if (token in ACCESS) return { uid: token === "owner" ? OWNER : `uid-${token}` };
+  uidForBearer.mockReset();
+  uidForBearer.mockImplementation(async (token: string) => {
+    if (token in ACCESS) return token === "owner" ? OWNER : `uid-${token}`;
     throw new Error("bad token");
   });
   resolveAccess.mockReset();

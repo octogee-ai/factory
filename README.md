@@ -29,7 +29,9 @@ on a local kind cluster from the images this repository publishes. See
 [The full platform on kind](docs/kind.md). It has not yet run on a cloud
 account, so there is no production install of it yet. Users on a shared
 gateway work through Mattermost and Gitea; the OpenClaw Control UI is for
-isolated gateways only.
+isolated gateways only. The platform API knows a user by their Mattermost
+session or personal access token; see
+[Call the platform API as a user](docs/kind.md#call-the-platform-api-as-a-user).
 
 Some features start switched off, among them agent import and export, the
 OpenClaw dashboard, project repository sources and voice. List the ones you

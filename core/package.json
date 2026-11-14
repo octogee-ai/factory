@@ -534,6 +534,10 @@
       "types": "./dist/identity-provider.d.ts",
       "default": "./dist/identity-provider.js"
     },
+    "./user-identity-provider": {
+      "types": "./dist/user-identity-provider.d.ts",
+      "default": "./dist/user-identity-provider.js"
+    },
     "./operator-token": {
       "types": "./dist/operator-token.d.ts",
       "default": "./dist/operator-token.js"
@@ -865,6 +869,9 @@
       ],
       "identity-provider": [
         "dist/identity-provider.d.ts"
+      ],
+      "user-identity-provider": [
+        "dist/user-identity-provider.d.ts"
       ],
       "operator-token": [
         "dist/operator-token.d.ts"
