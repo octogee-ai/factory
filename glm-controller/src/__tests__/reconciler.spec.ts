@@ -760,7 +760,7 @@ describe("targeted durable state reads", () => {
       kubeOps: {} as never,
       chartFingerprint: "chart",
       prepareGatewayConfig: vi.fn(async (config) => config),
-      reconcileSurgeHandoff: vi.fn(async () => ({ ready: true })),
+      ensureIsolatedPodHome: vi.fn(async () => {}), reconcileSurgeHandoff: vi.fn(async () => ({ ready: true })),
       log: vi.fn(),
     };
 
@@ -793,7 +793,7 @@ describe("gateway convergence pass outcomes", () => {
         releases: Object.fromEntries(ids.map(id => [id, { 2: releaseArtifact(id, 2, "abc1234") }])) }),
       helm: helm as never, kubeOps: {} as never, chartFingerprint: "chart",
       prepareGatewayConfig: vi.fn(async (config: any) => config),
-      reconcileSurgeHandoff: vi.fn(async (_input: { gatewayId: string; desiredImageTag: string }) => ({ ready: true })),
+      ensureIsolatedPodHome: vi.fn(async () => {}), reconcileSurgeHandoff: vi.fn(async (_input: { gatewayId: string; desiredImageTag: string }) => ({ ready: true })),
       log: vi.fn(),
     };
     return { roots, runtimes, instances, helm, deps };
@@ -997,7 +997,7 @@ describe("gateway convergence pass outcomes", () => {
     };
     const deps = { store, helm: helm as never, kubeOps: {} as never, chartFingerprint: "chart",
       prepareGatewayConfig: vi.fn(async (config: any) => config),
-      reconcileSurgeHandoff: vi.fn(async () => ({ ready: true })), log: vi.fn() };
+      ensureIsolatedPodHome: vi.fn(async () => {}), reconcileSurgeHandoff: vi.fn(async () => ({ ready: true })), log: vi.fn() };
     const stateDeps: FleetStateDeps = { store };
     return { roots, runtimes, users, operations, deps, helm, stateDeps };
   }
@@ -1092,7 +1092,7 @@ describe("gateway convergence pass outcomes", () => {
     const log = vi.fn();
     const converge = serializeGatewayConvergence((gatewayIds) => runGatewayConvergencePass({ store, helm: helm as never, kubeOps: {} as never,
       chartFingerprint: "chart", prepareGatewayConfig: vi.fn(async (config: any) => config),
-      reconcileSurgeHandoff: vi.fn(async () => ({ ready: true })), log }, gatewayIds));
+      ensureIsolatedPodHome: vi.fn(async () => {}), reconcileSurgeHandoff: vi.fn(async () => ({ ready: true })), log }, gatewayIds));
 
     await converge(["creating"]);
     await converge(["next"]);
@@ -1292,7 +1292,7 @@ describe("gateway convergence pass outcomes", () => {
       kubeOps: {} as never,
       chartFingerprint: "chart",
       prepareGatewayConfig: vi.fn(async (config) => config),
-      reconcileSurgeHandoff: vi.fn(async () => ({ ready: true })),
+      ensureIsolatedPodHome: vi.fn(async () => {}), reconcileSurgeHandoff: vi.fn(async () => ({ ready: true })),
       log,
     });
 
