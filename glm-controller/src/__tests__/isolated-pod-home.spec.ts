@@ -214,6 +214,19 @@ describe("recording why isolated pod gateways are not running", () => {
     expect(h.log).toHaveBeenCalledWith(`[isolated-pod] ${GATEWAY} is not running: ${NO_AMD64}`);
   });
 
+  it("records a blocker whose event text spans lines on one line, and only once", async () => {
+    const event = `home claim ${CLAIM} cannot bind: ProvisioningFailed: failed to provision volume:\n  rpc error: code = ResourceExhausted\tdesc = quota exceeded\n`;
+    const h = harness({ [`gateways/${GATEWAY}`]: root(GATEWAY), [`glmGateways/${GATEWAY}`]: runtimeRecord(GATEWAY) }, { [GATEWAY]: event });
+
+    await h.observe();
+    await h.observe();
+
+    const oneLine = `home claim ${CLAIM} cannot bind: ProvisioningFailed: failed to provision volume: rpc error: code = ResourceExhausted desc = quota exceeded`;
+    expect(h.records.get(`glmGateways/${GATEWAY}`)).toMatchObject({ lastError: { message: oneLine, at: NOW } });
+    expect(h.log).toHaveBeenCalledTimes(1);
+    expect(h.log).toHaveBeenCalledWith(`[isolated-pod] ${GATEWAY} is not running: ${oneLine}`);
+  });
+
   it("clears the last error once nothing blocks the gateway", async () => {
     const h = harness({
       [`gateways/${GATEWAY}`]: root(GATEWAY),
