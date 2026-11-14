@@ -342,8 +342,11 @@ describe("retiring an isolated gateway", () => {
     return seed;
   };
 
-  it("retires a returned gateway whose parked VM left a last heartbeat that still lists the user", async () => {
-    const h = harness(lastHeartbeatStillListsUser({ desiredStatus: "paused" }, { runtime: "gce-vm" }));
+  it.each([
+    ["VM", "gce-vm"],
+    ["pod", "cluster"],
+  ] as const)("retires a returned gateway whose parked %s left a last heartbeat that still lists the user", async (_name, runtimeKind) => {
+    const h = harness(lastHeartbeatStillListsUser({ desiredStatus: "paused" }, { runtime: runtimeKind }));
 
     const res = await retire(h).expect(202);
 
@@ -355,7 +358,8 @@ describe("retiring an isolated gateway", () => {
 
   it.each([
     ["a running VM gateway", { desiredStatus: "running" }, { runtime: "gce-vm" }],
-    ["a paused pod gateway", { desiredStatus: "paused" }, {}],
+    ["a paused gateway with no runtime stamp", { desiredStatus: "paused" }, {}],
+    ["a running pod gateway", { desiredStatus: "running" }, { runtime: "cluster" }],
   ] as const)("still refuses %s whose heartbeat lists a mounted user", async (_name, root, runtimeKind) => {
     const h = harness(lastHeartbeatStillListsUser(root, runtimeKind));
 
