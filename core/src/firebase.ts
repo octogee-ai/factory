@@ -3,7 +3,6 @@ const logger = createServiceLogger("provisioner");
 import { getApp, getApps, initializeApp, type App } from "firebase-admin/app";
 import { getFirestore, type Firestore } from "firebase-admin/firestore";
 import { getStorage as storageForApp, type Storage } from "firebase-admin/storage";
-import { deploymentEnvironmentForProject } from "./deployment-environment.js";
 import { lazyInstance } from "./lazy-instance.js";
 import { platformStateStoreFromEnvironment } from "./platform-state/postgres/store-from-environment.js";
 
@@ -20,15 +19,11 @@ function firebaseApp(): App {
     }
     initializeApp(options);
     logger.info(
-      `Firebase: Application Default Credentials (Workload Identity)`,
+      `Firebase: Application Default Credentials (Workload Identity) for ${FIREBASE_PROJECT_ID}`,
     );
   }
   return getApp();
 }
-
-export const OCTOGEE_ENV = deploymentEnvironmentForProject(FIREBASE_PROJECT_ID);
-
-logger.info(`Environment: ${OCTOGEE_ENV} (${FIREBASE_PROJECT_ID})`);
 
 export const db: Firestore = lazyInstance(() => getFirestore(firebaseApp()));
 
