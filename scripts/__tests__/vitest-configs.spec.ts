@@ -16,13 +16,18 @@ interface ScriptsVitestConfig {
 }
 
 const productDirectory = path.resolve(__dirname, "../../../product");
+const gitDirectory = path.resolve(__dirname, "../../.git");
 
-async function unitExcludesOn(platform: NodeJS.Platform, { productCheckout = true } = {}): Promise<string[]> {
+async function unitExcludesOn(
+  platform: NodeJS.Platform,
+  { productCheckout = true, gitCheckout = true } = {},
+): Promise<string[]> {
+  const present = new Map([[productDirectory, productCheckout], [gitDirectory, gitCheckout]]);
   const original = Object.getOwnPropertyDescriptor(process, "platform")!;
   Object.defineProperty(process, "platform", { ...original, value: platform });
   vi.doMock("node:fs", async (importOriginal) => {
     const fs = await importOriginal<typeof import("node:fs")>();
-    return { ...fs, existsSync: (file: PathLike) => (String(file) === productDirectory ? productCheckout : fs.existsSync(file)) };
+    return { ...fs, existsSync: (file: PathLike) => present.get(String(file)) ?? fs.existsSync(file) };
   });
   try {
     vi.resetModules();
@@ -58,6 +63,14 @@ describe("scripts vitest configs", () => {
 
     expect(inside).not.toContain("__tests__/source-checkout-workflows.spec.ts");
     expect(standalone).toEqual(expect.arrayContaining([...inside, "__tests__/source-checkout-workflows.spec.ts", "__tests__/scope-resolve.spec.ts"]));
+  });
+
+  it("runs specs that read this repository's commits only in its git checkout", async () => {
+    const checkout = await unitExcludesOn("linux");
+    const overlay = await unitExcludesOn("linux", { gitCheckout: false });
+
+    expect(checkout).not.toContain("__tests__/publish-plugin.spec.ts");
+    expect(overlay).toEqual([...checkout, "__tests__/publish-plugin.spec.ts"]);
   });
 
   it("runs emulator specs serially with the longer timeout", () => {
