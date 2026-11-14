@@ -9,11 +9,11 @@ enough for that.
 The fleet features are a different matter: many users on shared gateways,
 isolated gateways, and moving a user between the two. The gateway image this
 repository builds for them runs a patched build: upstream OpenClaw `main` at
-commit [`f52d9254`](https://github.com/openclaw/openclaw/commit/f52d9254a99cd061f19f24459fa48fd5704e8cc5)
-plus a public overlay of seven commits, ending at
-[`d7d29b20`](https://github.com/ceckert/openclaw/commit/d7d29b20f700ba1aea25faa34d427d9e5203533c)
+commit [`081748ca`](https://github.com/openclaw/openclaw/commit/081748ca26e21d519506fd262c909320e91d2d1d)
+plus a public overlay of six commits, ending at
+[`ade4f47a`](https://github.com/ceckert/openclaw/commit/ade4f47af298d39b58585c20193bd7b5bb947533)
 in the fork `ceckert/openclaw`. Its packages are the release
-[`gateway-d7d29b20`](https://github.com/ceckert/openclaw/releases/tag/gateway-d7d29b20),
+[`gateway-ade4f47`](https://github.com/ceckert/openclaw/releases/tag/gateway-ade4f47),
 which `infra/gateway/openclaw-tarball/current.json` pins. We have not run the
 fleet features end to end on a stock release. The goal is to carry no patches.
 
@@ -31,12 +31,12 @@ image, most visibly when users move between gateways.
 ## What octogee-cloud needs from OpenClaw
 
 These families support features the platform itself depends on. States are as
-of 2026-11-11, before the overlay was recut on 2026-11-13. "No pull request"
-means the fix exists only in the overlay.
+of 2026-11-14, for the overlay cut that day. "No pull request" means the fix
+exists only in the overlay.
 
 | Capability | octogee-cloud feature | On stock OpenClaw | Upstream | The patch can go when |
 | --- | --- | --- | --- | --- |
-| Detach an agent and reattach it on another gateway, keeping its PostgreSQL store, identity and history | Moving a user between a shared and an isolated gateway | No public transfer that keeps store identity and history; a move would recreate the agent | [#178755](https://github.com/openclaw/openclaw/pull/178755), open, needs PostgreSQL reattachment work and review. Empty recreation of retained stores is now native ([#188350](https://github.com/openclaw/openclaw/pull/188350), merged) | Native transfer keeps namespace, history and rollback custody |
+| Detach an agent and reattach it on another gateway, keeping its PostgreSQL store, identity and history | Moving a user between a shared and an isolated gateway | No public transfer that keeps store identity and history; a move would recreate the agent | [#178755](https://github.com/openclaw/openclaw/pull/178755), open, needs PostgreSQL reattachment work and review. Empty recreation of retained stores ([#188350](https://github.com/openclaw/openclaw/pull/188350)) and keeping a held store apart until it is restored ([#198180](https://github.com/openclaw/openclaw/pull/198180)) are now native, both merged | Native transfer keeps namespace, history and rollback custody |
 | Recreate an agent during a live import onto a reused home | Moving a user back to an isolated gateway | `agents.create` fails in config preflight when the retained store is replaced | No pull request | The selected base carries an equivalent fix |
 | Refuse to retire an agent while it has unfinished outbound deliveries | Pending deliveries survive a move | Queued replies can be lost or sent from the wrong gateway | No dedicated pull request; related fix [#163685](https://github.com/openclaw/openclaw/pull/163685) merged | Native detach and deletion fence the same queue |
 | Hand over scheduled jobs with hold, export, activation, rollback and drain | Schedules move once and only once | Plain cron create and delete; no two-gateway handoff | No pull request | Native migration offers equivalent activation, rollback and drain |
@@ -50,6 +50,7 @@ means the fix exists only in the overlay.
 | PostgreSQL startup during backup recovery | PostgreSQL agent stores; isolated gateways booting on a retained home | Startup fails during recovery | [#193596](https://github.com/openclaw/openclaw/pull/193596), open, ready for review | Merged into the selected base |
 | Offline config reduction kept across restart (`config patch --allow-size-drop`) and a first-write health baseline | Preparing an isolated gateway before it serves | Recovery restores the larger backup config | [#193636](https://github.com/openclaw/openclaw/pull/193636), open, draft | Merged, or the public option is decided another way |
 | Reconnect idle PostgreSQL connections after a host suspension | Suspending and resuming an isolated gateway's VM | The first request after resume fails | [#193875](https://github.com/openclaw/openclaw/pull/193875), open | Merged into the selected base |
+| Upgrade a PostgreSQL state store created before upstream added a column to schema 39 without a migration | Moving a gateway to a newer OpenClaw build while keeping its PostgreSQL state | A store created by an older build is refused as schema drift | [#197425](https://github.com/openclaw/openclaw/pull/197425), open | The selected base upgrades both schema 39 shapes itself |
 | Read the web-secret index through the async PostgreSQL reader | PostgreSQL agent stores | `secrets.reload` fails on a cold store | No pull request | Native awaits the worker-backed reader |
 | Republish a deferred agent's model after a concurrent refresh | Creating agents while the gateway reloads | The agent stays connected but cannot reply | No pull request | The selected base carries an equivalent fix |
 
@@ -64,7 +65,6 @@ means the fix exists only in the overlay.
 | `doctor --skip-recovery-backups` | Store import and upgrade paths that already keep their own backups | No pull request |
 | npm 12.2.1 pin and distribution patch | Packaging: dependency fixes that upstream npm does not ship yet | Not an OpenClaw change |
 | Generated schemas and test support | Describe the retained APIs above | Go with their features |
-| Memory shadow database retirement | Listed in the overlay table, but the build notes say native [#197230](https://github.com/openclaw/openclaw/pull/197230) (merged) replaced it | None needed |
 
 [#191463](https://github.com/openclaw/openclaw/pull/191463) (agent removal
 latency, open) is a contribution, not a carried patch.
@@ -95,8 +95,8 @@ lives with two limits.
 ## How to check this yourself
 
 The overlay source is the branch
-[`codex/gateway-refresh-20261113`](https://github.com/ceckert/openclaw/tree/codex/gateway-refresh-20261113)
-on `ceckert/openclaw`, and the release tag `gateway-d7d29b20` marks the same
+[`codex/gateway-refresh-20261113-2`](https://github.com/ceckert/openclaw/tree/codex/gateway-refresh-20261113-2)
+on `ceckert/openclaw`, and the release tag `gateway-ade4f47` marks the same
 commit. Diff it against the upstream base commit above to see every changed
 line. The tables are drawn from the build notes kept for each cut: a table of
 retained families with removal conditions, notes on individual fixes, and a
