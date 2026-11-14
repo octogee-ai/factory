@@ -127,6 +127,19 @@ glm-controller:
       openclawLogLevel: debug
       logLevel: debug
     tiers:
+      s:
+        resources:
+          requests:
+            cpu: 500m
+            memory: 2Gi
+            ephemeral-storage: 2Gi
+          limits:
+            cpu: "2"
+            memory: 4Gi
+            ephemeral-storage: 5Gi
+        nodejs:
+          uvThreadpoolSize: "4"
+          maxOldSpaceSizeMb: "3072"
       m:
         resources:
           requests:

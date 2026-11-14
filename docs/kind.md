@@ -259,9 +259,58 @@ When `user inspect` shows provisioning `complete` and the user mounted on
   repository and an empty `system_config` repository.
 
 A user on a shared gateway works with their agent through Mattermost and Gitea.
-The OpenClaw Control UI is for users on an isolated gateway, and kind runs only
-shared gateways, so `/ui` in Mattermost answers that the Control UI is for
-isolated gateways only.
+The OpenClaw Control UI is for users on an isolated gateway, so for a user on
+`shared-a`, `/ui` in Mattermost answers that the Control UI is for isolated
+gateways only.
+
+## An isolated gateway
+
+On an amd64 host, kind can give a user a gateway of their own. It runs as a
+Kubernetes pod with its own home claim, and has no desktop or computer; those
+need a VM. The isolated gateway image is published for `linux/amd64` only, so
+on an arm64 host, such as an Apple Silicon Mac, the install leaves it out and a
+given gateway never starts. `gateway inspect` then shows, as its last error,
+that the isolated gateway image is linux/amd64 only and the cluster has no
+amd64 node.
+
+`sizing` needs an `octogee-fleet` newer than v0.1.0:
+
+```bash
+go install github.com/octogee-ai/octogee-fleet@main
+```
+
+Write a sizing profile whose computer is a pod. `homeSizeGiB` sizes the
+gateway's home claim, which kind's default storage class provides. CPU and
+memory come from the gateway chart's preset for `sizingTier`; kind's values
+shrink the `s` preset to 500m CPU and 2 GiB to fit a laptop.
+
+```bash
+cat > pod-s.json <<'EOF'
+{"isolation":"isolated","sizingTier":"s","computer":{"runtime":"cluster","homeSizeGiB":2},"fallbackStorageGb":null}
+EOF
+octogee-fleet --env=kind sizing set pod-s --file=pod-s.json --apply
+```
+
+Move the user to a new isolated gateway of that profile. The command prints the
+new gateway's id. Wait until `user inspect` shows the user mounted on it:
+
+```bash
+octogee-fleet --env=kind user migrate lin --to-isolated=pod-s --apply
+octogee-fleet --env=kind user inspect lin
+```
+
+The fleet controller creates the home claim `octogee-gateway-<id>-data` before
+it starts the pod, and never replaces the claim of a gateway that has served.
+Until the pod runs, `gateway inspect <id>` shows what blocks it as its last
+error: a claim the storage class cannot bind, a pod the scheduler cannot place,
+or no amd64 node.
+
+- `gateway park <id> --apply` stops the pod and keeps the claim, and
+  `gateway resume <id> --apply` starts it again on the same home.
+- `user migrate lin --to=shared-a --apply` returns the user to the shared
+  gateway.
+- `gateway retire <id> --apply` then deletes the gateway, its claim and its
+  service account.
 
 ## Sign in to Mattermost and Gitea
 
@@ -364,8 +413,16 @@ setting stays on the cluster, and later runs of `up` keep it. Without
 
 ## Differences from a cloud cluster
 
-- kind has no gVisor runtime. Gateways run on the node's default runtime, with
-  `runtimeClassName` set to an empty value.
+- kind has no gVisor runtime. Gateways, isolated ones included, run on the
+  node's default runtime with `runtimeClassName` set to an empty value, and
+  share the node's kernel. On a cluster that serves other people, install
+  gVisor or another sandbox runtime and set
+  `glm-controller.gatewayValues.runtimeClassName` to it, as GKE Sandbox does
+  with `gvisor`.
+- An isolated gateway that runs as a pod is in the same namespace as every
+  other gateway. What sets it apart from other users' gateways is its own
+  service account and home claim, plus its per-gateway network policy where
+  the cluster's network plugin enforces one.
 - The kind node carries the `topology.kubernetes.io/zone` and
   `topology.kubernetes.io/region` labels that the gateway's topology spread
   needs.
@@ -402,9 +459,24 @@ these images. The post-build kind smoke test takes the amd64 digests directly
 from that run’s manifest and uses `octogee-fleet gateway ls` to query the new
 cluster’s Admin API. It then runs `kind-agent-round-trip.mjs` with Muse Ember on
 OpenRouter, so one user's agent replies through the LLM broker with a real
-provider key. The job runs in the `agent-round-trip` environment, which only
-`main` can use; the installer stores the environment's `OPENROUTER_API_KEY`
-secret in the cluster. Pull requests never run this workflow.
+provider key. A second job runs `kind-isolated-gateway.mjs` on its own cluster
+at the same time:
+
+1. It gives the user an isolated gateway that runs as a pod.
+2. It requires the gateway to mark its workspace identities ready for its
+   boot (`workspace-identity-ready`). Then it runs a Coach round trip whose
+   broker call the ledger records from that gateway.
+3. It writes a file to the gateway's home, parks and resumes the gateway, and
+   checks the file.
+4. It returns the user to the shared gateway, retires the isolated one, and
+   checks its home claim is gone.
+
+If the identities never become ready, the job prints the gateway's last
+`Workspace identity initialization failed` log line.
+
+Both jobs run in the `agent-round-trip` environment, which only `main` can use;
+the installer stores the environment's `OPENROUTER_API_KEY` secret in the
+cluster. Pull requests never run this workflow.
 
 The workflow keeps its build cache in GitHub Actions cache scopes named
 `octogee-cloud-<image>-<platform>`. It never reads or writes a registry cache,
