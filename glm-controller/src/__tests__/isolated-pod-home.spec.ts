@@ -34,8 +34,8 @@ function kubectl(routes: Record<string, Reply>): { run: KubectlSubprocess; calls
   return { run, calls };
 }
 
-const claim = (phase: string, createdAt = NOW - 60_000) =>
-  json({ metadata: { name: CLAIM, creationTimestamp: new Date(createdAt).toISOString() }, status: { phase } });
+const claim = (phase: string, createdAt = NOW - 60_000, accessModes = ["ReadWriteOncePod"]) =>
+  json({ metadata: { name: CLAIM, creationTimestamp: new Date(createdAt).toISOString() }, spec: { accessModes }, status: { phase } });
 const events = (...items: Array<{ type: string; reason: string; message: string; at: number }>) =>
   json({ items: items.map((event) => ({
     type: event.type, reason: event.reason, message: event.message, lastTimestamp: new Date(event.at).toISOString(),
@@ -78,6 +78,18 @@ describe("ensuring an isolated pod gateway's home claim", () => {
 
     await ensure(k.run, true);
 
+    expect(k.calls.map((call) => call.args[0])).toEqual(["get"]);
+  });
+
+  it.each([
+    ["ReadWriteOnce", ["ReadWriteOnce"]],
+    ["no access mode", []],
+  ])("refuses to serve an isolated pod from a claim with %s, which more than one pod can mount", async (_name, accessModes) => {
+    const k = kubectl({ [GET_CLAIM]: claim("Bound", NOW - 60_000, accessModes) });
+
+    await expect(ensure(k.run, true)).rejects.toThrow(
+      `isolated gateway ${GATEWAY} home claim ${CLAIM} is not ReadWriteOncePod`,
+    );
     expect(k.calls.map((call) => call.args[0])).toEqual(["get"]);
   });
 
