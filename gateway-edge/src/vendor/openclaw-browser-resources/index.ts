@@ -36,7 +36,7 @@ var ht = fn((El, gt) => {
     "not-basic": "Illegal input >= 0x80 (not a basic code point)",
     "invalid-input": "Invalid input"
   }, en = 35, W = Math.floor, nn = String.fromCharCode;
-  function K(e) {
+  function H(e) {
     throw new RangeError(Ao[e]);
   }
   function Eo(e, n) {
@@ -45,7 +45,7 @@ var ht = fn((El, gt) => {
       t[o] = n(e[o]);
     return t;
   }
-  function ct(e, n) {
+  function ut(e, n) {
     let t = e.split("@"), o = "";
     t.length > 1 && (o = t[0] + "@", e = t[1]), e = e.replace(So, ".");
     let r = e.split("."), i = Eo(r, n).join(".");
@@ -65,7 +65,7 @@ var ht = fn((El, gt) => {
   }
   var vo = (e) => String.fromCodePoint(...e), Mo = function(e) {
     return e >= 48 && e < 58 ? 26 + (e - 48) : e >= 65 && e < 91 ? e - 65 : e >= 97 && e < 123 ? e - 97 : 36;
-  }, ut = function(e, n) {
+  }, ct = function(e, n) {
     return e + 22 + 75 * (e < 26) - ((n != 0) << 5);
   }, dt = function(e, n, t) {
     let o = 0;
@@ -76,21 +76,21 @@ var ht = fn((El, gt) => {
     let n = [], t = e.length, o = 0, r = 128, i = 72, s = e.lastIndexOf("-");
     s < 0 && (s = 0);
     for (let a = 0; a < s; ++a)
-      e.charCodeAt(a) >= 128 && K("not-basic"), n.push(e.charCodeAt(a));
+      e.charCodeAt(a) >= 128 && H("not-basic"), n.push(e.charCodeAt(a));
     for (let a = s > 0 ? s + 1 : 0; a < t; ) {
       let l = o;
       for (let h = 1, f = 36; ; f += 36) {
-        a >= t && K("invalid-input");
+        a >= t && H("invalid-input");
         let y = Mo(e.charCodeAt(a++));
-        y >= 36 && K("invalid-input"), y > W((2147483647 - o) / h) && K("overflow"), o += y * h;
-        let u = f <= i ? 1 : f >= i + 26 ? 26 : f - i;
-        if (y < u)
+        y >= 36 && H("invalid-input"), y > W((2147483647 - o) / h) && H("overflow"), o += y * h;
+        let c = f <= i ? 1 : f >= i + 26 ? 26 : f - i;
+        if (y < c)
           break;
-        let c = 36 - u;
-        h > W(2147483647 / c) && K("overflow"), h *= c;
+        let u = 36 - c;
+        h > W(2147483647 / u) && H("overflow"), h *= u;
       }
       let d = n.length + 1;
-      i = dt(o - l, d, l == 0), W(o / d) > 2147483647 - r && K("overflow"), r += W(o / d), o %= d, n.splice(o++, 0, r);
+      i = dt(o - l, d, l == 0), W(o / d) > 2147483647 - r && H("overflow"), r += W(o / d), o %= d, n.splice(o++, 0, r);
     }
     return String.fromCodePoint(...n);
   }, ft = function(e) {
@@ -105,30 +105,30 @@ var ht = fn((El, gt) => {
       for (let h of e)
         h >= o && h < l && (l = h);
       let d = a + 1;
-      l - o > W((2147483647 - r) / d) && K("overflow"), r += (l - o) * d, o = l;
+      l - o > W((2147483647 - r) / d) && H("overflow"), r += (l - o) * d, o = l;
       for (let h of e)
-        if (h < o && ++r > 2147483647 && K("overflow"), h === o) {
+        if (h < o && ++r > 2147483647 && H("overflow"), h === o) {
           let f = r;
           for (let y = 36; ; y += 36) {
-            let u = y <= i ? 1 : y >= i + 26 ? 26 : y - i;
-            if (f < u)
+            let c = y <= i ? 1 : y >= i + 26 ? 26 : y - i;
+            if (f < c)
               break;
-            let c = f - u, m = 36 - u;
+            let u = f - c, m = 36 - c;
             n.push(
-              nn(ut(u + c % m, 0))
-            ), f = W(c / m);
+              nn(ct(c + u % m, 0))
+            ), f = W(u / m);
           }
-          n.push(nn(ut(f, 0))), i = dt(r, d, a === s), r = 0, ++a;
+          n.push(nn(ct(f, 0))), i = dt(r, d, a === s), r = 0, ++a;
         }
       ++r, ++o;
     }
     return n.join("");
   }, Do = function(e) {
-    return ct(e, function(n) {
+    return ut(e, function(n) {
       return To.test(n) ? pt(n.slice(4).toLowerCase()) : n;
     });
   }, Po = function(e) {
-    return ct(e, function(n) {
+    return ut(e, function(n) {
       return Io.test(n) ? "xn--" + ft(n) : n;
     });
   }, Oo = {
@@ -158,7 +158,7 @@ var ht = fn((El, gt) => {
 });
 
 // openclaw/node_modules/.pnpm/ipaddr.js@2.5.0/node_modules/ipaddr.js/lib/ipaddr.js
-var Kt = fn((Jt, Pe) => {
+var Ht = fn((Jt, Pe) => {
   (function(e) {
     "use strict";
     let n = "(0?\\d+|0x[a-f0-9]+)", t = {
@@ -172,108 +172,108 @@ var Kt = fn((Jt, Pe) => {
       deprecatedTransitional: new RegExp(`^(?:::)(${n}\\.${n}\\.${n}\\.${n}(${i})?)$`, "i"),
       transitional: new RegExp(`^((?:${s})|(?:::)(?:${s})?)${n}\\.${n}\\.${n}\\.${n}(${i})?$`, "i")
     };
-    function l(u, c) {
-      if (u.indexOf("::") !== u.lastIndexOf("::"))
+    function l(c, u) {
+      if (c.indexOf("::") !== c.lastIndexOf("::"))
         return null;
-      let m = 0, p = -1, b = (u.match(a.zoneIndex) || [])[0], g, x;
-      for (b && (b = b.substring(1), u = u.replace(/%.+$/, "")); (p = u.indexOf(":", p + 1)) >= 0; )
+      let m = 0, p = -1, b = (c.match(a.zoneIndex) || [])[0], g, x;
+      for (b && (b = b.substring(1), c = c.replace(/%.+$/, "")); (p = c.indexOf(":", p + 1)) >= 0; )
         m++;
-      if (u.substr(0, 2) === "::" && m--, u.substr(-2, 2) === "::" && m--, m >= c)
+      if (c.substr(0, 2) === "::" && m--, c.substr(-2, 2) === "::" && m--, m >= u)
         return null;
-      for (x = c - m, g = ":"; x--; )
+      for (x = u - m, g = ":"; x--; )
         g += "0:";
-      return u = u.replace("::", g), u[0] === ":" && (u = u.slice(1)), u[u.length - 1] === ":" && (u = u.slice(0, -1)), c = (function() {
-        let w = u.split(":"), k = [];
+      return c = c.replace("::", g), c[0] === ":" && (c = c.slice(1)), c[c.length - 1] === ":" && (c = c.slice(0, -1)), u = (function() {
+        let w = c.split(":"), k = [];
         for (let C = 0; C < w.length; C++)
           k.push(w[C].length > 4 ? NaN : parseInt(w[C], 16));
         return k;
       })(), {
-        parts: c,
+        parts: u,
         zoneId: b
       };
     }
-    function d(u, c, m, p) {
-      if (u.length !== c.length)
+    function d(c, u, m, p) {
+      if (c.length !== u.length)
         throw new Error("ipaddr: cannot match CIDR for objects with different lengths");
       let b = 0, g;
       for (; p > 0; ) {
-        if (g = m - p, g < 0 && (g = 0), u[b] >> g !== c[b] >> g)
+        if (g = m - p, g < 0 && (g = 0), c[b] >> g !== u[b] >> g)
           return !1;
         p -= m, b += 1;
       }
       return !0;
     }
-    function h(u) {
-      if (r.test(u))
-        return parseInt(u, 16);
-      if (u[0] === "0" && !isNaN(parseInt(u[1], 10))) {
-        if (o.test(u))
-          return parseInt(u, 8);
-        throw new Error(`ipaddr: cannot parse ${u} as octal`);
+    function h(c) {
+      if (r.test(c))
+        return parseInt(c, 16);
+      if (c[0] === "0" && !isNaN(parseInt(c[1], 10))) {
+        if (o.test(c))
+          return parseInt(c, 8);
+        throw new Error(`ipaddr: cannot parse ${c} as octal`);
       }
-      return parseInt(u, 10);
+      return parseInt(c, 10);
     }
-    function f(u, c) {
-      for (; u.length < c; )
-        u = `0${u}`;
-      return u;
+    function f(c, u) {
+      for (; c.length < u; )
+        c = `0${c}`;
+      return c;
     }
     let y = {};
     y.IPv4 = (function() {
-      function u(c) {
-        if (c.length !== 4)
+      function c(u) {
+        if (u.length !== 4)
           throw new Error("ipaddr: ipv4 octet count should be 4");
         let m, p;
-        for (m = 0; m < c.length; m++)
-          if (p = c[m], !(0 <= p && p <= 255))
+        for (m = 0; m < u.length; m++)
+          if (p = u[m], !(0 <= p && p <= 255))
             throw new Error("ipaddr: ipv4 octet should fit in 8 bits");
-        this.octets = c;
+        this.octets = u;
       }
-      return u.prototype.SpecialRanges = {
-        unspecified: [[new u([0, 0, 0, 0]), 8]],
-        broadcast: [[new u([255, 255, 255, 255]), 32]],
+      return c.prototype.SpecialRanges = {
+        unspecified: [[new c([0, 0, 0, 0]), 8]],
+        broadcast: [[new c([255, 255, 255, 255]), 32]],
         // RFC3171
-        multicast: [[new u([224, 0, 0, 0]), 4]],
+        multicast: [[new c([224, 0, 0, 0]), 4]],
         // RFC3927
-        linkLocal: [[new u([169, 254, 0, 0]), 16]],
+        linkLocal: [[new c([169, 254, 0, 0]), 16]],
         // RFC5735
-        loopback: [[new u([127, 0, 0, 0]), 8]],
+        loopback: [[new c([127, 0, 0, 0]), 8]],
         // RFC6598
-        carrierGradeNat: [[new u([100, 64, 0, 0]), 10]],
+        carrierGradeNat: [[new c([100, 64, 0, 0]), 10]],
         // RFC1918
         private: [
-          [new u([10, 0, 0, 0]), 8],
-          [new u([172, 16, 0, 0]), 12],
-          [new u([192, 168, 0, 0]), 16]
+          [new c([10, 0, 0, 0]), 8],
+          [new c([172, 16, 0, 0]), 12],
+          [new c([192, 168, 0, 0]), 16]
         ],
         // Reserved and testing-only ranges; RFCs 5735, 5737, 2544, 1700
         reserved: [
-          [new u([192, 0, 0, 0]), 24],
-          [new u([192, 0, 2, 0]), 24],
-          [new u([192, 88, 99, 0]), 24],
-          [new u([198, 18, 0, 0]), 15],
-          [new u([198, 51, 100, 0]), 24],
-          [new u([203, 0, 113, 0]), 24],
-          [new u([240, 0, 0, 0]), 4]
+          [new c([192, 0, 0, 0]), 24],
+          [new c([192, 0, 2, 0]), 24],
+          [new c([192, 88, 99, 0]), 24],
+          [new c([198, 18, 0, 0]), 15],
+          [new c([198, 51, 100, 0]), 24],
+          [new c([203, 0, 113, 0]), 24],
+          [new c([240, 0, 0, 0]), 4]
         ],
         // RFC7534, RFC7535
         as112: [
-          [new u([192, 175, 48, 0]), 24],
-          [new u([192, 31, 196, 0]), 24]
+          [new c([192, 175, 48, 0]), 24],
+          [new c([192, 31, 196, 0]), 24]
         ],
         // RFC7450
         amt: [
-          [new u([192, 52, 193, 0]), 24]
+          [new c([192, 52, 193, 0]), 24]
         ]
-      }, u.prototype.kind = function() {
+      }, c.prototype.kind = function() {
         return "ipv4";
-      }, u.prototype.match = function(c, m) {
+      }, c.prototype.match = function(u, m) {
         let p;
-        if (m === void 0 && (p = c, c = p[0], m = p[1]), c.kind() !== "ipv4")
+        if (m === void 0 && (p = u, u = p[0], m = p[1]), u.kind() !== "ipv4")
           throw new Error("ipaddr: cannot match ipv4 address with non-ipv4 one");
-        return d(this.octets, c.octets, 8, m);
-      }, u.prototype.prefixLengthFromSubnetMask = function() {
-        let c = 0, m = !1, p = {
+        return d(this.octets, u.octets, 8, m);
+      }, c.prototype.prefixLengthFromSubnetMask = function() {
+        let u = 0, m = !1, p = {
           0: 8,
           128: 7,
           192: 6,
@@ -288,69 +288,69 @@ var Kt = fn((Jt, Pe) => {
           if (g = this.octets[b], g in p) {
             if (x = p[g], m && x !== 0)
               return null;
-            x !== 8 && (m = !0), c += x;
+            x !== 8 && (m = !0), u += x;
           } else
             return null;
-        return 32 - c;
-      }, u.prototype.range = function() {
+        return 32 - u;
+      }, c.prototype.range = function() {
         return y.subnetMatch(this, this.SpecialRanges);
-      }, u.prototype.toByteArray = function() {
+      }, c.prototype.toByteArray = function() {
         return this.octets.slice(0);
-      }, u.prototype.toIPv4MappedAddress = function() {
+      }, c.prototype.toIPv4MappedAddress = function() {
         return y.IPv6.parse(`::ffff:${this.toString()}`);
-      }, u.prototype.toNormalizedString = function() {
+      }, c.prototype.toNormalizedString = function() {
         return this.toString();
-      }, u.prototype.toString = function() {
+      }, c.prototype.toString = function() {
         return this.octets.join(".");
-      }, u;
-    })(), y.IPv4.broadcastAddressFromCIDR = function(u) {
+      }, c;
+    })(), y.IPv4.broadcastAddressFromCIDR = function(c) {
       try {
-        let c = this.parseCIDR(u), m = c[0].toByteArray(), p = this.subnetMaskFromPrefixLength(c[1]).toByteArray(), b = [], g = 0;
+        let u = this.parseCIDR(c), m = u[0].toByteArray(), p = this.subnetMaskFromPrefixLength(u[1]).toByteArray(), b = [], g = 0;
         for (; g < 4; )
           b.push(parseInt(m[g], 10) | parseInt(p[g], 10) ^ 255), g++;
         return new this(b);
-      } catch (c) {
-        throw new Error("ipaddr: the address does not have IPv4 CIDR format", { cause: c });
+      } catch (u) {
+        throw new Error("ipaddr: the address does not have IPv4 CIDR format", { cause: u });
       }
-    }, y.IPv4.isIPv4 = function(u) {
-      return this.parser(u) !== null;
-    }, y.IPv4.isValid = function(u) {
+    }, y.IPv4.isIPv4 = function(c) {
+      return this.parser(c) !== null;
+    }, y.IPv4.isValid = function(c) {
       try {
-        return new this(this.parser(u)), !0;
+        return new this(this.parser(c)), !0;
       } catch {
         return !1;
       }
-    }, y.IPv4.isValidCIDR = function(u) {
+    }, y.IPv4.isValidCIDR = function(c) {
       try {
-        return this.parseCIDR(u), !0;
+        return this.parseCIDR(c), !0;
       } catch {
         return !1;
       }
-    }, y.IPv4.isValidFourPartDecimal = function(u) {
-      return !!(y.IPv4.isValid(u) && u.match(/^(0|[1-9]\d*)(\.(0|[1-9]\d*)){3}$/));
-    }, y.IPv4.isValidCIDRFourPartDecimal = function(u) {
-      let c = u.match(/^(.+)\/(\d+)$/);
-      return !y.IPv4.isValidCIDR(u) || !c ? !1 : y.IPv4.isValidFourPartDecimal(c[1]);
-    }, y.IPv4.networkAddressFromCIDR = function(u) {
-      let c, m, p, b, g;
+    }, y.IPv4.isValidFourPartDecimal = function(c) {
+      return !!(y.IPv4.isValid(c) && c.match(/^(0|[1-9]\d*)(\.(0|[1-9]\d*)){3}$/));
+    }, y.IPv4.isValidCIDRFourPartDecimal = function(c) {
+      let u = c.match(/^(.+)\/(\d+)$/);
+      return !y.IPv4.isValidCIDR(c) || !u ? !1 : y.IPv4.isValidFourPartDecimal(u[1]);
+    }, y.IPv4.networkAddressFromCIDR = function(c) {
+      let u, m, p, b, g;
       try {
-        for (c = this.parseCIDR(u), p = c[0].toByteArray(), g = this.subnetMaskFromPrefixLength(c[1]).toByteArray(), b = [], m = 0; m < 4; )
+        for (u = this.parseCIDR(c), p = u[0].toByteArray(), g = this.subnetMaskFromPrefixLength(u[1]).toByteArray(), b = [], m = 0; m < 4; )
           b.push(parseInt(p[m], 10) & parseInt(g[m], 10)), m++;
         return new this(b);
       } catch (x) {
         throw new Error("ipaddr: the address does not have IPv4 CIDR format", { cause: x });
       }
-    }, y.IPv4.parse = function(u) {
-      let c = this.parser(u);
-      if (c === null)
+    }, y.IPv4.parse = function(c) {
+      let u = this.parser(c);
+      if (u === null)
         throw new Error("ipaddr: string is not formatted like an IPv4 Address");
-      return new this(c);
-    }, y.IPv4.parseCIDR = function(u) {
-      let c;
-      if (c = u.match(/^(.+)\/(\d+)$/)) {
-        let m = parseInt(c[2]);
+      return new this(u);
+    }, y.IPv4.parseCIDR = function(c) {
+      let u;
+      if (u = c.match(/^(.+)\/(\d+)$/)) {
+        let m = parseInt(u[2]);
         if (m >= 0 && m <= 32) {
-          let p = [this.parse(c[1]), m];
+          let p = [this.parse(u[1]), m];
           return Object.defineProperty(p, "toString", {
             value: function() {
               return this.join("/");
@@ -359,17 +359,17 @@ var Kt = fn((Jt, Pe) => {
         }
       }
       throw new Error("ipaddr: string is not formatted like an IPv4 CIDR range");
-    }, y.IPv4.parser = function(u) {
-      let c, m, p;
-      if (c = u.match(t.fourOctet))
+    }, y.IPv4.parser = function(c) {
+      let u, m, p;
+      if (u = c.match(t.fourOctet))
         return (function() {
-          let b = c.slice(1, 6), g = [];
+          let b = u.slice(1, 6), g = [];
           for (let x = 0; x < b.length; x++)
             m = b[x], g.push(h(m));
           return g;
         })();
-      if (c = u.match(t.longValue)) {
-        if (p = h(c[1]), p > 4294967295 || p < 0)
+      if (u = c.match(t.longValue)) {
+        if (p = h(u[1]), p > 4294967295 || p < 0)
           throw new Error("ipaddr: address outside defined range");
         return (function() {
           let b = [], g;
@@ -377,32 +377,32 @@ var Kt = fn((Jt, Pe) => {
             b.push(p >> g & 255);
           return b;
         })().reverse();
-      } else return (c = u.match(t.twoOctet)) ? (function() {
-        let b = c.slice(1, 4), g = [];
+      } else return (u = c.match(t.twoOctet)) ? (function() {
+        let b = u.slice(1, 4), g = [];
         if (p = h(b[1]), p > 16777215 || p < 0)
           throw new Error("ipaddr: address outside defined range");
         return g.push(h(b[0])), g.push(p >> 16 & 255), g.push(p >> 8 & 255), g.push(p & 255), g;
-      })() : (c = u.match(t.threeOctet)) ? (function() {
-        let b = c.slice(1, 5), g = [];
+      })() : (u = c.match(t.threeOctet)) ? (function() {
+        let b = u.slice(1, 5), g = [];
         if (p = h(b[2]), p > 65535 || p < 0)
           throw new Error("ipaddr: address outside defined range");
         return g.push(h(b[0])), g.push(h(b[1])), g.push(p >> 8 & 255), g.push(p & 255), g;
       })() : null;
-    }, y.IPv4.subnetMaskFromPrefixLength = function(u) {
-      if (u = parseInt(u), Number.isNaN(u) || u < 0 || u > 32)
+    }, y.IPv4.subnetMaskFromPrefixLength = function(c) {
+      if (c = parseInt(c), Number.isNaN(c) || c < 0 || c > 32)
         throw new Error("ipaddr: invalid IPv4 prefix length");
-      let c = [0, 0, 0, 0], m = 0, p = Math.floor(u / 8);
+      let u = [0, 0, 0, 0], m = 0, p = Math.floor(c / 8);
       for (; m < p; )
-        c[m] = 255, m++;
-      return p < 4 && (c[p] = Math.pow(2, u % 8) - 1 << 8 - u % 8), new this(c);
+        u[m] = 255, m++;
+      return p < 4 && (u[p] = Math.pow(2, c % 8) - 1 << 8 - c % 8), new this(u);
     }, y.IPv6 = (function() {
-      function u(c, m) {
+      function c(u, m) {
         let p, b;
-        if (c.length === 16)
+        if (u.length === 16)
           for (this.parts = [], p = 0; p <= 14; p += 2)
-            this.parts.push(c[p] << 8 | c[p + 1]);
-        else if (c.length === 8)
-          this.parts = c;
+            this.parts.push(u[p] << 8 | u[p + 1]);
+        else if (u.length === 8)
+          this.parts = u;
         else
           throw new Error("ipaddr: ipv6 part count should be 8 or 16");
         for (p = 0; p < this.parts.length; p++)
@@ -410,67 +410,67 @@ var Kt = fn((Jt, Pe) => {
             throw new Error("ipaddr: ipv6 part should fit in 16 bits");
         m && (this.zoneId = m);
       }
-      return u.prototype.SpecialRanges = {
+      return c.prototype.SpecialRanges = {
         // RFC4291, here and after
-        unspecified: [new u([0, 0, 0, 0, 0, 0, 0, 0]), 128],
-        linkLocal: [new u([65152, 0, 0, 0, 0, 0, 0, 0]), 10],
-        multicast: [new u([65280, 0, 0, 0, 0, 0, 0, 0]), 8],
-        loopback: [new u([0, 0, 0, 0, 0, 0, 0, 1]), 128],
-        uniqueLocal: [new u([64512, 0, 0, 0, 0, 0, 0, 0]), 7],
-        ipv4Mapped: [new u([0, 0, 0, 0, 0, 65535, 0, 0]), 96],
+        unspecified: [new c([0, 0, 0, 0, 0, 0, 0, 0]), 128],
+        linkLocal: [new c([65152, 0, 0, 0, 0, 0, 0, 0]), 10],
+        multicast: [new c([65280, 0, 0, 0, 0, 0, 0, 0]), 8],
+        loopback: [new c([0, 0, 0, 0, 0, 0, 0, 1]), 128],
+        uniqueLocal: [new c([64512, 0, 0, 0, 0, 0, 0, 0]), 7],
+        ipv4Mapped: [new c([0, 0, 0, 0, 0, 65535, 0, 0]), 96],
         // RFC3879
-        deprecatedSiteLocal: [new u([65216, 0, 0, 0, 0, 0, 0, 0]), 10],
+        deprecatedSiteLocal: [new c([65216, 0, 0, 0, 0, 0, 0, 0]), 10],
         // RFC6666
-        discard: [new u([256, 0, 0, 0, 0, 0, 0, 0]), 64],
+        discard: [new c([256, 0, 0, 0, 0, 0, 0, 0]), 64],
         // RFC6145
-        rfc6145: [new u([0, 0, 0, 0, 65535, 0, 0, 0]), 96],
+        rfc6145: [new c([0, 0, 0, 0, 65535, 0, 0, 0]), 96],
         rfc6052: [
           // RFC6052
-          [new u([100, 65435, 0, 0, 0, 0, 0, 0]), 96],
+          [new c([100, 65435, 0, 0, 0, 0, 0, 0]), 96],
           // RFC8215
-          [new u([100, 65435, 1, 0, 0, 0, 0, 0]), 48]
+          [new c([100, 65435, 1, 0, 0, 0, 0, 0]), 48]
         ],
         // RFC3056
-        "6to4": [new u([8194, 0, 0, 0, 0, 0, 0, 0]), 16],
+        "6to4": [new c([8194, 0, 0, 0, 0, 0, 0, 0]), 16],
         // RFC6052, RFC6146
-        teredo: [new u([8193, 0, 0, 0, 0, 0, 0, 0]), 32],
+        teredo: [new c([8193, 0, 0, 0, 0, 0, 0, 0]), 32],
         // RFC5180
-        benchmarking: [new u([8193, 2, 0, 0, 0, 0, 0, 0]), 48],
+        benchmarking: [new c([8193, 2, 0, 0, 0, 0, 0, 0]), 48],
         // RFC7450
-        amt: [new u([8193, 3, 0, 0, 0, 0, 0, 0]), 32],
+        amt: [new c([8193, 3, 0, 0, 0, 0, 0, 0]), 32],
         as112v6: [
           // RFC7535
-          [new u([8193, 4, 274, 0, 0, 0, 0, 0]), 48],
+          [new c([8193, 4, 274, 0, 0, 0, 0, 0]), 48],
           // RFC7534
-          [new u([9760, 79, 32768, 0, 0, 0, 0, 0]), 48]
+          [new c([9760, 79, 32768, 0, 0, 0, 0, 0]), 48]
         ],
         // RFC4843
-        deprecatedOrchid: [new u([8193, 16, 0, 0, 0, 0, 0, 0]), 28],
+        deprecatedOrchid: [new c([8193, 16, 0, 0, 0, 0, 0, 0]), 28],
         // RFC7343
-        orchid2: [new u([8193, 32, 0, 0, 0, 0, 0, 0]), 28],
+        orchid2: [new c([8193, 32, 0, 0, 0, 0, 0, 0]), 28],
         // RFC9374
-        droneRemoteIdProtocolEntityTags: [new u([8193, 48, 0, 0, 0, 0, 0, 0]), 28],
+        droneRemoteIdProtocolEntityTags: [new c([8193, 48, 0, 0, 0, 0, 0, 0]), 28],
         // RFC9602
-        segmentRouting: [new u([24320, 0, 0, 0, 0, 0, 0, 0]), 16],
+        segmentRouting: [new c([24320, 0, 0, 0, 0, 0, 0, 0]), 16],
         reserved: [
           // RFC3849
-          [new u([8193, 0, 0, 0, 0, 0, 0, 0]), 23],
+          [new c([8193, 0, 0, 0, 0, 0, 0, 0]), 23],
           // RFC2928
-          [new u([8193, 3512, 0, 0, 0, 0, 0, 0]), 32],
+          [new c([8193, 3512, 0, 0, 0, 0, 0, 0]), 32],
           // RFC9637
-          [new u([16383, 0, 0, 0, 0, 0, 0, 0]), 20]
+          [new c([16383, 0, 0, 0, 0, 0, 0, 0]), 20]
         ]
-      }, u.prototype.isIPv4MappedAddress = function() {
+      }, c.prototype.isIPv4MappedAddress = function() {
         return this.range() === "ipv4Mapped";
-      }, u.prototype.kind = function() {
+      }, c.prototype.kind = function() {
         return "ipv6";
-      }, u.prototype.match = function(c, m) {
+      }, c.prototype.match = function(u, m) {
         let p;
-        if (m === void 0 && (p = c, c = p[0], m = p[1]), c.kind() !== "ipv6")
+        if (m === void 0 && (p = u, u = p[0], m = p[1]), u.kind() !== "ipv6")
           throw new Error("ipaddr: cannot match ipv6 address with non-ipv6 one");
-        return d(this.parts, c.parts, 16, m);
-      }, u.prototype.prefixLengthFromSubnetMask = function() {
-        let c = 0, m = !1, p = {
+        return d(this.parts, u.parts, 16, m);
+      }, c.prototype.prefixLengthFromSubnetMask = function() {
+        let u = 0, m = !1, p = {
           0: 16,
           32768: 15,
           49152: 14,
@@ -493,108 +493,108 @@ var Kt = fn((Jt, Pe) => {
           if (b = this.parts[x], b in p) {
             if (g = p[b], m && g !== 0)
               return null;
-            g !== 16 && (m = !0), c += g;
+            g !== 16 && (m = !0), u += g;
           } else
             return null;
-        return 128 - c;
-      }, u.prototype.range = function() {
+        return 128 - u;
+      }, c.prototype.range = function() {
         return y.subnetMatch(this, this.SpecialRanges);
-      }, u.prototype.toByteArray = function() {
-        let c, m = [], p = this.parts;
+      }, c.prototype.toByteArray = function() {
+        let u, m = [], p = this.parts;
         for (let b = 0; b < p.length; b++)
-          c = p[b], m.push(c >> 8), m.push(c & 255);
+          u = p[b], m.push(u >> 8), m.push(u & 255);
         return m;
-      }, u.prototype.toFixedLengthString = function() {
-        let c = (function() {
+      }, c.prototype.toFixedLengthString = function() {
+        let u = (function() {
           let p = [];
           for (let b = 0; b < this.parts.length; b++)
             p.push(f(this.parts[b].toString(16), 4));
           return p;
         }).call(this).join(":"), m = "";
-        return this.zoneId && (m = `%${this.zoneId}`), c + m;
-      }, u.prototype.toIPv4Address = function() {
+        return this.zoneId && (m = `%${this.zoneId}`), u + m;
+      }, c.prototype.toIPv4Address = function() {
         if (!this.isIPv4MappedAddress())
           throw new Error("ipaddr: trying to convert a generic ipv6 address to ipv4");
-        let c = this.parts.slice(-2), m = c[0], p = c[1];
+        let u = this.parts.slice(-2), m = u[0], p = u[1];
         return new y.IPv4([m >> 8, m & 255, p >> 8, p & 255]);
-      }, u.prototype.toNormalizedString = function() {
-        let c = (function() {
+      }, c.prototype.toNormalizedString = function() {
+        let u = (function() {
           let p = [];
           for (let b = 0; b < this.parts.length; b++)
             p.push(this.parts[b].toString(16));
           return p;
         }).call(this).join(":"), m = "";
-        return this.zoneId && (m = `%${this.zoneId}`), c + m;
-      }, u.prototype.toRFC5952String = function() {
-        let c = /((^|:)(0(:|$)){2,})/g, m = "";
+        return this.zoneId && (m = `%${this.zoneId}`), u + m;
+      }, c.prototype.toRFC5952String = function() {
+        let u = /((^|:)(0(:|$)){2,})/g, m = "";
         this.zoneId && (m = `%${this.zoneId}`);
         let p = this.toNormalizedString(), b = p.slice(0, p.length - m.length), g = 0, x = -1, w = -1, k;
-        for (; k = c.exec(b); ) {
+        for (; k = u.exec(b); ) {
           let C = (k[0].match(/0/g) || []).length;
           C > w && (w = C, g = k.index, x = k[0].length);
         }
         return x < 0 ? b + m : `${b.substring(0, g)}::${b.substring(g + x)}${m}`;
-      }, u.prototype.toString = function() {
+      }, c.prototype.toString = function() {
         return this.toRFC5952String();
-      }, u;
-    })(), y.IPv6.broadcastAddressFromCIDR = function(u) {
+      }, c;
+    })(), y.IPv6.broadcastAddressFromCIDR = function(c) {
       try {
-        let c = this.parseCIDR(u), m = c[0].toByteArray(), p = this.subnetMaskFromPrefixLength(c[1]).toByteArray(), b = [], g = 0;
+        let u = this.parseCIDR(c), m = u[0].toByteArray(), p = this.subnetMaskFromPrefixLength(u[1]).toByteArray(), b = [], g = 0;
         for (; g < 16; )
           b.push(parseInt(m[g], 10) | parseInt(p[g], 10) ^ 255), g++;
         return new this(b);
-      } catch (c) {
-        throw new Error("ipaddr: the address does not have IPv6 CIDR format", { cause: c });
+      } catch (u) {
+        throw new Error("ipaddr: the address does not have IPv6 CIDR format", { cause: u });
       }
-    }, y.IPv6.isIPv6 = function(u) {
-      return this.parser(u) !== null;
-    }, y.IPv6.isValid = function(u) {
-      if (typeof u == "string" && u.indexOf(":") === -1)
+    }, y.IPv6.isIPv6 = function(c) {
+      return this.parser(c) !== null;
+    }, y.IPv6.isValid = function(c) {
+      if (typeof c == "string" && c.indexOf(":") === -1)
         return !1;
       try {
-        let c = this.parser(u);
-        return new this(c.parts, c.zoneId), !0;
+        let u = this.parser(c);
+        return new this(u.parts, u.zoneId), !0;
       } catch {
         return !1;
       }
-    }, y.IPv6.isValidCIDR = function(u) {
-      if (typeof u == "string" && u.indexOf(":") === -1)
+    }, y.IPv6.isValidCIDR = function(c) {
+      if (typeof c == "string" && c.indexOf(":") === -1)
         return !1;
       try {
-        return this.parseCIDR(u), !0;
+        return this.parseCIDR(c), !0;
       } catch {
         return !1;
       }
-    }, y.IPv6.networkAddressFromCIDR = function(u) {
-      let c, m, p, b, g;
+    }, y.IPv6.networkAddressFromCIDR = function(c) {
+      let u, m, p, b, g;
       try {
-        for (c = this.parseCIDR(u), p = c[0].toByteArray(), g = this.subnetMaskFromPrefixLength(c[1]).toByteArray(), b = [], m = 0; m < 16; )
+        for (u = this.parseCIDR(c), p = u[0].toByteArray(), g = this.subnetMaskFromPrefixLength(u[1]).toByteArray(), b = [], m = 0; m < 16; )
           b.push(parseInt(p[m], 10) & parseInt(g[m], 10)), m++;
         return new this(b);
       } catch (x) {
         throw new Error("ipaddr: the address does not have IPv6 CIDR format", { cause: x });
       }
-    }, y.IPv6.parse = function(u) {
-      let c = this.parser(u);
-      if (c === null)
+    }, y.IPv6.parse = function(c) {
+      let u = this.parser(c);
+      if (u === null)
         throw new Error("ipaddr: string is not formatted like an IPv6 Address");
-      return new this(c.parts, c.zoneId);
-    }, y.IPv6.parseCIDR = function(u) {
-      let c, m, p;
-      if ((m = u.match(/^(.+)\/(\d+)$/)) && (c = parseInt(m[2]), c >= 0 && c <= 128))
-        return p = [this.parse(m[1]), c], Object.defineProperty(p, "toString", {
+      return new this(u.parts, u.zoneId);
+    }, y.IPv6.parseCIDR = function(c) {
+      let u, m, p;
+      if ((m = c.match(/^(.+)\/(\d+)$/)) && (u = parseInt(m[2]), u >= 0 && u <= 128))
+        return p = [this.parse(m[1]), u], Object.defineProperty(p, "toString", {
           value: function() {
             return this.join("/");
           }
         }), p;
       throw new Error("ipaddr: string is not formatted like an IPv6 CIDR range");
-    }, y.IPv6.parser = function(u) {
-      let c, m, p, b, g, x;
-      if (p = u.match(a.deprecatedTransitional))
+    }, y.IPv6.parser = function(c) {
+      let u, m, p, b, g, x;
+      if (p = c.match(a.deprecatedTransitional))
         return this.parser(`::ffff:${p[1]}`);
-      if (a.native.test(u))
-        return l(u, 8);
-      if ((p = u.match(a.transitional)) && (x = p[6] || "", c = p[1], p[1].endsWith("::") || (c = c.slice(0, -1)), c = l(c + x, 6), c && c.parts)) {
+      if (a.native.test(c))
+        return l(c, 8);
+      if ((p = c.match(a.transitional)) && (x = p[6] || "", u = p[1], p[1].endsWith("::") || (u = u.slice(0, -1)), u = l(u + x, 6), u && u.parts)) {
         for (g = [
           parseInt(p[2]),
           parseInt(p[3]),
@@ -603,56 +603,56 @@ var Kt = fn((Jt, Pe) => {
         ], m = 0; m < g.length; m++)
           if (b = g[m], !(0 <= b && b <= 255))
             return null;
-        return c.parts.push(g[0] << 8 | g[1]), c.parts.push(g[2] << 8 | g[3]), {
-          parts: c.parts,
-          zoneId: c.zoneId
+        return u.parts.push(g[0] << 8 | g[1]), u.parts.push(g[2] << 8 | g[3]), {
+          parts: u.parts,
+          zoneId: u.zoneId
         };
       }
       return null;
-    }, y.IPv6.subnetMaskFromPrefixLength = function(u) {
-      if (u = parseInt(u), Number.isNaN(u) || u < 0 || u > 128)
+    }, y.IPv6.subnetMaskFromPrefixLength = function(c) {
+      if (c = parseInt(c), Number.isNaN(c) || c < 0 || c > 128)
         throw new Error("ipaddr: invalid IPv6 prefix length");
-      let c = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], m = 0, p = Math.floor(u / 8);
+      let u = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], m = 0, p = Math.floor(c / 8);
       for (; m < p; )
-        c[m] = 255, m++;
-      return p < 16 && (c[p] = Math.pow(2, u % 8) - 1 << 8 - u % 8), new this(c);
-    }, y.fromByteArray = function(u) {
-      let c = u.length;
-      if (c === 4)
-        return new y.IPv4(u);
-      if (c === 16)
-        return new y.IPv6(u);
+        u[m] = 255, m++;
+      return p < 16 && (u[p] = Math.pow(2, c % 8) - 1 << 8 - c % 8), new this(u);
+    }, y.fromByteArray = function(c) {
+      let u = c.length;
+      if (u === 4)
+        return new y.IPv4(c);
+      if (u === 16)
+        return new y.IPv6(c);
       throw new Error("ipaddr: the binary input is neither an IPv6 nor IPv4 address");
-    }, y.isValid = function(u) {
-      return y.IPv6.isValid(u) || y.IPv4.isValid(u);
-    }, y.isValidCIDR = function(u) {
-      return y.IPv6.isValidCIDR(u) || y.IPv4.isValidCIDR(u);
-    }, y.parse = function(u) {
-      if (y.IPv6.isValid(u))
-        return y.IPv6.parse(u);
-      if (y.IPv4.isValid(u))
-        return y.IPv4.parse(u);
+    }, y.isValid = function(c) {
+      return y.IPv6.isValid(c) || y.IPv4.isValid(c);
+    }, y.isValidCIDR = function(c) {
+      return y.IPv6.isValidCIDR(c) || y.IPv4.isValidCIDR(c);
+    }, y.parse = function(c) {
+      if (y.IPv6.isValid(c))
+        return y.IPv6.parse(c);
+      if (y.IPv4.isValid(c))
+        return y.IPv4.parse(c);
       throw new Error("ipaddr: the address has neither IPv6 nor IPv4 format");
-    }, y.parseCIDR = function(u) {
+    }, y.parseCIDR = function(c) {
       try {
-        return y.IPv6.parseCIDR(u);
+        return y.IPv6.parseCIDR(c);
       } catch {
         try {
-          return y.IPv4.parseCIDR(u);
-        } catch (c) {
-          throw new Error("ipaddr: the address has neither IPv6 nor IPv4 CIDR format", { cause: c });
+          return y.IPv4.parseCIDR(c);
+        } catch (u) {
+          throw new Error("ipaddr: the address has neither IPv6 nor IPv4 CIDR format", { cause: u });
         }
       }
-    }, y.process = function(u) {
-      let c = this.parse(u);
-      return c.kind() === "ipv6" && c.isIPv4MappedAddress() ? c.toIPv4Address() : c;
-    }, y.subnetMatch = function(u, c, m) {
+    }, y.process = function(c) {
+      let u = this.parse(c);
+      return u.kind() === "ipv6" && u.isIPv4MappedAddress() ? u.toIPv4Address() : u;
+    }, y.subnetMatch = function(c, u, m) {
       let p, b, g, x;
       m == null && (m = "unicast");
-      for (b in c)
-        if (Object.prototype.hasOwnProperty.call(c, b)) {
-          for (g = c[b], g[0] && !(g[0] instanceof Array) && (g = [g]), p = 0; p < g.length; p++)
-            if (x = g[p], u.kind() === x[0].kind() && u.match.apply(u, x))
+      for (b in u)
+        if (Object.prototype.hasOwnProperty.call(u, b)) {
+          for (g = u[b], g[0] && !(g[0] instanceof Array) && (g = [g]), p = 0; p < g.length; p++)
+            if (x = g[p], c.kind() === x[0].kind() && c.match.apply(c, x))
               return b;
         }
       return m;
@@ -731,15 +731,15 @@ function Be(e, n) {
   let t = N(e), o = O(t?.role)?.toLowerCase();
   if (!t || !o)
     return null;
-  let r = N(t.__openclaw), i = O(r?.importedFrom), s = O(r?.cliSessionId), a = O(r?.externalId), l = N(r?.transcriptPosition), d = O(l?.source), f = !(d !== null && d.length <= 128 && typeof l?.rawSeq == "number" && Number.isSafeInteger(l.rawSeq) && l.rawSeq >= 0) && !!(i || s || a), y = O(r?.idempotencyKey) ?? O(t.idempotencyKey) ?? O(n?.idempotencyKey) ?? O(n?.clientRunId), u = ae(y), c = ae(n?.runId), m = ae(r?.runId), p = ae(
+  let r = N(t.__openclaw), i = O(r?.importedFrom), s = O(r?.cliSessionId), a = O(r?.externalId), l = N(r?.transcriptPosition), d = O(l?.source), f = !(d !== null && d.length <= 128 && typeof l?.rawSeq == "number" && Number.isSafeInteger(l.rawSeq) && l.rawSeq >= 0) && !!(i || s || a), y = O(r?.idempotencyKey) ?? O(t.idempotencyKey) ?? O(n?.idempotencyKey) ?? O(n?.clientRunId), c = ae(y), u = ae(n?.runId), m = ae(r?.runId), p = ae(
     N(t.openclawStreamFallback)?.runId
-  ), b = O(r?.mirrorOrigin) !== null, g = o === "assistant" && O(t.api)?.toLowerCase() === "cli", x = g && u?.startsWith("cli-assistant:") ? O(u.slice(14)) : u, w = o === "assistant" ? m ?? c ?? p ?? (g || !b ? x : null) : m ?? x ?? c;
+  ), b = O(r?.mirrorOrigin) !== null, g = o === "assistant" && O(t.api)?.toLowerCase() === "cli", x = g && c?.startsWith("cli-assistant:") ? O(c.slice(14)) : c, w = o === "assistant" ? m ?? u ?? p ?? (g || !b ? x : null) : m ?? x ?? u;
   return {
     role: o,
     id: O(r?.id) ?? O(n?.messageId),
     sequence: xn(e, n),
     idempotencyKey: y,
-    sendId: o === "user" ? u ?? w : null,
+    sendId: o === "user" ? c ?? w : null,
     runId: w,
     isImported: f,
     // Imported IDs belong to their provider and CLI session, never the native ID namespace.
@@ -801,13 +801,13 @@ function Tn(e) {
     return;
   let h = S(o?.title) ?? S(r?.title), f = vr(
     Y(o?.preferred_height) ?? Y(o?.preferredHeight) ?? Y(r?.preferred_height) ?? Y(r?.preferredHeight)
-  ), y = S(o?.class_name) ?? S(o?.className), u = S(o?.style), c = S(o?.sandbox), m = S(r?.url) ?? S(r?.entryUrl), p = S(r?.id) ?? S(r?.docId), b = S(r?.boardWidgetName), g = _n(b) ? b : void 0, x = {
+  ), y = S(o?.class_name) ?? S(o?.className), c = S(o?.style), u = S(o?.sandbox), m = S(r?.url) ?? S(r?.entryUrl), p = S(r?.id) ?? S(r?.docId), b = S(r?.boardWidgetName), g = _n(b) ? b : void 0, x = {
     kind: "canvas",
     surface: d,
     render: "url",
     ...h ? { title: h } : {},
     ...f ? { preferredHeight: f } : {},
-    ...c === "strict" || c === "scripts" ? { sandbox: c } : {},
+    ...u === "strict" || u === "scripts" ? { sandbox: u } : {},
     ...s ? { mcpApp: s } : {}
   };
   if (a && p === a)
@@ -819,7 +819,7 @@ function Tn(e) {
       url: w,
       ...m && p ? { viewId: p } : {},
       ...y ? { className: y } : {},
-      ...u ? { style: u } : {},
+      ...c ? { style: c } : {},
       ...m && g ? { boardWidgetName: g } : {}
     };
 }
@@ -966,8 +966,8 @@ var Ur = "Delivery: Final assistant text is not automatically delivered in this 
 var We = "\u27E6openclaw:ctx\u27E7";
 
 // openclaw/src/auto-reply/reply/strip-inbound-meta.ts
-var rc = `Context: ${We}`;
-var zr = [We, ...$e], oc = new RegExp(zr.map(re).join("|"), "g");
+var ru = `Context: ${We}`;
+var zr = [We, ...$e], ou = new RegExp(zr.map(re).join("|"), "g");
 
 // openclaw/packages/llm-core/src/types.ts
 var Fn = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>", Nn = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>", Ln = "OpenClaw runtime context:", Bn = "End OpenClaw runtime context.";
@@ -975,7 +975,7 @@ var Fn = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>", Nn = "<<<END_OPENCLAW_INTERNAL
 // openclaw/src/agents/internal-runtime-context.ts
 var qr = Fn, Gr = Nn;
 var Un = "This context is runtime-generated, not user-authored. Keep internal details private.";
-var Sc = ["OpenClaw runtime context (internal):", Un, ""].join(`
+var Su = ["OpenClaw runtime context (internal):", Un, ""].join(`
 `) + `
 `;
 function Ce(e) {
@@ -984,20 +984,20 @@ function Ce(e) {
     pattern: new RegExp(`(?:^|\\r?\\n)[ \\t]*${re(e)}[ \\t]*(?=\\r?\\n|$)`, "g")
   };
 }
-var Ac = Ce(qr), Ec = Ce(Gr), vc = Ce(Ln), Mc = Ce(Bn);
+var Au = Ce(qr), Eu = Ce(Gr), vu = Ce(Ln), Mu = Ce(Bn);
 var Jr = [
   "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.",
   "OpenClaw runtime context for the immediately preceding user message.",
   "OpenClaw runtime event."
-], Kr = new RegExp(
+], Hr = new RegExp(
   Jr.flatMap((e) => {
     let n = e.split(". ");
     return n.map((t, o) => n.slice(o).join(". "));
   }).map((e) => e.split(/\s+/).map(re).join("\\s+")).join("|")
-), Hr = new RegExp(
+), Kr = new RegExp(
   Un.split(/\s+/).map(re).join("\\s+")
-), Dc = new RegExp(
-  `^[ \\t]*(?:${Kr.source})\\s+${Hr.source}[ \\t]*(?:\\r?\\n|$)`,
+), Du = new RegExp(
+  `^[ \\t]*(?:${Hr.source})\\s+${Kr.source}[ \\t]*(?:\\r?\\n|$)`,
   "gm"
 );
 
@@ -1132,7 +1132,7 @@ var Zr = /^([a-z0-9.+-]+:)/i, Qr = /:[0-9]*$/, eo = /^(\/\/?(?!\/)[^\?\s]*)(\?[^
 `, "	"], to = ["{", "}", "|", "\\", "^", "`"].concat(no), ro = ["'"].concat(to), Wn = ["%", "/", "?", ";", "#"].concat(ro), qn = ["/", "?", "#"], oo = 255, Gn = /^[+a-z0-9A-Z_-]{0,63}$/, io = /^([+a-z0-9A-Z_-]{0,63})(.*)$/, Jn = {
   javascript: !0,
   "javascript:": !0
-}, Kn = {
+}, Hn = {
   http: !0,
   https: !0,
   ftp: !0,
@@ -1157,40 +1157,40 @@ Te.prototype.parse = function(e, n) {
       return this.pathname = d[1], d[2] && (this.search = d[2]), this;
   }
   let s = Zr.exec(i);
-  if (s && (s = s[0], t = s.toLowerCase(), this.protocol = s, i = i.substr(s.length)), (n || s || i.match(/^\/\/[^@\/]+@[^@\/]+/)) && (r = i.substr(0, 2) === "//", r && !(s && Jn[s]) && (i = i.substr(2), this.slashes = !0)), !Jn[s] && (r || s && !Kn[s])) {
+  if (s && (s = s[0], t = s.toLowerCase(), this.protocol = s, i = i.substr(s.length)), (n || s || i.match(/^\/\/[^@\/]+@[^@\/]+/)) && (r = i.substr(0, 2) === "//", r && !(s && Jn[s]) && (i = i.substr(2), this.slashes = !0)), !Jn[s] && (r || s && !Hn[s])) {
     let d = -1;
-    for (let c = 0; c < qn.length; c++)
-      o = i.indexOf(qn[c]), o !== -1 && (d === -1 || o < d) && (d = o);
+    for (let u = 0; u < qn.length; u++)
+      o = i.indexOf(qn[u]), o !== -1 && (d === -1 || o < d) && (d = o);
     let h, f;
     d === -1 ? f = i.lastIndexOf("@") : f = i.lastIndexOf("@", d), f !== -1 && (h = i.slice(0, f), i = i.slice(f + 1), this.auth = h), d = -1;
-    for (let c = 0; c < Wn.length; c++)
-      o = i.indexOf(Wn[c]), o !== -1 && (d === -1 || o < d) && (d = o);
+    for (let u = 0; u < Wn.length; u++)
+      o = i.indexOf(Wn[u]), o !== -1 && (d === -1 || o < d) && (d = o);
     d === -1 && (d = i.length), i[d - 1] === ":" && d--;
     let y = i.slice(0, d);
     i = i.slice(d), this.parseHost(y), this.hostname = this.hostname || "";
-    let u = this.hostname[0] === "[" && this.hostname[this.hostname.length - 1] === "]";
-    if (!u) {
-      let c = this.hostname.split(/\./);
-      for (let m = 0, p = c.length; m < p; m++) {
-        let b = c[m];
+    let c = this.hostname[0] === "[" && this.hostname[this.hostname.length - 1] === "]";
+    if (!c) {
+      let u = this.hostname.split(/\./);
+      for (let m = 0, p = u.length; m < p; m++) {
+        let b = u[m];
         if (b && !b.match(Gn)) {
           let g = "";
           for (let x = 0, w = b.length; x < w; x++)
             b.charCodeAt(x) > 127 ? g += "x" : g += b[x];
           if (!g.match(Gn)) {
-            let x = c.slice(0, m), w = c.slice(m + 1), k = b.match(io);
+            let x = u.slice(0, m), w = u.slice(m + 1), k = b.match(io);
             k && (x.push(k[1]), w.unshift(k[2])), w.length && (i = w.join(".") + i), this.hostname = x.join(".");
             break;
           }
         }
       }
     }
-    this.hostname.length > oo && (this.hostname = ""), u && (this.hostname = this.hostname.substr(1, this.hostname.length - 2));
+    this.hostname.length > oo && (this.hostname = ""), c && (this.hostname = this.hostname.substr(1, this.hostname.length - 2));
   }
   let a = i.indexOf("#");
   a !== -1 && (this.hash = i.substr(a), i = i.slice(0, a));
   let l = i.indexOf("?");
-  return l !== -1 && (this.search = i.substr(l), i = i.slice(0, l)), i && (this.pathname = i), Kn[t] && this.hostname && !this.pathname && (this.pathname = ""), this;
+  return l !== -1 && (this.search = i.substr(l), i = i.slice(0, l)), i && (this.pathname = i), Hn[t] && this.hostname && !this.pathname && (this.pathname = ""), this;
 };
 Te.prototype.parseHost = function(e) {
   let n = Qr.exec(e);
@@ -1202,16 +1202,16 @@ var de = so;
 var Ve = {};
 gn(Ve, {
   Any: () => Je,
-  Cc: () => Ke,
+  Cc: () => He,
   Cf: () => ao,
   P: () => pe,
-  S: () => He,
+  S: () => Ke,
   Z: () => Xe
 });
-var Je = /[\0-\uD7FF\uE000-\uFFFF]|[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:[^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/, Ke = /[\0-\x1F\x7F-\x9F]/, ao = /[\xAD\u0600-\u0605\u061C\u06DD\u070F\u0890\u0891\u08E2\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFB]|\uD804[\uDCBD\uDCCD]|\uD80D[\uDC30-\uDC3F]|\uD82F[\uDCA0-\uDCA3]|\uD834[\uDD73-\uDD7A]|\uDB40[\uDC01\uDC20-\uDC7F]/, pe = /[!-#%-\*,-\/:;\?@\[-\]_\{\}\xA1\xA7\xAB\xB6\xB7\xBB\xBF\u037E\u0387\u055A-\u055F\u0589\u058A\u05BE\u05C0\u05C3\u05C6\u05F3\u05F4\u0609\u060A\u060C\u060D\u061B\u061D-\u061F\u066A-\u066D\u06D4\u0700-\u070D\u07F7-\u07F9\u0830-\u083E\u085E\u0964\u0965\u0970\u09FD\u0A76\u0AF0\u0C77\u0C84\u0DF4\u0E4F\u0E5A\u0E5B\u0F04-\u0F12\u0F14\u0F3A-\u0F3D\u0F85\u0FD0-\u0FD4\u0FD9\u0FDA\u104A-\u104F\u10FB\u1360-\u1368\u1400\u166E\u169B\u169C\u16EB-\u16ED\u1735\u1736\u17D4-\u17D6\u17D8-\u17DA\u1800-\u180A\u1944\u1945\u1A1E\u1A1F\u1AA0-\u1AA6\u1AA8-\u1AAD\u1B4E\u1B4F\u1B5A-\u1B60\u1B7D-\u1B7F\u1BFC-\u1BFF\u1C3B-\u1C3F\u1C7E\u1C7F\u1CC0-\u1CC7\u1CD3\u2010-\u2027\u2030-\u2043\u2045-\u2051\u2053-\u205E\u207D\u207E\u208D\u208E\u2308-\u230B\u2329\u232A\u2768-\u2775\u27C5\u27C6\u27E6-\u27EF\u2983-\u2998\u29D8-\u29DB\u29FC\u29FD\u2CF9-\u2CFC\u2CFE\u2CFF\u2D70\u2E00-\u2E2E\u2E30-\u2E4F\u2E52-\u2E5D\u3001-\u3003\u3008-\u3011\u3014-\u301F\u3030\u303D\u30A0\u30FB\uA4FE\uA4FF\uA60D-\uA60F\uA673\uA67E\uA6F2-\uA6F7\uA874-\uA877\uA8CE\uA8CF\uA8F8-\uA8FA\uA8FC\uA92E\uA92F\uA95F\uA9C1-\uA9CD\uA9DE\uA9DF\uAA5C-\uAA5F\uAADE\uAADF\uAAF0\uAAF1\uABEB\uFD3E\uFD3F\uFE10-\uFE19\uFE30-\uFE52\uFE54-\uFE61\uFE63\uFE68\uFE6A\uFE6B\uFF01-\uFF03\uFF05-\uFF0A\uFF0C-\uFF0F\uFF1A\uFF1B\uFF1F\uFF20\uFF3B-\uFF3D\uFF3F\uFF5B\uFF5D\uFF5F-\uFF65]|\uD800[\uDD00-\uDD02\uDF9F\uDFD0]|\uD801\uDD6F|\uD802[\uDC57\uDD1F\uDD3F\uDE50-\uDE58\uDE7F\uDEF0-\uDEF6\uDF39-\uDF3F\uDF99-\uDF9C]|\uD803[\uDD6E\uDEAD\uDED0\uDF55-\uDF59\uDF86-\uDF89]|\uD804[\uDC47-\uDC4D\uDCBB\uDCBC\uDCBE-\uDCC1\uDD40-\uDD43\uDD74\uDD75\uDDC5-\uDDC8\uDDCD\uDDDB\uDDDD-\uDDDF\uDE38-\uDE3D\uDEA9\uDFD4\uDFD5\uDFD7\uDFD8]|\uD805[\uDC4B-\uDC4F\uDC5A\uDC5B\uDC5D\uDCC6\uDDC1-\uDDD7\uDE41-\uDE43\uDE60-\uDE6C\uDEB9\uDF3C-\uDF3E]|\uD806[\uDC3B\uDD44-\uDD46\uDDE2\uDE3F-\uDE46\uDE9A-\uDE9C\uDE9E-\uDEA2\uDF00-\uDF09\uDFE1]|\uD807[\uDC41-\uDC45\uDC70\uDC71\uDEF7\uDEF8\uDF43-\uDF4F\uDFFF]|\uD809[\uDC70-\uDC74]|\uD80B[\uDFF1\uDFF2]|\uD81A[\uDE6E\uDE6F\uDEF5\uDF37-\uDF3B\uDF44]|\uD81B[\uDD6D-\uDD6F\uDE97-\uDE9A\uDFE2]|\uD82F\uDC9F|\uD836[\uDE87-\uDE8B]|\uD839\uDDFF|\uD83A[\uDD5E\uDD5F]/, He = /[\$\+<->\^`\|~\xA2-\xA6\xA8\xA9\xAC\xAE-\xB1\xB4\xB8\xD7\xF7\u02C2-\u02C5\u02D2-\u02DF\u02E5-\u02EB\u02ED\u02EF-\u02FF\u0375\u0384\u0385\u03F6\u0482\u058D-\u058F\u0606-\u0608\u060B\u060E\u060F\u06DE\u06E9\u06FD\u06FE\u07F6\u07FE\u07FF\u0888\u09F2\u09F3\u09FA\u09FB\u0AF1\u0B70\u0BF3-\u0BFA\u0C7F\u0D4F\u0D79\u0E3F\u0F01-\u0F03\u0F13\u0F15-\u0F17\u0F1A-\u0F1F\u0F34\u0F36\u0F38\u0FBE-\u0FC5\u0FC7-\u0FCC\u0FCE\u0FCF\u0FD5-\u0FD8\u109E\u109F\u1390-\u1399\u166D\u17DB\u1940\u19DE-\u19FF\u1B61-\u1B6A\u1B74-\u1B7C\u1FBD\u1FBF-\u1FC1\u1FCD-\u1FCF\u1FDD-\u1FDF\u1FED-\u1FEF\u1FFD\u1FFE\u2044\u2052\u207A-\u207C\u208A-\u208C\u20A0-\u20C1\u2100\u2101\u2103-\u2106\u2108\u2109\u2114\u2116-\u2118\u211E-\u2123\u2125\u2127\u2129\u212E\u213A\u213B\u2140-\u2144\u214A-\u214D\u214F\u218A\u218B\u2190-\u2307\u230C-\u2328\u232B-\u2429\u2440-\u244A\u249C-\u24E9\u2500-\u2767\u2794-\u27C4\u27C7-\u27E5\u27F0-\u2982\u2999-\u29D7\u29DC-\u29FB\u29FE-\u2B73\u2B76-\u2BFF\u2CE5-\u2CEA\u2E50\u2E51\u2E80-\u2E99\u2E9B-\u2EF3\u2F00-\u2FD5\u2FF0-\u2FFF\u3004\u3012\u3013\u3020\u3036\u3037\u303E\u303F\u309B\u309C\u3190\u3191\u3196-\u319F\u31C0-\u31E5\u31EF\u3200-\u321E\u322A-\u3247\u3250\u3260-\u327F\u328A-\u32B0\u32C0-\u33FF\u4DC0-\u4DFF\uA490-\uA4C6\uA700-\uA716\uA720\uA721\uA789\uA78A\uA828-\uA82B\uA836-\uA839\uAA77-\uAA79\uAB5B\uAB6A\uAB6B\uFB29\uFBB2-\uFBD2\uFD40-\uFD4F\uFD90\uFD91\uFDC8-\uFDCF\uFDFC-\uFDFF\uFE62\uFE64-\uFE66\uFE69\uFF04\uFF0B\uFF1C-\uFF1E\uFF3E\uFF40\uFF5C\uFF5E\uFFE0-\uFFE6\uFFE8-\uFFEE\uFFFC\uFFFD]|\uD800[\uDD37-\uDD3F\uDD79-\uDD89\uDD8C-\uDD8E\uDD90-\uDD9C\uDDA0\uDDD0-\uDDFC]|\uD802[\uDC77\uDC78\uDEC8]|\uD803[\uDD8E\uDD8F\uDED1-\uDED8]|\uD805\uDF3F|\uD807[\uDFD5-\uDFF1]|\uD81A[\uDF3C-\uDF3F\uDF45]|\uD82F\uDC9C|\uD833[\uDC00-\uDCEF\uDCFA-\uDCFC\uDD00-\uDEB3\uDEBA-\uDED0\uDEE0-\uDEF0\uDF50-\uDFC3]|\uD834[\uDC00-\uDCF5\uDD00-\uDD26\uDD29-\uDD64\uDD6A-\uDD6C\uDD83\uDD84\uDD8C-\uDDA9\uDDAE-\uDDEA\uDE00-\uDE41\uDE45\uDF00-\uDF56]|\uD835[\uDEC1\uDEDB\uDEFB\uDF15\uDF35\uDF4F\uDF6F\uDF89\uDFA9\uDFC3]|\uD836[\uDC00-\uDDFF\uDE37-\uDE3A\uDE6D-\uDE74\uDE76-\uDE83\uDE85\uDE86]|\uD838[\uDD4F\uDEFF]|\uD83B[\uDCAC\uDCB0\uDD2E\uDEF0\uDEF1]|\uD83C[\uDC00-\uDC2B\uDC30-\uDC93\uDCA0-\uDCAE\uDCB1-\uDCBF\uDCC1-\uDCCF\uDCD1-\uDCF5\uDD0D-\uDDAD\uDDE6-\uDE02\uDE10-\uDE3B\uDE40-\uDE48\uDE50\uDE51\uDE60-\uDE65\uDF00-\uDFFF]|\uD83D[\uDC00-\uDED8\uDEDC-\uDEEC\uDEF0-\uDEFC\uDF00-\uDFD9\uDFE0-\uDFEB\uDFF0]|\uD83E[\uDC00-\uDC0B\uDC10-\uDC47\uDC50-\uDC59\uDC60-\uDC87\uDC90-\uDCAD\uDCB0-\uDCBB\uDCC0\uDCC1\uDCD0-\uDCD8\uDD00-\uDE57\uDE60-\uDE6D\uDE70-\uDE7C\uDE80-\uDE8A\uDE8E-\uDEC6\uDEC8\uDECD-\uDEDC\uDEDF-\uDEEA\uDEEF-\uDEF8\uDF00-\uDF92\uDF94-\uDFEF\uDFFA]/, Xe = /[ \xA0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]/;
+var Je = /[\0-\uD7FF\uE000-\uFFFF]|[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:[^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/, He = /[\0-\x1F\x7F-\x9F]/, ao = /[\xAD\u0600-\u0605\u061C\u06DD\u070F\u0890\u0891\u08E2\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFB]|\uD804[\uDCBD\uDCCD]|\uD80D[\uDC30-\uDC3F]|\uD82F[\uDCA0-\uDCA3]|\uD834[\uDD73-\uDD7A]|\uDB40[\uDC01\uDC20-\uDC7F]/, pe = /[!-#%-\*,-\/:;\?@\[-\]_\{\}\xA1\xA7\xAB\xB6\xB7\xBB\xBF\u037E\u0387\u055A-\u055F\u0589\u058A\u05BE\u05C0\u05C3\u05C6\u05F3\u05F4\u0609\u060A\u060C\u060D\u061B\u061D-\u061F\u066A-\u066D\u06D4\u0700-\u070D\u07F7-\u07F9\u0830-\u083E\u085E\u0964\u0965\u0970\u09FD\u0A76\u0AF0\u0C77\u0C84\u0DF4\u0E4F\u0E5A\u0E5B\u0F04-\u0F12\u0F14\u0F3A-\u0F3D\u0F85\u0FD0-\u0FD4\u0FD9\u0FDA\u104A-\u104F\u10FB\u1360-\u1368\u1400\u166E\u169B\u169C\u16EB-\u16ED\u1735\u1736\u17D4-\u17D6\u17D8-\u17DA\u1800-\u180A\u1944\u1945\u1A1E\u1A1F\u1AA0-\u1AA6\u1AA8-\u1AAD\u1B4E\u1B4F\u1B5A-\u1B60\u1B7D-\u1B7F\u1BFC-\u1BFF\u1C3B-\u1C3F\u1C7E\u1C7F\u1CC0-\u1CC7\u1CD3\u2010-\u2027\u2030-\u2043\u2045-\u2051\u2053-\u205E\u207D\u207E\u208D\u208E\u2308-\u230B\u2329\u232A\u2768-\u2775\u27C5\u27C6\u27E6-\u27EF\u2983-\u2998\u29D8-\u29DB\u29FC\u29FD\u2CF9-\u2CFC\u2CFE\u2CFF\u2D70\u2E00-\u2E2E\u2E30-\u2E4F\u2E52-\u2E5D\u3001-\u3003\u3008-\u3011\u3014-\u301F\u3030\u303D\u30A0\u30FB\uA4FE\uA4FF\uA60D-\uA60F\uA673\uA67E\uA6F2-\uA6F7\uA874-\uA877\uA8CE\uA8CF\uA8F8-\uA8FA\uA8FC\uA92E\uA92F\uA95F\uA9C1-\uA9CD\uA9DE\uA9DF\uAA5C-\uAA5F\uAADE\uAADF\uAAF0\uAAF1\uABEB\uFD3E\uFD3F\uFE10-\uFE19\uFE30-\uFE52\uFE54-\uFE61\uFE63\uFE68\uFE6A\uFE6B\uFF01-\uFF03\uFF05-\uFF0A\uFF0C-\uFF0F\uFF1A\uFF1B\uFF1F\uFF20\uFF3B-\uFF3D\uFF3F\uFF5B\uFF5D\uFF5F-\uFF65]|\uD800[\uDD00-\uDD02\uDF9F\uDFD0]|\uD801\uDD6F|\uD802[\uDC57\uDD1F\uDD3F\uDE50-\uDE58\uDE7F\uDEF0-\uDEF6\uDF39-\uDF3F\uDF99-\uDF9C]|\uD803[\uDD6E\uDEAD\uDED0\uDF55-\uDF59\uDF86-\uDF89]|\uD804[\uDC47-\uDC4D\uDCBB\uDCBC\uDCBE-\uDCC1\uDD40-\uDD43\uDD74\uDD75\uDDC5-\uDDC8\uDDCD\uDDDB\uDDDD-\uDDDF\uDE38-\uDE3D\uDEA9\uDFD4\uDFD5\uDFD7\uDFD8]|\uD805[\uDC4B-\uDC4F\uDC5A\uDC5B\uDC5D\uDCC6\uDDC1-\uDDD7\uDE41-\uDE43\uDE60-\uDE6C\uDEB9\uDF3C-\uDF3E]|\uD806[\uDC3B\uDD44-\uDD46\uDDE2\uDE3F-\uDE46\uDE9A-\uDE9C\uDE9E-\uDEA2\uDF00-\uDF09\uDFE1]|\uD807[\uDC41-\uDC45\uDC70\uDC71\uDEF7\uDEF8\uDF43-\uDF4F\uDFFF]|\uD809[\uDC70-\uDC74]|\uD80B[\uDFF1\uDFF2]|\uD81A[\uDE6E\uDE6F\uDEF5\uDF37-\uDF3B\uDF44]|\uD81B[\uDD6D-\uDD6F\uDE97-\uDE9A\uDFE2]|\uD82F\uDC9F|\uD836[\uDE87-\uDE8B]|\uD839\uDDFF|\uD83A[\uDD5E\uDD5F]/, Ke = /[\$\+<->\^`\|~\xA2-\xA6\xA8\xA9\xAC\xAE-\xB1\xB4\xB8\xD7\xF7\u02C2-\u02C5\u02D2-\u02DF\u02E5-\u02EB\u02ED\u02EF-\u02FF\u0375\u0384\u0385\u03F6\u0482\u058D-\u058F\u0606-\u0608\u060B\u060E\u060F\u06DE\u06E9\u06FD\u06FE\u07F6\u07FE\u07FF\u0888\u09F2\u09F3\u09FA\u09FB\u0AF1\u0B70\u0BF3-\u0BFA\u0C7F\u0D4F\u0D79\u0E3F\u0F01-\u0F03\u0F13\u0F15-\u0F17\u0F1A-\u0F1F\u0F34\u0F36\u0F38\u0FBE-\u0FC5\u0FC7-\u0FCC\u0FCE\u0FCF\u0FD5-\u0FD8\u109E\u109F\u1390-\u1399\u166D\u17DB\u1940\u19DE-\u19FF\u1B61-\u1B6A\u1B74-\u1B7C\u1FBD\u1FBF-\u1FC1\u1FCD-\u1FCF\u1FDD-\u1FDF\u1FED-\u1FEF\u1FFD\u1FFE\u2044\u2052\u207A-\u207C\u208A-\u208C\u20A0-\u20C1\u2100\u2101\u2103-\u2106\u2108\u2109\u2114\u2116-\u2118\u211E-\u2123\u2125\u2127\u2129\u212E\u213A\u213B\u2140-\u2144\u214A-\u214D\u214F\u218A\u218B\u2190-\u2307\u230C-\u2328\u232B-\u2429\u2440-\u244A\u249C-\u24E9\u2500-\u2767\u2794-\u27C4\u27C7-\u27E5\u27F0-\u2982\u2999-\u29D7\u29DC-\u29FB\u29FE-\u2B73\u2B76-\u2BFF\u2CE5-\u2CEA\u2E50\u2E51\u2E80-\u2E99\u2E9B-\u2EF3\u2F00-\u2FD5\u2FF0-\u2FFF\u3004\u3012\u3013\u3020\u3036\u3037\u303E\u303F\u309B\u309C\u3190\u3191\u3196-\u319F\u31C0-\u31E5\u31EF\u3200-\u321E\u322A-\u3247\u3250\u3260-\u327F\u328A-\u32B0\u32C0-\u33FF\u4DC0-\u4DFF\uA490-\uA4C6\uA700-\uA716\uA720\uA721\uA789\uA78A\uA828-\uA82B\uA836-\uA839\uAA77-\uAA79\uAB5B\uAB6A\uAB6B\uFB29\uFBB2-\uFBD2\uFD40-\uFD4F\uFD90\uFD91\uFDC8-\uFDCF\uFDFC-\uFDFF\uFE62\uFE64-\uFE66\uFE69\uFF04\uFF0B\uFF1C-\uFF1E\uFF3E\uFF40\uFF5C\uFF5E\uFFE0-\uFFE6\uFFE8-\uFFEE\uFFFC\uFFFD]|\uD800[\uDD37-\uDD3F\uDD79-\uDD89\uDD8C-\uDD8E\uDD90-\uDD9C\uDDA0\uDDD0-\uDDFC]|\uD802[\uDC77\uDC78\uDEC8]|\uD803[\uDD8E\uDD8F\uDED1-\uDED8]|\uD805\uDF3F|\uD807[\uDFD5-\uDFF1]|\uD81A[\uDF3C-\uDF3F\uDF45]|\uD82F\uDC9C|\uD833[\uDC00-\uDCEF\uDCFA-\uDCFC\uDD00-\uDEB3\uDEBA-\uDED0\uDEE0-\uDEF0\uDF50-\uDFC3]|\uD834[\uDC00-\uDCF5\uDD00-\uDD26\uDD29-\uDD64\uDD6A-\uDD6C\uDD83\uDD84\uDD8C-\uDDA9\uDDAE-\uDDEA\uDE00-\uDE41\uDE45\uDF00-\uDF56]|\uD835[\uDEC1\uDEDB\uDEFB\uDF15\uDF35\uDF4F\uDF6F\uDF89\uDFA9\uDFC3]|\uD836[\uDC00-\uDDFF\uDE37-\uDE3A\uDE6D-\uDE74\uDE76-\uDE83\uDE85\uDE86]|\uD838[\uDD4F\uDEFF]|\uD83B[\uDCAC\uDCB0\uDD2E\uDEF0\uDEF1]|\uD83C[\uDC00-\uDC2B\uDC30-\uDC93\uDCA0-\uDCAE\uDCB1-\uDCBF\uDCC1-\uDCCF\uDCD1-\uDCF5\uDD0D-\uDDAD\uDDE6-\uDE02\uDE10-\uDE3B\uDE40-\uDE48\uDE50\uDE51\uDE60-\uDE65\uDF00-\uDFFF]|\uD83D[\uDC00-\uDED8\uDEDC-\uDEEC\uDEF0-\uDEFC\uDF00-\uDFD9\uDFE0-\uDFEB\uDFF0]|\uD83E[\uDC00-\uDC0B\uDC10-\uDC47\uDC50-\uDC59\uDC60-\uDC87\uDC90-\uDCAD\uDCB0-\uDCBB\uDCC0\uDCC1\uDCD0-\uDCD8\uDD00-\uDE57\uDE60-\uDE6D\uDE70-\uDE7C\uDE80-\uDE8A\uDE8E-\uDEC6\uDEC8\uDECD-\uDEDC\uDEDF-\uDEEA\uDEEF-\uDEF8\uDF00-\uDF92\uDF94-\uDFEF\uDFFA]/, Xe = /[ \xA0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]/;
 
 // openclaw/node_modules/.pnpm/entities@8.1.0/node_modules/entities/dist/decode-codepoint.js
-var uo = [
+var co = [
   8364,
   0,
   8218,
@@ -1245,14 +1245,14 @@ var uo = [
   382,
   376
 ];
-function co(e) {
+function uo(e) {
   return e === 0 || e >= 55296 && e <= 57343 || e > 1114111;
 }
-function Hn(e) {
-  return co(e) ? 65533 : e >= 128 && e <= 159 && uo[e - 128] || e;
+function Kn(e) {
+  return uo(e) ? 65533 : e >= 128 && e <= 159 && co[e - 128] || e;
 }
 function Xn(e) {
-  return e - 1 >>> 0 < 127 || e - 160 >>> 0 < 55136 ? String.fromCharCode(e) : String.fromCodePoint(Hn(e));
+  return e - 1 >>> 0 < 127 || e - 160 >>> 0 < 55136 ? String.fromCharCode(e) : String.fromCodePoint(Kn(e));
 }
 
 // openclaw/node_modules/.pnpm/entities@8.1.0/node_modules/entities/dist/internal/decode-shared.js
@@ -1266,23 +1266,23 @@ function Vn(e, n, t, o, r, i) {
   let a = e.length, l = i * 90, d = 0, h = () => {
     let T = $[e.charCodeAt(d++)];
     return T < i ? T : T * 91 - l + $[e.charCodeAt(d++)];
-  }, f = t - o, y = t + r, u = new Int32Array(y);
-  u.fill(-1, o, i), u.fill(-1, i + f, y);
-  let c = new Int32Array(y), m = new Int32Array(y);
+  }, f = t - o, y = t + r, c = new Int32Array(y);
+  c.fill(-1, o, i), c.fill(-1, i + f, y);
+  let u = new Int32Array(y), m = new Int32Array(y);
   function p(T, M) {
     let I = 0, D = M, j = M + T;
     for (; D < j; ) {
       let L = $[e.charCodeAt(d++)];
       if (L < 89)
-        I += L, u[D++] = I;
+        I += L, c[D++] = I;
       else if (L === 89) {
         let v = $[e.charCodeAt(d++)] + 2;
         for (; v--; )
-          u[D++] = ++I;
+          c[D++] = ++I;
       } else {
         let v = $[e.charCodeAt(d++)];
         I += 89 + // eslint-disable-next-line unicorn/prefer-minimal-ternary -- branches read a different number of side-effecting input bytes
-        (v < 90 ? v * 91 + $[e.charCodeAt(d++)] : $[e.charCodeAt(d++)] * 8281 + $[e.charCodeAt(d++)] * 91 + $[e.charCodeAt(d++)]), u[D++] = I;
+        (v < 90 ? v * 91 + $[e.charCodeAt(d++)] : $[e.charCodeAt(d++)] * 8281 + $[e.charCodeAt(d++)] * 91 + $[e.charCodeAt(d++)]), c[D++] = I;
       }
     }
   }
@@ -1291,8 +1291,8 @@ function Vn(e, n, t, o, r, i) {
   function w(T, M) {
     for (let I = 0; I < T; I++) {
       let D = M + I, j = h(), L = h();
-      b[x * 2] = j, b[x * 2 + 1] = L, x += 1, c[D] = g;
-      let v = (u[j] < 0 ? m[j] : 1) + (u[L] < 0 ? m[L] : 1);
+      b[x * 2] = j, b[x * 2 + 1] = L, x += 1, u[D] = g;
+      let v = (c[j] < 0 ? m[j] : 1) + (c[L] < 0 ? m[L] : 1);
       m[D] = v, g += v;
     }
   }
@@ -1300,9 +1300,9 @@ function Vn(e, n, t, o, r, i) {
   let k = new Uint16Array(g), C = 0;
   for (let T = 0; T < x; T++)
     for (let M = 0; M < 2; M++) {
-      let I = b[T * 2 + M], D = u[I];
+      let I = b[T * 2 + M], D = c[I];
       if (D < 0) {
-        let j = c[I], L = j + m[I];
+        let j = u[I], L = j + m[I];
         for (; j < L; )
           k[C++] = k[j++];
       } else
@@ -1312,9 +1312,9 @@ function Vn(e, n, t, o, r, i) {
   for (; d < a; ) {
     let T = $[e.charCodeAt(d++)];
     T >= i && (T = T * 91 - l + $[e.charCodeAt(d++)]);
-    let M = u[T];
+    let M = c[T];
     if (M < 0) {
-      let I = c[T], D = I + m[T];
+      let I = u[T], D = I + m[T];
       for (; I < D; )
         _[A++] = k[I++];
     } else
@@ -1422,12 +1422,12 @@ function yo(e, n, t) {
     return e;
   let i = e.length, s = 0, a = "", l = o[0], d = l & F.JUMP_TABLE, h = (l & F.BRANCH_LENGTH) >> 7;
   do {
-    let f = r + 1, y = e.charCodeAt(f), u, c;
+    let f = r + 1, y = e.charCodeAt(f), c, u;
     if (y === U.NUM) {
       let m = mo(e, f, i);
-      u = po(m), n && u > 0 && e.charCodeAt(f + u - 1) !== U.SEMI && (u = 0), c = u === 0 ? "" : Xn(m & lo);
+      c = po(m), n && c > 0 && e.charCodeAt(f + c - 1) !== U.SEMI && (c = 0), u = c === 0 ? "" : Xn(m & lo);
     } else if (rt(y)) {
-      u = 0, c = "";
+      c = 0, u = "";
       let m = y - d, p;
       if (m >>> 0 < h) {
         let k = o[1 + m];
@@ -1481,10 +1481,10 @@ function yo(e, n, t) {
         let k = x >>> 14, C = e.charCodeAt(w);
         if (k !== 0) {
           if (C === U.SEMI) {
-            u = w - f + 1, c = k === 1 ? String.fromCharCode(x & F.VALUE_MASK) : Qn(o, p, k);
+            c = w - f + 1, u = k === 1 ? String.fromCharCode(x & F.VALUE_MASK) : Qn(o, p, k);
             break;
           }
-          if (!n && (x & F.FLAG13) === 0 && (u = w - f, b = p, g = k), k === 1)
+          if (!n && (x & F.FLAG13) === 0 && (c = w - f, b = p, g = k), k === 1)
             break;
         }
         let _ = ho(o, x, p + (k || 1), C);
@@ -1492,13 +1492,13 @@ function yo(e, n, t) {
           break;
         p = _, x = o[p], w += 1;
       }
-      if (c === "") {
+      if (u === "") {
         let k = x >>> 14;
-        k !== 0 && !n && (x & F.FLAG13) === 0 && (u = w - f, b = p, g = k), u > 0 && (c = Qn(o, b, g));
+        k !== 0 && !n && (x & F.FLAG13) === 0 && (c = w - f, b = p, g = k), c > 0 && (u = Qn(o, b, g));
       }
     } else
-      u = 0, c = "";
-    u === 0 || t && y !== U.NUM && e.charCodeAt(f + u - 1) !== U.SEMI && f + u < i && go(e.charCodeAt(f + u)) ? r = f : (s < r && (a += e.slice(s, r)), a += c, r = s = f + u), e.charCodeAt(r) !== U.AMP && (r = e.indexOf("&", r));
+      c = 0, u = "";
+    c === 0 || t && y !== U.NUM && e.charCodeAt(f + c - 1) !== U.SEMI && f + c < i && go(e.charCodeAt(f + c)) ? r = f : (s < r && (a += e.slice(s, r)), a += u, r = s = f + c), e.charCodeAt(r) !== U.AMP && (r = e.indexOf("&", r));
   } while (r >= 0);
   return a + e.slice(s);
 }
@@ -1519,7 +1519,7 @@ var it;
 // openclaw/node_modules/.pnpm/linkify-it@6.1.0/node_modules/linkify-it/build/index.mjs
 var xo = class {
   src_Any = Je.source;
-  src_Cc = Ke.source;
+  src_Cc = He.source;
   src_Z = Xe.source;
   src_P = pe.source;
   src_ZPCc = [
@@ -1837,9 +1837,9 @@ var _o = {
     let n = [], t = this.re.get_schema_search(), o, r, i, s, a, l, d = !1, h = !1, f = !1, y = 0;
     if (!e.length) return null;
     for (t.lastIndex = 0, this.__opts__.fuzzyLink && this.__schemas__["http:"] && (o = this.re.get_fuzzy_link_search(), o.lastIndex = 0), this.__opts__.fuzzyEmail && this.__schemas__["mailto:"] && (r = this.re.get_fuzzy_mail_host_search(), r.lastIndex = 0, i = this.re.get_mail_name_validator()); ; ) {
-      let u = Math.max(y - 1, 0);
+      let c = Math.max(y - 1, 0);
       if (r && i && !f && (!a || a.index < y))
-        for (r.lastIndex < u && (r.lastIndex = u); ; ) {
+        for (r.lastIndex < c && (r.lastIndex = c); ; ) {
           let g = r.exec(e);
           if (!g) {
             f = !0, a = void 0;
@@ -1852,11 +1852,11 @@ var _o = {
               index: g.index - x[1].length,
               lastIndex: g.index + g[0].length
             }, a.index >= y) break;
-            r.lastIndex < u && (r.lastIndex = u);
+            r.lastIndex < c && (r.lastIndex = c);
           }
         }
       if (o && !h && (!s || s.index < y))
-        for (o.lastIndex < u && (o.lastIndex = u); ; ) {
+        for (o.lastIndex < c && (o.lastIndex = c); ; ) {
           let g = o.exec(e);
           if (!g) {
             h = !0, s = void 0;
@@ -1867,14 +1867,14 @@ var _o = {
             index: g.index + g[1].length,
             lastIndex: g.index + g[0].length
           }, s.index >= y) break;
-          o.lastIndex < u && (o.lastIndex = u);
+          o.lastIndex < c && (o.lastIndex = c);
         }
-      let c = a;
-      (!c || s && (s.index < c.index || s.index === c.index && s.lastIndex > c.lastIndex)) && (c = s);
+      let u = a;
+      (!u || s && (s.index < u.index || s.index === u.index && s.lastIndex > u.lastIndex)) && (u = s);
       let m;
       if (!d) for (; ; ) {
         if (!l) {
-          t.lastIndex < u && (t.lastIndex = u);
+          t.lastIndex < c && (t.lastIndex = c);
           let w = t.exec(e);
           if (!w) {
             d = !0;
@@ -1890,7 +1890,7 @@ var _o = {
           l = void 0;
           continue;
         }
-        if (c && l.index > c.index) break;
+        if (u && l.index > u.index) break;
         let g = l;
         l = void 0;
         let x = this.testSchemaAt(e, g.schema, g.lastIndex);
@@ -1957,7 +1957,7 @@ var _o = {
 };
 
 // openclaw/node_modules/.pnpm/markdown-it@15.0.3/node_modules/markdown-it/dist/markdown-it.mjs
-var un = hn(ht(), 1);
+var cn = hn(ht(), 1);
 var mt = Object.defineProperty, At = (e, n) => {
   let t = {};
   for (var o in e) mt(t, o, {
@@ -1969,16 +1969,16 @@ var mt = Object.defineProperty, At = (e, n) => {
   arrayReplaceAt: () => No,
   asciiTrim: () => De,
   callable: () => Et,
-  escapeHtml: () => H,
+  escapeHtml: () => K,
   escapeRE: () => Jo,
   fromCodePoint: () => ge,
   isMdAsciiPunct: () => ye,
   isPunctChar: () => Mt,
   isPunctCharCode: () => me,
   isSpace: () => E,
-  isValidEntityCode: () => cn,
+  isValidEntityCode: () => un,
   isWhiteSpace: () => he,
-  lib: () => Ko,
+  lib: () => Ho,
   normalizeReference: () => Me,
   unescapeAll: () => ie,
   unescapeMd: () => jo
@@ -1992,7 +1992,7 @@ function Et(e) {
 function No(e, n, t) {
   return [].concat(e.slice(0, n), t, e.slice(n + 1));
 }
-function cn(e) {
+function un(e) {
   return !(e >= 55296 && e <= 57343 || e >= 64976 && e <= 65007 || (e & 65535) === 65535 || (e & 65535) === 65534 || e >= 0 && e <= 8 || e === 11 || e >= 14 && e <= 31 || e >= 127 && e <= 159 || e > 1114111);
 }
 function ge(e) {
@@ -2007,7 +2007,7 @@ var vt = /\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, Lo = new RegExp(`${vt.sou
 function Uo(e, n) {
   if (n.charCodeAt(0) === 35 && Bo.test(n)) {
     let o = n[1].toLowerCase() === "x" ? parseInt(n.slice(2), 16) : parseInt(n.slice(1), 10);
-    return cn(o) ? ge(o) : e;
+    return un(o) ? ge(o) : e;
   }
   let t = Se(e);
   return t !== e ? t : e;
@@ -2029,7 +2029,7 @@ var zo = /[&<>"]/, $o = /[&<>"]/g, Wo = {
 function qo(e) {
   return Wo[e];
 }
-function H(e) {
+function K(e) {
   return zo.test(e) ? e.replace($o, qo) : e;
 }
 var Go = /[.?*+^$[\]\\(){}|-]/g;
@@ -2063,7 +2063,7 @@ function he(e) {
   return !1;
 }
 function Mt(e) {
-  return pe.test(e) || He.test(e);
+  return pe.test(e) || Ke.test(e);
 }
 function me(e) {
   return Mt(ge(e));
@@ -2120,11 +2120,11 @@ function De(e) {
   for (; t >= n && yt(e.charCodeAt(t)); t--) ;
   return e.slice(n, t + 1);
 }
-var Ko = {
+var Ho = {
   mdurl: Ge,
   ucmicro: Ve
 };
-function Ho(e, n, t) {
+function Ko(e, n, t) {
   let o, r, i, s, a = e.posMax, l = e.pos;
   for (e.pos = n + 1, o = 1; e.pos < a; ) {
     if (i = e.src.charCodeAt(e.pos), i === 93 && (o--, o === 0)) {
@@ -2205,7 +2205,7 @@ function Vo(e, n, t, o) {
 }
 var Yo = /* @__PURE__ */ At({
   parseLinkDestination: () => Xo,
-  parseLinkLabel: () => Ho,
+  parseLinkLabel: () => Ko,
   parseLinkTitle: () => Vo
 });
 function be(e) {
@@ -2529,11 +2529,11 @@ var ee = class {
 }, q = {};
 q.code_inline = function(e, n, t, o, r) {
   let i = e[n];
-  return `<code${r.renderAttrs(i)}>${H(i.content)}</code>`;
+  return `<code${r.renderAttrs(i)}>${K(i.content)}</code>`;
 };
 q.code_block = function(e, n, t, o, r) {
   let i = e[n];
-  return `<pre${r.renderAttrs(i)}><code>${H(e[n].content)}</code></pre>
+  return `<pre${r.renderAttrs(i)}><code>${K(e[n].content)}</code></pre>
 `;
 };
 q.fence = function(e, n, t, o, r) {
@@ -2543,7 +2543,7 @@ q.fence = function(e, n, t, o, r) {
     a = h[0], l = h.slice(2).join("");
   }
   let d;
-  if (t.highlight ? d = t.highlight(i.content, a, l) || H(i.content) : d = H(i.content), d.indexOf("<pre") === 0) return d + `
+  if (t.highlight ? d = t.highlight(i.content, a, l) || K(i.content) : d = K(i.content), d.indexOf("<pre") === 0) return d + `
 `;
   if (s) {
     let h = i.attrIndex("class"), f = i.attrs ? i.attrs.slice() : [];
@@ -2571,7 +2571,7 @@ q.softbreak = function(e, n, t) {
 `;
 };
 q.text = function(e, n) {
-  return H(e[n].content);
+  return K(e[n].content);
 };
 q.html_block = function(e, n) {
   return e[n].content;
@@ -2618,7 +2618,7 @@ var Dt = class {
   renderAttrs(e) {
     let n, t, o;
     if (!e.attrs) return "";
-    for (o = "", n = 0, t = e.attrs.length; n < t; n++) o += ` ${H(e.attrs[n][0])}="${H(String(e.attrs[n][1]))}"`;
+    for (o = "", n = 0, t = e.attrs.length; n < t; n++) o += ` ${K(e.attrs[n][0])}="${K(String(e.attrs[n][1]))}"`;
     return o;
   }
   /**
@@ -2726,7 +2726,7 @@ function si(e) {
 function ai(e) {
   return /^<\/a\s*>/i.test(e);
 }
-function ui(e) {
+function ci(e) {
   let n = e.tokens;
   if (e.md.options.linkify)
     for (let t = 0, o = n.length; t < o; t++) {
@@ -2739,28 +2739,28 @@ function ui(e) {
           continue;
         }
         if (l.type === "html_inline" && (si(l.content) && s > 0 && s--, ai(l.content) && s++), !(s > 0) && l.type === "text" && e.md.linkify.test(l.content)) {
-          let d = l.content, h = e.md.linkify.match(d), f = [], y = l.level, u = 0;
+          let d = l.content, h = e.md.linkify.match(d), f = [], y = l.level, c = 0;
           h.length > 0 && h[0].index === 0 && a > 0 && r[a - 1].type === "text_special" && (h = h.slice(1));
-          for (let c = 0; c < h.length; c++) {
-            let m = h[c].url, p = e.md.normalizeLink(m);
+          for (let u = 0; u < h.length; u++) {
+            let m = h[u].url, p = e.md.normalizeLink(m);
             if (!e.md.validateLink(p)) continue;
-            let b = h[c].text;
-            h[c].schema ? h[c].schema === "mailto:" && !/^mailto:/i.test(b) ? b = e.md.normalizeLinkText(`mailto:${b}`).replace(/^mailto:/, "") : b = e.md.normalizeLinkText(b) : b = e.md.normalizeLinkText(`http://${b}`).replace(/^http:\/\//, "");
-            let g = h[c].index;
-            if (g > u) {
+            let b = h[u].text;
+            h[u].schema ? h[u].schema === "mailto:" && !/^mailto:/i.test(b) ? b = e.md.normalizeLinkText(`mailto:${b}`).replace(/^mailto:/, "") : b = e.md.normalizeLinkText(b) : b = e.md.normalizeLinkText(`http://${b}`).replace(/^http:\/\//, "");
+            let g = h[u].index;
+            if (g > c) {
               let C = new e.Token("text", "", 0);
-              C.content = d.slice(u, g), C.level = y, f.push(C);
+              C.content = d.slice(c, g), C.level = y, f.push(C);
             }
             let x = new e.Token("link_open", "a", 1);
             x.attrs = [["href", p]], x.level = y++, x.markup = "linkify", x.info = "auto", f.push(x);
             let w = new e.Token("text", "", 0);
             w.content = b, w.level = y, f.push(w);
             let k = new e.Token("link_close", "a", -1);
-            k.level = --y, k.markup = "linkify", k.info = "auto", f.push(k), u = h[c].lastIndex;
+            k.level = --y, k.markup = "linkify", k.info = "auto", f.push(k), c = h[u].lastIndex;
           }
-          if (u < d.length) {
-            let c = new e.Token("text", "", 0);
-            c.content = d.slice(u), c.level = y, f.push(c);
+          if (c < d.length) {
+            let u = new e.Token("text", "", 0);
+            u.content = d.slice(c), u.level = y, f.push(u);
           }
           i.push({
             index: a,
@@ -2776,7 +2776,7 @@ function ui(e) {
         for (let f = 0; f < r.length; f++) {
           let y = i[d];
           if (y?.index === f) {
-            for (let u of y.nodes) l[h++] = u;
+            for (let c of y.nodes) l[h++] = c;
             d++;
           } else l[h++] = r[f];
         }
@@ -2784,7 +2784,7 @@ function ui(e) {
       }
     }
 }
-var Ot = /\+-|\.\.|\?\?\?\?|!!!!|,,|--/, ci = /\((c|tm|r)\)/i, li = /\((c|tm|r)\)/gi, di = {
+var Ot = /\+-|\.\.|\?\?\?\?|!!!!|,,|--/, ui = /\((c|tm|r)\)/i, li = /\((c|tm|r)\)/gi, di = {
   c: "\xA9",
   r: "\xAE",
   tm: "\u2122"
@@ -2810,7 +2810,7 @@ function hi(e) {
   let n;
   if (e.md.options.typographer)
     for (n = e.tokens.length - 1; n >= 0; n--)
-      e.tokens[n].type === "inline" && (ci.test(e.tokens[n].content) && fi(e.tokens[n].children), Ot.test(e.tokens[n].content) && gi(e.tokens[n].children));
+      e.tokens[n].type === "inline" && (ui.test(e.tokens[n].content) && fi(e.tokens[n].children), Ot.test(e.tokens[n].content) && gi(e.tokens[n].children));
 }
 var mi = /['"]/, bt = /['"]/g, xt = "\u2019", yi = 1e3;
 function wt(e, n, t) {
@@ -2848,7 +2848,7 @@ function xi(e, n) {
       bt.lastIndex = h;
       let y = bt.exec(d);
       if (!y) break;
-      let u = !0, c = !0;
+      let c = !0, u = !0;
       h = y.index + 1;
       let m = y[0] === "'", p = 32;
       if (y.index - 1 >= 0) p = d.charCodeAt(y.index - 1);
@@ -2865,16 +2865,16 @@ function xi(e, n) {
           break;
         }
       let g = ye(p) || me(p), x = ye(b) || me(b), w = he(p), k = he(b);
-      if (k ? u = !1 : x && (w || g || (u = !1)), w ? c = !1 : g && (k || x || (c = !1)), b === 34 && y[0] === '"' && p >= 48 && p <= 57 && (c = u = !1), u && c && (u = g, c = x), !u && !c) {
+      if (k ? c = !1 : x && (w || g || (c = !1)), w ? u = !1 : g && (k || x || (u = !1)), b === 34 && y[0] === '"' && p >= 48 && p <= 57 && (u = c = !1), c && u && (c = g, u = x), !c && !u) {
         m && Ae(i, s, y.index, xt);
         continue;
       }
-      if (c && (t = m ? r.single : r.double, t >= 0 && o[t].level === l)) {
+      if (u && (t = m ? r.single : r.double, t >= 0 && o[t].level === l)) {
         let C = o[t], _, A;
         m ? (_ = n.md.options.quotes[2], A = n.md.options.quotes[3]) : (_ = n.md.options.quotes[0], A = n.md.options.quotes[1]), Ae(i, s, y.index, A), Ae(i, C.tokenIdx, C.contentPos, _), wt(o, r, t);
         continue e;
       }
-      if (u) {
+      if (c) {
         if (o.length >= yi) return;
         o.push({
           tokenIdx: s,
@@ -2883,7 +2883,7 @@ function xi(e, n) {
           level: l,
           prevSameQuoteIdx: m ? r.single : r.double
         }), m ? r.single = o.length - 1 : r.double = o.length - 1;
-      } else c && m && Ae(i, s, y.index, xt);
+      } else u && m && Ae(i, s, y.index, xt);
     }
   }
   Object.keys(i).forEach(function(s) {
@@ -2918,7 +2918,7 @@ var tn = [
   ["block", ri],
   ["strip_references", oi],
   ["inline", ii],
-  ["linkify", ui],
+  ["linkify", ci],
   ["replacements", hi],
   ["smartquotes", wi],
   ["text_join", Ci]
@@ -3045,8 +3045,8 @@ function _i(e, n, t, o) {
   if (o) return !0;
   let y = e.parentType;
   e.parentType = "table";
-  let u = e.md.block.ruler.getRules("blockquote"), c = e.push("table_open", "table", 1), m = [n, 0];
-  c.map = m;
+  let c = e.md.block.ruler.getRules("blockquote"), u = e.push("table_open", "table", 1), m = [n, 0];
+  u.map = m;
   let p = e.push("thead_open", "thead", 1);
   p.map = [n, n + 1];
   let b = e.push("tr_open", "tr", 1);
@@ -3061,7 +3061,7 @@ function _i(e, n, t, o) {
   let g, x = 0;
   for (r = n + 2; r < t && !(e.sCount[r] < e.blkIndent); r++) {
     let w = !1;
-    for (let C = 0, _ = u.length; C < _; C++) if (u[C](e, r, t, !0)) {
+    for (let C = 0, _ = c.length; C < _; C++) if (c[C](e, r, t, !0)) {
       w = !0;
       break;
     }
@@ -3121,8 +3121,8 @@ function Ii(e, n, t, o) {
       break;
     }
   l = e.sCount[n], e.line = f + (y ? 1 : 0);
-  let u = e.push("fence", "code", 0);
-  return u.info = h, u.content = e.getLines(n + 1, f, l, !0), u.markup = d, u.map = [n, e.line], !0;
+  let c = e.push("fence", "code", 0);
+  return c.info = h, c.content = e.getLines(n + 1, f, l, !0), c.markup = d, c.map = [n, e.line], !0;
 }
 function Si(e, n, t, o) {
   let r = e.bMarks[n] + e.tShift[n], i = e.eMarks[n], s = e.lineMax;
@@ -3130,42 +3130,42 @@ function Si(e, n, t, o) {
   if (o) return !0;
   let a = [], l = [], d = [], h = [], f = e.md.block.ruler.getRules("blockquote"), y = e.parentType;
   e.parentType = "blockquote";
-  let u = !1, c;
-  for (c = n; c < t; c++) {
-    let x = e.sCount[c] < e.blkIndent;
-    if (r = e.bMarks[c] + e.tShift[c], i = e.eMarks[c], r >= i) break;
+  let c = !1, u;
+  for (u = n; u < t; u++) {
+    let x = e.sCount[u] < e.blkIndent;
+    if (r = e.bMarks[u] + e.tShift[u], i = e.eMarks[u], r >= i) break;
     if (e.src.charCodeAt(r++) === 62 && !x) {
-      let k = e.sCount[c] + 1, C, _;
-      e.src.charCodeAt(r) === 32 ? (r++, k++, _ = !1, C = !0) : e.src.charCodeAt(r) === 9 ? (C = !0, (e.bsCount[c] + k) % 4 === 3 ? (r++, k++, _ = !1) : _ = !0) : C = !1;
+      let k = e.sCount[u] + 1, C, _;
+      e.src.charCodeAt(r) === 32 ? (r++, k++, _ = !1, C = !0) : e.src.charCodeAt(r) === 9 ? (C = !0, (e.bsCount[u] + k) % 4 === 3 ? (r++, k++, _ = !1) : _ = !0) : C = !1;
       let A = k;
-      for (a.push(e.bMarks[c]), e.bMarks[c] = r; r < i; ) {
+      for (a.push(e.bMarks[u]), e.bMarks[u] = r; r < i; ) {
         let T = e.src.charCodeAt(r);
         if (E(T))
-          T === 9 ? A += 4 - (A + e.bsCount[c] + (_ ? 1 : 0)) % 4 : A++;
+          T === 9 ? A += 4 - (A + e.bsCount[u] + (_ ? 1 : 0)) % 4 : A++;
         else break;
         r++;
       }
-      u = r >= i, l.push(e.bsCount[c]), e.bsCount[c] = e.sCount[c] + 1 + (C ? 1 : 0), d.push(e.sCount[c]), e.sCount[c] = A - k, h.push(e.tShift[c]), e.tShift[c] = r - e.bMarks[c];
+      c = r >= i, l.push(e.bsCount[u]), e.bsCount[u] = e.sCount[u] + 1 + (C ? 1 : 0), d.push(e.sCount[u]), e.sCount[u] = A - k, h.push(e.tShift[u]), e.tShift[u] = r - e.bMarks[u];
       continue;
     }
-    if (u) break;
+    if (c) break;
     let w = !1;
-    for (let k = 0, C = f.length; k < C; k++) if (f[k](e, c, t, !0)) {
+    for (let k = 0, C = f.length; k < C; k++) if (f[k](e, u, t, !0)) {
       w = !0;
       break;
     }
     if (w) {
-      e.lineMax = c, e.blkIndent !== 0 && (a.push(e.bMarks[c]), l.push(e.bsCount[c]), h.push(e.tShift[c]), d.push(e.sCount[c]), e.sCount[c] -= e.blkIndent);
+      e.lineMax = u, e.blkIndent !== 0 && (a.push(e.bMarks[u]), l.push(e.bsCount[u]), h.push(e.tShift[u]), d.push(e.sCount[u]), e.sCount[u] -= e.blkIndent);
       break;
     }
-    a.push(e.bMarks[c]), l.push(e.bsCount[c]), h.push(e.tShift[c]), d.push(e.sCount[c]), e.sCount[c] = -1;
+    a.push(e.bMarks[u]), l.push(e.bsCount[u]), h.push(e.tShift[u]), d.push(e.sCount[u]), e.sCount[u] = -1;
   }
   let m = e.blkIndent;
   e.blkIndent = 0;
   let p = e.push("blockquote_open", "blockquote", 1);
   p.markup = ">";
   let b = [n, 0];
-  p.map = b, e.md.block.tokenize(e, n, c);
+  p.map = b, e.md.block.tokenize(e, n, u);
   let g = e.push("blockquote_close", "blockquote", -1);
   g.markup = ">", e.lineMax = s, e.parentType = y, b[1] = e.line;
   for (let x = 0; x < h.length; x++)
@@ -3218,22 +3218,22 @@ function vi(e, n, t, o) {
   if (e.sCount[l] - e.blkIndent >= 4 || e.listIndent >= 0 && e.sCount[l] - e.listIndent >= 4 && e.sCount[l] < e.blkIndent) return !1;
   let h = !1;
   o && e.parentType === "paragraph" && e.sCount[l] >= e.blkIndent && (h = !0);
-  let f, y, u;
-  if ((u = Rt(e, l)) >= 0) {
-    if (f = !0, s = e.bMarks[l] + e.tShift[l], y = Number(e.src.slice(s, u - 1)), h && y !== 1) return !1;
-  } else if ((u = Ct(e, l)) >= 0) f = !1;
+  let f, y, c;
+  if ((c = Rt(e, l)) >= 0) {
+    if (f = !0, s = e.bMarks[l] + e.tShift[l], y = Number(e.src.slice(s, c - 1)), h && y !== 1) return !1;
+  } else if ((c = Ct(e, l)) >= 0) f = !1;
   else return !1;
-  if (h && e.skipSpaces(u) >= e.eMarks[l])
+  if (h && e.skipSpaces(c) >= e.eMarks[l])
     return !1;
   if (o) return !0;
-  let c = e.src.charCodeAt(u - 1), m = e.tokens.length;
+  let u = e.src.charCodeAt(c - 1), m = e.tokens.length;
   f ? (a = e.push("ordered_list_open", "ol", 1), y !== 1 && (a.attrs = [["start", y]])) : a = e.push("bullet_list_open", "ul", 1);
   let p = [l, 0];
-  a.map = p, a.markup = String.fromCharCode(c);
+  a.map = p, a.markup = String.fromCharCode(u);
   let b = !1, g = e.md.block.ruler.getRules("list"), x = e.parentType;
   for (e.parentType = "list"; l < t; ) {
-    i = u, r = e.eMarks[l];
-    let w = e.sCount[l] + u - (e.bMarks[l] + e.tShift[l]), k = w;
+    i = c, r = e.eMarks[l];
+    let w = e.sCount[l] + c - (e.bMarks[l] + e.tShift[l]), k = w;
     for (; i < r; ) {
       let v = e.src.charCodeAt(i);
       if (v === 9) k += 4 - (k + e.bsCount[l]) % 4;
@@ -3244,11 +3244,11 @@ function vi(e, n, t, o) {
     let C = i, _;
     C >= r ? _ = 1 : _ = k - w, _ > 4 && (_ = 1);
     let A = w + _;
-    a = e.push("list_item_open", "li", 1), a.markup = String.fromCharCode(c);
+    a = e.push("list_item_open", "li", 1), a.markup = String.fromCharCode(u);
     let T = [l, 0];
-    a.map = T, f && (a.info = e.src.slice(s, u - 1));
+    a.map = T, f && (a.info = e.src.slice(s, c - 1));
     let M = e.tight, I = e.tShift[l], D = e.sCount[l], j = e.listIndent;
-    if (e.listIndent = e.blkIndent, e.blkIndent = A, e.tight = !0, e.tShift[l] = C - e.bMarks[l], e.sCount[l] = k, C >= r && e.isEmpty(l + 1) ? e.line = Math.min(e.line + 2, t) : e.md.block.tokenize(e, l, t), (!e.tight || b) && (d = !1), b = e.line - l > 1 && e.isEmpty(e.line - 1), e.blkIndent = e.listIndent, e.listIndent = j, e.tShift[l] = I, e.sCount[l] = D, e.tight = M, a = e.push("list_item_close", "li", -1), a.markup = String.fromCharCode(c), l = e.line, T[1] = l, l >= t || e.sCount[l] < e.blkIndent || e.sCount[l] - e.blkIndent >= 4) break;
+    if (e.listIndent = e.blkIndent, e.blkIndent = A, e.tight = !0, e.tShift[l] = C - e.bMarks[l], e.sCount[l] = k, C >= r && e.isEmpty(l + 1) ? e.line = Math.min(e.line + 2, t) : e.md.block.tokenize(e, l, t), (!e.tight || b) && (d = !1), b = e.line - l > 1 && e.isEmpty(e.line - 1), e.blkIndent = e.listIndent, e.listIndent = j, e.tShift[l] = I, e.sCount[l] = D, e.tight = M, a = e.push("list_item_close", "li", -1), a.markup = String.fromCharCode(u), l = e.line, T[1] = l, l >= t || e.sCount[l] < e.blkIndent || e.sCount[l] - e.blkIndent >= 4) break;
     let L = !1;
     for (let v = 0, wr = g.length; v < wr; v++) if (g[v](e, l, t, !0)) {
       L = !0;
@@ -3256,12 +3256,12 @@ function vi(e, n, t, o) {
     }
     if (L) break;
     if (f) {
-      if (u = Rt(e, l), u < 0) break;
+      if (c = Rt(e, l), c < 0) break;
       s = e.bMarks[l] + e.tShift[l];
-    } else if (u = Ct(e, l), u < 0) break;
-    if (c !== e.src.charCodeAt(u - 1)) break;
+    } else if (c = Ct(e, l), c < 0) break;
+    if (u !== e.src.charCodeAt(c - 1)) break;
   }
-  return f ? a = e.push("ordered_list_close", "ol", -1) : a = e.push("bullet_list_close", "ul", -1), a.markup = String.fromCharCode(c), p[1] = l, e.line = l, e.parentType = x, d && Ei(e, m), !0;
+  return f ? a = e.push("ordered_list_close", "ol", -1) : a = e.push("bullet_list_close", "ul", -1), a.markup = String.fromCharCode(u), p[1] = l, e.line = l, e.parentType = x, d && Ei(e, m), !0;
 }
 var on = 999;
 function Mi(e) {
@@ -3328,7 +3328,7 @@ function Di(e, n, t, o) {
   let y = e.md.normalizeLink(f.str);
   if (!e.md.validateLink(y)) return !1;
   i = f.pos;
-  let u = i, c = a, m = s;
+  let c = i, u = a, m = s;
   for (; i < a; ) {
     let C = r.charCodeAt(i);
     if (C === 10) {
@@ -3345,10 +3345,10 @@ function Di(e, n, t, o) {
     i = C, a = fe(e, s++), b = e.md.helpers.parseLinkTitle(r, i, a, b);
   }
   let g;
-  for (p !== u && b.ok ? (g = b.str, i = b.pos) : (g = "", i = u, a = c, s = m); i < a && E(r.charCodeAt(i)); )
+  for (p !== c && b.ok ? (g = b.str, i = b.pos) : (g = "", i = c, a = u, s = m); i < a && E(r.charCodeAt(i)); )
     i++;
   if (i < a && r.charCodeAt(i) !== 10 && g)
-    for (g = "", i = u, a = c, s = m; i < a && E(r.charCodeAt(i)); )
+    for (g = "", i = c, a = u, s = m; i < a && E(r.charCodeAt(i)); )
       i++;
   if (i < a && r.charCodeAt(i) !== 10) return !1;
   let x = Me(l);
@@ -3513,15 +3513,15 @@ function Ni(e, n, t) {
   for (; a < t && !e.isEmpty(a); a++) {
     if (e.sCount[a] - e.blkIndent > 3) continue;
     if (e.sCount[a] >= e.blkIndent) {
-      let u = e.bMarks[a] + e.tShift[a], c = e.eMarks[a];
-      if (u < c && (s = e.src.charCodeAt(u), (s === 45 || s === 61) && (u = e.skipChars(u, s), u = e.skipSpaces(u), u >= c))) {
+      let c = e.bMarks[a] + e.tShift[a], u = e.eMarks[a];
+      if (c < u && (s = e.src.charCodeAt(c), (s === 45 || s === 61) && (c = e.skipChars(c, s), c = e.skipSpaces(c), c >= u))) {
         i = s === 61 ? 1 : 2;
         break;
       }
     }
     if (e.sCount[a] < 0) continue;
     let y = !1;
-    for (let u = 0, c = o.length; u < c; u++) if (o[u](e, a, t, !0)) {
+    for (let c = 0, u = o.length; c < u; c++) if (o[c](e, a, t, !0)) {
       y = !0;
       break;
     }
@@ -3679,20 +3679,20 @@ var ve = [
     else if (e === 1)
       r = this.src.charCodeAt(0), (r & 63488) === 55296 && (r = 65533);
     else if (r = this.src.charCodeAt(e - 1), (r & 64512) === 56320) {
-      let c = this.src.charCodeAt(e - 2);
-      r = (c & 64512) === 55296 ? 65536 + (c - 55296 << 10) + (r - 56320) : 65533;
+      let u = this.src.charCodeAt(e - 2);
+      r = (u & 64512) === 55296 ? 65536 + (u - 55296 << 10) + (r - 56320) : 65533;
     } else (r & 64512) === 55296 && (r = 65533);
     let i = e;
     for (; i < t && this.src.charCodeAt(i) === o; ) i++;
     let s = i - e, a = i < t ? this.src.charCodeAt(i) : 32;
     if ((a & 64512) === 55296) {
-      let c = this.src.charCodeAt(i + 1);
-      a = (c & 64512) === 56320 ? 65536 + (a - 55296 << 10) + (c - 56320) : 65533;
+      let u = this.src.charCodeAt(i + 1);
+      a = (u & 64512) === 56320 ? 65536 + (a - 55296 << 10) + (u - 56320) : 65533;
     } else (a & 64512) === 56320 && (a = 65533);
-    let l = ye(r) || me(r), d = ye(a) || me(a), h = he(r), f = he(a), y = !f && (!d || h || l), u = !h && (!l || f || d);
+    let l = ye(r) || me(r), d = ye(a) || me(a), h = he(r), f = he(a), y = !f && (!d || h || l), c = !h && (!l || f || d);
     return {
-      can_open: y && (n || !u || l),
-      can_close: u && (n || !y || d),
+      can_open: y && (n || !c || l),
+      can_close: c && (n || !y || d),
       length: s
     };
   }
@@ -3760,8 +3760,8 @@ function $i(e, n) {
     f.attrs = [["href", h]], f.markup = "linkify", f.info = "auto";
     let y = e.push("text", "", 0);
     y.content = e.md.normalizeLinkText(l);
-    let u = e.push("link_close", "a", -1);
-    u.markup = "linkify", u.info = "auto";
+    let c = e.push("link_close", "a", -1);
+    c.markup = "linkify", c.info = "auto";
   }
   return e.pos += l.length - s, !0;
 }
@@ -3848,7 +3848,7 @@ function Ji(e, n) {
   }
   return n || (e.pending += s), e.pos = i, !0;
 }
-function Ki(e, n) {
+function Hi(e, n) {
   let t = e.pos, o = e.src.charCodeAt(t);
   if (n || o !== 126) return !1;
   let r = e.scanDelims(e.pos, !0), i = r.length, s = String.fromCharCode(o);
@@ -3880,7 +3880,7 @@ function _t(e, n) {
     s--, i !== s && (t = e.tokens[s], e.tokens[s] = e.tokens[i], e.tokens[i] = t);
   }
 }
-function Hi(e) {
+function Ki(e) {
   let n = e.tokens_meta, t = e.tokens_meta.length;
   _t(e, e.delimiters);
   for (let r = 0; r < t; r++) {
@@ -3890,8 +3890,8 @@ function Hi(e) {
   }
 }
 var $t = {
-  tokenize: Ki,
-  postProcess: Hi
+  tokenize: Hi,
+  postProcess: Ki
 };
 function Xi(e, n) {
   let t = e.pos, o = e.src.charCodeAt(t);
@@ -3937,30 +3937,30 @@ var Wt = {
 function Yi(e, n) {
   let t, o, r, i, s = "", a = "", l = e.pos, d = !0;
   if (e.src.charCodeAt(e.pos) !== 91) return !1;
-  let h = e.pos, f = e.posMax, y = e.pos + 1, u = e.md.helpers.parseLinkLabel(e, e.pos, !0);
-  if (u < 0) return !1;
-  let c = u + 1;
-  if (c < f && e.src.charCodeAt(c) === 40) {
-    for (d = !1, c++; c < f && (t = e.src.charCodeAt(c), !(!E(t) && t !== 10)); c++)
+  let h = e.pos, f = e.posMax, y = e.pos + 1, c = e.md.helpers.parseLinkLabel(e, e.pos, !0);
+  if (c < 0) return !1;
+  let u = c + 1;
+  if (u < f && e.src.charCodeAt(u) === 40) {
+    for (d = !1, u++; u < f && (t = e.src.charCodeAt(u), !(!E(t) && t !== 10)); u++)
       ;
-    if (c >= f) return !1;
-    if (l = c, r = e.md.helpers.parseLinkDestination(e.src, c, e.posMax), r.ok) {
-      for (s = e.md.normalizeLink(r.str), e.md.validateLink(s) ? c = r.pos : s = "", l = c; c < f && (t = e.src.charCodeAt(c), !(!E(t) && t !== 10)); c++)
+    if (u >= f) return !1;
+    if (l = u, r = e.md.helpers.parseLinkDestination(e.src, u, e.posMax), r.ok) {
+      for (s = e.md.normalizeLink(r.str), e.md.validateLink(s) ? u = r.pos : s = "", l = u; u < f && (t = e.src.charCodeAt(u), !(!E(t) && t !== 10)); u++)
         ;
-      if (r = e.md.helpers.parseLinkTitle(e.src, c, e.posMax), c < f && l !== c && r.ok)
-        for (a = r.str, c = r.pos; c < f && (t = e.src.charCodeAt(c), !(!E(t) && t !== 10)); c++)
+      if (r = e.md.helpers.parseLinkTitle(e.src, u, e.posMax), u < f && l !== u && r.ok)
+        for (a = r.str, u = r.pos; u < f && (t = e.src.charCodeAt(u), !(!E(t) && t !== 10)); u++)
           ;
     }
-    (c >= f || e.src.charCodeAt(c) !== 41) && (d = !0), c++;
+    (u >= f || e.src.charCodeAt(u) !== 41) && (d = !0), u++;
   }
   if (d) {
     if (typeof e.env.references > "u") return !1;
-    if (c < f && e.src.charCodeAt(c) === 91 ? (l = c + 1, c = e.md.helpers.parseLinkLabel(e, c), c >= 0 ? o = e.src.slice(l, c++) : c = u + 1) : c = u + 1, o || (o = e.src.slice(y, u)), o = Me(o), i = e.env.references[o], !i)
+    if (u < f && e.src.charCodeAt(u) === 91 ? (l = u + 1, u = e.md.helpers.parseLinkLabel(e, u), u >= 0 ? o = e.src.slice(l, u++) : u = c + 1) : u = c + 1, o || (o = e.src.slice(y, c)), o = Me(o), i = e.env.references[o], !i)
       return e.pos = h, !1;
     s = i.href, a = i.title;
   }
   if (!n) {
-    e.pos = y, e.posMax = u;
+    e.pos = y, e.posMax = c;
     let m = e.push("link_open", "a", 1), p = [["href", s]];
     if (m.attrs = p, a && p.push(["title", a]), o) {
       let b = /* @__PURE__ */ Object.create(null);
@@ -3968,14 +3968,14 @@ function Yi(e, n) {
     }
     e.linkLevel++, e.md.inline.tokenize(e), e.linkLevel--, e.push("link_close", "a", -1);
   }
-  return e.pos = c, e.posMax = f, !0;
+  return e.pos = u, e.posMax = f, !0;
 }
 function Zi(e, n) {
   let t, o, r, i, s, a, l, d, h = "", f = e.pos, y = e.posMax;
   if (e.src.charCodeAt(e.pos) !== 33 || e.src.charCodeAt(e.pos + 1) !== 91) return !1;
-  let u = e.pos + 2, c = e.md.helpers.parseLinkLabel(e, e.pos + 1, !1);
-  if (c < 0) return !1;
-  if (i = c + 1, i < y && e.src.charCodeAt(i) === 40) {
+  let c = e.pos + 2, u = e.md.helpers.parseLinkLabel(e, e.pos + 1, !1);
+  if (u < 0) return !1;
+  if (i = u + 1, i < y && e.src.charCodeAt(i) === 40) {
     for (i++; i < y && (t = e.src.charCodeAt(i), !(!E(t) && t !== 10)); i++)
       ;
     if (i >= y) return !1;
@@ -3990,12 +3990,12 @@ function Zi(e, n) {
     i++;
   } else {
     if (typeof e.env.references > "u") return !1;
-    if (i < y && e.src.charCodeAt(i) === 91 ? (d = i + 1, i = e.md.helpers.parseLinkLabel(e, i), i >= 0 ? r = e.src.slice(d, i++) : i = c + 1) : i = c + 1, r || (r = e.src.slice(u, c)), r = Me(r), s = e.env.references[r], !s)
+    if (i < y && e.src.charCodeAt(i) === 91 ? (d = i + 1, i = e.md.helpers.parseLinkLabel(e, i), i >= 0 ? r = e.src.slice(d, i++) : i = u + 1) : i = u + 1, r || (r = e.src.slice(c, u)), r = Me(r), s = e.env.references[r], !s)
       return e.pos = f, !1;
     h = s.href, l = s.title;
   }
   if (!n) {
-    o = e.src.slice(u, c);
+    o = e.src.slice(c, u);
     let m = [];
     e.md.inline.parse(o, e.md, e.env, m);
     let p = e.push("image", "img", 0), b = [["src", h], ["alt", ""]];
@@ -4091,7 +4091,7 @@ function is(e, n) {
   return e.pos = r, !0;
 }
 var ss = /^&#((?:x[a-f0-9]{1,6}|[0-9]{1,7}));/i, as = /^&([a-z][a-z0-9]{1,31});/i;
-function us(e, n) {
+function cs(e, n) {
   let t = e.pos, o = e.posMax;
   if (e.src.charCodeAt(t) !== 38 || t + 1 >= o) return !1;
   if (e.src.charCodeAt(t + 1) === 35) {
@@ -4099,7 +4099,7 @@ function us(e, n) {
     if (r) {
       if (!n) {
         let i = r[1][0].toLowerCase() === "x" ? parseInt(r[1].slice(1), 16) : parseInt(r[1], 10), s = e.push("text_special", "", 0);
-        s.content = cn(i) ? ge(i) : ge(65533), s.markup = r[0], s.info = "entity";
+        s.content = un(i) ? ge(i) : ge(65533), s.markup = r[0], s.info = "entity";
       }
       return e.pos += r[0].length, !0;
     }
@@ -4139,8 +4139,8 @@ function It(e) {
       if (f.marker === a.marker && f.open && f.end < 0) {
         let y = !1;
         if ((f.close || a.open) && (f.length + a.length) % 3 === 0 && (f.length % 3 !== 0 || a.length % 3 !== 0) && (y = !0), !y) {
-          let u = d > 0 && !e[d - 1].open ? i[d - 1] + 1 : 0;
-          i[s] = s - d + u, i[d] = u, a.open = !1, f.end = s, f.close = !1, h = -1, r = -2;
+          let c = d > 0 && !e[d - 1].open ? i[d - 1] + 1 : 0;
+          i[s] = s - d + c, i[d] = c, a.open = !1, f.end = s, f.close = !1, h = -1, r = -2;
           break;
         }
       }
@@ -4148,7 +4148,7 @@ function It(e) {
     h !== -1 && (n[a.marker][(a.open ? 3 : 0) + (a.length || 0) % 3] = h);
   }
 }
-function cs(e) {
+function us(e) {
   let n = e.tokens_meta, t = e.tokens_meta.length;
   It(e.delimiters);
   for (let r = 0; r < t; r++) {
@@ -4175,9 +4175,9 @@ var sn = [
   ["image", Zi],
   ["autolink", ns],
   ["html_inline", is],
-  ["entity", us]
+  ["entity", cs]
 ], an = [
-  ["balance_pairs", cs],
+  ["balance_pairs", us],
   ["strikethrough", $t.postProcess],
   ["emphasis", Wt.postProcess],
   ["fragments_join", ls]
@@ -4378,7 +4378,7 @@ var sn = [
     let n = de(e, !0);
     if (n.hostname && (!n.protocol || St.indexOf(n.protocol) >= 0))
       try {
-        n.hostname = un.default.toASCII(n.hostname);
+        n.hostname = cn.default.toASCII(n.hostname);
       } catch {
       }
     return n.auth && (n.auth = J(n.auth)), n.hostname && (n.hostname = J(n.hostname)), n.pathname && (n.pathname = J(n.pathname)), n.search && (n.search = J(n.search)), n.hash && (n.hash = J(n.hash)), oe(n);
@@ -4390,7 +4390,7 @@ var sn = [
     let n = de(e, !0);
     if (n.hostname && (!n.protocol || St.indexOf(n.protocol) >= 0))
       try {
-        n.hostname = un.default.toUnicode(n.hostname);
+        n.hostname = cn.default.toUnicode(n.hostname);
       } catch {
       }
     return le(oe(n), le.defaultChars + "%");
@@ -4646,8 +4646,8 @@ R(G, "StateInline", zt);
 var gs = Et(G);
 
 // openclaw/packages/net-policy/src/ip.ts
-var Ht = hn(Kt(), 1);
-var Kl = [Ht.default.IPv4.parse("198.18.0.0"), 15];
+var Kt = hn(Ht(), 1);
+var Hl = [Kt.default.IPv4.parse("198.18.0.0"), 15];
 
 // openclaw/packages/tool-call-repair/src/grammar.ts
 var Zl = new TextEncoder();
@@ -4682,7 +4682,7 @@ function Vt(e) {
 function ne(e, n) {
   return n.map((t) => [t, e]);
 }
-var uf = new Map([
+var cf = new Map([
   // A launched subagent is a worker, not one more operation of the launcher.
   ...ne("subagents", ["sessions_spawn"]),
   ...ne("commands", ["exec", "bash", "shell", "run_command", "run_terminal_cmd"]),
@@ -5038,7 +5038,7 @@ var ms = {
   agentScope: Zt,
   newSession: {
     title: "New session",
-    hint: "Pick where this session works, then say what to do.",
+    hint: "Pick where this session works.",
     placementReloadBlocked: "Recovery needs a reload. Unsaved starts will be lost.",
     discardUnsavedAndReload: "Discard unsaved starts and reload"
   },
@@ -5115,6 +5115,7 @@ var ms = {
     incognito: "Incognito session",
     incognitoLabel: "Incognito",
     incognitoDescription: "Incognito session. History expires 24 hours after creation or when the Gateway restarts, whichever comes first.",
+    incognitoDescriptionTooltip: "History expires after 24 hours or a Gateway restart, whichever comes first.",
     incognitoLimits: "Your model provider still processes messages. Tools, plugins, and uploads may save data.",
     cloudWorkerPlacement: "Placement: {state}",
     placementWorkspaceConflict: "{placement} \xB7 1 workspace conflict",
@@ -5331,6 +5332,7 @@ var ms = {
   desktop: {
     title: "Desktop",
     openWindow: "Open desktop in new window",
+    openWindowTooltip: "Open in new window",
     unavailable: "Desktop viewing is unavailable for this connection.",
     toggle: "Toggle desktop panel",
     reconnect: "Reconnect",
@@ -5563,15 +5565,11 @@ var ms = {
       loadFailed: "Could not open details. Try again, or open this person\u2019s Activity page.",
       ariaLabel: "Activity for {name}",
       person: "Person",
-      onlineFor: "Online for",
-      where: "Where",
-      reportedTimeZone: "Reported time zone: {zone}",
-      lastActivity: "Last interaction",
-      notObserved: "Activity unavailable",
+      idleFor: "Idle for",
+      localTime: "{time} local time",
       viewingNow: "Viewing now",
       recentSessions: "Recent sessions",
       noRecentSessions: "No recent visible sessions.",
-      ago: "ago",
       viewActivity: "View activity",
       web: "Web app",
       cli: "Command line",
@@ -5735,6 +5733,12 @@ var ms = {
   commandPalette: {},
   palette: {
     placeholder: "Search or start a task\u2026",
+    modeLabel: "Command palette mode",
+    modes: { search: "Search", compose: "Compose" },
+    // Footer key hint: "Tab compose" switches to the other mode.
+    modeSwitch: { search: "search", compose: "compose" },
+    searchPlaceholder: "Search\u2026",
+    composePlaceholder: "Write a message\u2026",
     attachmentPrompt: "What would you like to do with these files?",
     categories: { navigation: "Navigation" }
   },
@@ -5859,7 +5863,8 @@ var ms = {
     clawhub: {},
     modelAccounts: {
       section: "Account",
-      automatic: "Automatic (new-chat default)",
+      automatic: "Automatic",
+      automaticTrigger: "Account: Auto",
       manage: "Manage saved accounts\u2026"
     },
     mentions: {},
@@ -6109,7 +6114,6 @@ var ms = {
       queue: "Queue",
       queueMessage: "Queue message",
       stop: "Stop",
-      stopWithShortcut: "Stop (Esc)",
       stopGenerating: "Stop generating",
       send: "Send",
       sendMessage: "Send message"
@@ -6181,6 +6185,7 @@ var ms = {
       hideChat: "Hide this conversation",
       conversationEmpty: "The conversation for this task.",
       minimize: "Minimize side panel",
+      minimizeTooltip: "Minimize",
       resize: "Resize side panel",
       review: "Review",
       reviewEmpty: "Open a change, file, image, or tool result to review it here.",
@@ -6415,13 +6420,13 @@ var ir = [
 ) && (e.delegation === void 0 || !("delegation" in e) || xs(e.delegation)) && Es(e.itemId) && vs(e.phase) && rr(e.kind) && rr(e.title) && (e.status === void 0 || !("status" in e) || Os(e.status)) && (e.name === void 0 || !("name" in e) || X(e.name)) && (e.meta === void 0 || !("meta" in e) || X(e.meta)) && (e.commandBearing === void 0 || !("commandBearing" in e) || Oe(e.commandBearing)) && (e.toolCallId === void 0 || !("toolCallId" in e) || X(e.toolCallId)) && (e.unpairedCall === void 0 || !("unpairedCall" in e) || Oe(e.unpairedCall)) && (e.startedAt === void 0 || !("startedAt" in e) || or(e.startedAt)) && (e.endedAt === void 0 || !("endedAt" in e) || or(e.endedAt)) && (e.error === void 0 || !("error" in e) || X(e.error)) && (e.summary === void 0 || !("summary" in e) || X(e.summary)) && (e.progressText === void 0 || !("progressText" in e) || X(e.progressText)) && (e.suppressChannelProgress === void 0 || !("suppressChannelProgress" in e) || Oe(e.suppressChannelProgress)) && (e.hideFromChannelProgress === void 0 || !("hideFromChannelProgress" in e) || Oe(e.hideFromChannelProgress)) && (e.approvalId === void 0 || !("approvalId" in e) || X(e.approvalId)) && (e.approvalSlug === void 0 || !("approvalSlug" in e) || X(e.approvalSlug)), sr = (e) => !1, xs = (e) => Array.isArray(e) && e.every((n, t) => ws(n)) && e.length <= 32, ws = (e) => typeof e == "object" && e !== null && !Array.isArray(e) && "runId" in e && "childSessionKey" in e && "status" in e && Object.getOwnPropertyNames(e).every(
   (n, t) => ir[1].test(n) || sr(e[n])
 ) && ks(e.runId) && Cs(e.childSessionKey) && (e.label === void 0 || !("label" in e) || tr(e.label)) && (e.groupId === void 0 || !("groupId" in e) || tr(e.groupId)) && (e.runtimeMs === void 0 || !("runtimeMs" in e) || Rs(e.runtimeMs)) && _s(e.status), ks = (e) => typeof e == "string" && (e.length >= 2 || e.length >= 1 && te(e) >= 1) && (e.length <= 256 || e.length <= 512 && te(e) <= 256), Cs = (e) => typeof e == "string" && (e.length >= 2 || e.length >= 1 && te(e) >= 1) && (e.length <= 1024 || e.length <= 2048 && te(e) <= 1024), tr = (e) => typeof e == "string" && (e.length >= 2 || e.length >= 1 && te(e) >= 1) && (e.length <= 512 || e.length <= 1024 && te(e) <= 512), Rs = (e) => Number.isFinite(e) && e >= 0 && e <= 9007199254740991, _s = (e) => Ts(e) || Is(e) || ar(e) || Ss(e) || As(e), Ts = (e) => typeof e == "string" && e === "accepted", Is = (e) => typeof e == "string" && e === "done", ar = (e) => typeof e == "string" && e === "failed", Ss = (e) => typeof e == "string" && e === "killed", As = (e) => typeof e == "string" && e === "timeout", Es = (e) => typeof e == "string" && (e.length >= 2 || e.length >= 1 && te(e) >= 1), vs = (e) => Ms(e) || Ds(e) || Ps(e), Ms = (e) => typeof e == "string" && e === "start", Ds = (e) => typeof e == "string" && e === "update", Ps = (e) => typeof e == "string" && e === "end", rr = (e) => typeof e == "string", Os = (e) => Fs(e) || Ns(e) || ar(e) || Ls(e) || Bs(e), Fs = (e) => typeof e == "string" && e === "running", Ns = (e) => typeof e == "string" && e === "completed", Ls = (e) => typeof e == "string" && e === "blocked", Bs = (e) => typeof e == "string" && e === "skipped", X = (e) => typeof e == "string", Oe = (e) => typeof e == "boolean", or = (e) => Number.isFinite(e);
-var ur = (e) => ys(e);
+var cr = (e) => ys(e);
 
 // openclaw/ui/src/lib/chat/tool-call-grouping.ts
 nr();
-function cr(e) {
+function ur(e) {
   let n = P(e)?.activity;
-  return Array.isArray(n) ? n.filter(ur) : [];
+  return Array.isArray(n) ? n.filter(cr) : [];
 }
 
 // openclaw/ui/src/lib/chat/tool-live-output.ts
@@ -6521,16 +6526,16 @@ function fr(e, n) {
 function pn(e, n) {
   return B(e.name) ?? B(n.toolName) ?? B(n.tool_name) ?? "tool";
 }
-function Ks(e) {
+function Hs(e) {
   if (e != null)
     return typeof e == "string" ? e : JSON.stringify(e, null, 2);
 }
-var Hs = 0;
+var Ks = 0;
 function Xs(e) {
   return je(e.type) || typeof e.name == "string" && (e.arguments != null || e.args != null || e.input != null);
 }
 function gr(e) {
-  let n = e, t = N(n.__openclaw), o = t?.catalogSource === !0, r = typeof n.role == "string" ? n.role.toLowerCase() : "", i = dn(e) || r === "tool" || r === "function" || typeof n.toolName == "string" || typeof n.tool_name == "string", s = js(n.content), a = ke(n), l = n.__openclawToolStreamLive === !0, d = l ? lr(n.__openclawToolStreamLiveOutput) : void 0, h = Vt(n.__openclawToolStreamDiffStat), f = [], y = /* @__PURE__ */ new WeakSet(), u = Us(n), c = Be(n)?.runId ?? S(n.runId), m = (g, x, w = !1) => {
+  let n = e, t = N(n.__openclaw), o = t?.catalogSource === !0, r = typeof n.role == "string" ? n.role.toLowerCase() : "", i = dn(e) || r === "tool" || r === "function" || typeof n.toolName == "string" || typeof n.tool_name == "string", s = js(n.content), a = ke(n), l = n.__openclawToolStreamLive === !0, d = l ? lr(n.__openclawToolStreamLiveOutput) : void 0, h = Vt(n.__openclawToolStreamDiffStat), f = [], y = /* @__PURE__ */ new WeakSet(), c = Us(n), u = Be(n)?.runId ?? S(n.runId), m = (g, x, w = !1) => {
     let k = $s(g), C = g.details ?? n.details, _ = N(g.__openclaw), A = ke(g) ?? a ?? (o ? !1 : void 0), T = Ws(
       g,
       C,
@@ -6540,7 +6545,7 @@ function gr(e) {
     return {
       outputText: k,
       ...o && _?.catalogTruncated === !0 ? { catalogTruncated: !0 } : {},
-      resultMessageId: o ? void 0 : !w && _ && Object.hasOwn(_, "id") ? S(_.id) : u,
+      resultMessageId: o ? void 0 : !w && _ && Object.hasOwn(_, "id") ? S(_.id) : c,
       outputTruncated: (_ && Object.hasOwn(_, "truncated") ? _ : N(n.__openclaw))?.truncated === !0,
       toolOutput: dr(g) ?? dr(n),
       ...C !== void 0 ? { details: C } : {},
@@ -6553,20 +6558,20 @@ function gr(e) {
     let x = s[g] ?? {}, w = Xs(x);
     if (!w && !we(x.type))
       continue;
-    let k = S(x.runId) ?? c, C = S(x.parentToolCallId), _ = fr(x, n), A = pn(x, n), T = {
+    let k = S(x.runId) ?? u, C = S(x.parentToolCallId), _ = fr(x, n), A = pn(x, n), T = {
       id: _ ?? `${A}:${g}`,
       ..._ ? { callId: _ } : {},
       ...k ? { runId: k } : {},
       ...C ? { parentToolCallId: C } : {},
       name: A,
-      messageId: u
+      messageId: c
     }, M = x.details ?? n.details;
     if (w) {
       let v = zs(x.arguments ?? x.args ?? x.input);
       f.push({
         ...T,
         args: v,
-        inputText: Ks(v),
+        inputText: Hs(v),
         ...M !== void 0 ? { details: M } : {},
         ...l ? {
           live: !0,
@@ -6601,20 +6606,20 @@ function gr(e) {
     f.push({
       id: x ?? `${pn({}, n)}:0`,
       ...x ? { callId: x } : {},
-      ...c ? { runId: c } : {},
+      ...u ? { runId: u } : {},
       name: g,
       completed: dn(e) || r === "tool" || r === "function",
-      messageId: u,
+      messageId: c,
       ...m(n, g, !0)
     });
   }
   let p = new Map(
-    cr(e).filter((g) => !g.suppressChannelProgress).map((g) => [g.toolCallId ?? g.itemId, g])
+    ur(e).filter((g) => !g.suppressChannelProgress).map((g) => [g.toolCallId ?? g.itemId, g])
   ), b;
   for (let [g, x] of f.entries()) {
     o && t?.catalogTruncated === !0 && (x.catalogTruncated = !0);
     let w = x.callId ? p.get(x.callId) : void 0;
-    w && (x.activity = w), !(!x.browserTab || x.callId || x.messageId) && (b ??= ++Hs, x.previewRevision = `${b}:${g}`);
+    w && (x.activity = w), !(!x.browserTab || x.callId || x.messageId) && (b ??= ++Ks, x.previewRevision = `${b}:${g}`);
   }
   return f;
 }
@@ -6653,11 +6658,11 @@ function xr(e, n) {
 }
 
 // gateway-edge/openclaw-browser-resources/entry.ts
-function Kf(e, n) {
+function Hf(e, n) {
   return [...xr(e, []).values()].filter((o) => o.tab.target === "host" && o.tab.profile === n).at(-1) ?? null;
 }
 export {
-  Kf as latestNativeBrowserTab
+  Hf as latestNativeBrowserTab
 };
 /*!
 TypeBox
