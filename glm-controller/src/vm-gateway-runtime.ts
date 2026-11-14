@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
   type PlatformUserRecord,
   type FleetRegistryRecord,
+  type GatewayComputerProfile,
   type GatewayVmProfile,
   type PlatformStateStore,
 } from "@octogee/core/platform-state";
@@ -67,7 +68,7 @@ export interface VmGatewayRuntimeDeps {
 async function findGatewayVmPolicy(
   store: Pick<PlatformStateStore, "config">,
   tier: SizingTier,
-): Promise<GatewayVmProfile | null> {
+): Promise<GatewayComputerProfile | null> {
   const config = await store.config.orchestrator.get();
   const matches = Object.entries(config?.sizingProfiles ?? {}).flatMap(([key, entry]) =>
     entry.isolation === "isolated" && entry.sizingTier === tier ? [{ key, policy: entry.computer }] : []);
@@ -82,7 +83,7 @@ async function findGatewayVmPolicy(
 export async function resolveGatewayVmPolicy(
   store: Pick<PlatformStateStore, "config">,
   sizingTier: SizingTier | null | undefined,
-): Promise<GatewayVmProfile> {
+): Promise<GatewayComputerProfile> {
   const tier = sizingTier ?? "s";
   const policy = await findGatewayVmPolicy(store, tier);
   if (!policy) throw new Error(`No gateway VM policy for sizing tier ${tier}`);
@@ -199,6 +200,20 @@ async function reconcileStampedVmSpec(input: GatewayRuntimeStampInput, data: Par
   });
 }
 
+async function newGatewayVmPolicy(
+  input: GatewayRuntimeStampInput,
+  data: Partial<FleetRegistryRecord>,
+): Promise<GatewayVmProfile | null> {
+  if (input.gatewayClass !== "builder" || hasObservedClusterPods(data) || hasPriorClusterDeployment(data, input.gatewayId)) return null;
+  const policy = await resolveGatewayVmPolicy(input.store, input.sizingTier);
+  if (policy.runtime === "cluster") {
+    throw new Error(
+      `gateway ${input.gatewayId}: sizing tier ${input.sizingTier ?? "s"} names a pod computer, and this fleet controller cannot create its home claim`,
+    );
+  }
+  return policy;
+}
+
 export async function stampGatewayRuntime(input: GatewayRuntimeStampInput): Promise<GatewayRuntime> {
   if (input.initial.gatewayId !== input.gatewayId) throw new Error(`gateway ${input.gatewayId}: initial runtime record names ${input.initial.gatewayId}`);
   const data: Partial<FleetRegistryRecord> = (await input.store.fleetRegistry.get(input.gatewayId)) ?? {};
@@ -208,13 +223,12 @@ export async function stampGatewayRuntime(input: GatewayRuntimeStampInput): Prom
     await reconcileStampedVmSpec(input, data);
     return data.runtime;
   }
-  const deployedCluster = hasObservedClusterPods(data) || hasPriorClusterDeployment(data, input.gatewayId);
-  const policy = input.gatewayClass === "builder" && !deployedCluster ? await resolveGatewayVmPolicy(input.store, input.sizingTier) : null;
+  const policy = await newGatewayVmPolicy(input, data);
   const runtime: GatewayRuntime = policy?.runtime ?? "cluster";
-  if (runtime === "gce-vm" && !input.vmSpec) throw new Error(`gateway ${input.gatewayId}: gce-vm runtime needs a vmSpec`);
+  if (policy && !input.vmSpec) throw new Error(`gateway ${input.gatewayId}: gce-vm runtime needs a vmSpec`);
   await input.assertStorage?.(runtime);
   await input.store.fleetRegistry.upsert(input.gatewayId, input.initial, {
-    runtime, ...(runtime === "gce-vm" ? { vmSpec: { ...input.vmSpec!, ...tierVmShape(policy!) } } : {}),
+    runtime, ...(policy ? { vmSpec: { ...input.vmSpec!, ...tierVmShape(policy) } } : {}),
   });
   input.log(`[vm-gateway-runtime] ${input.gatewayId}: runtime stamped ${runtime}`);
   return runtime;

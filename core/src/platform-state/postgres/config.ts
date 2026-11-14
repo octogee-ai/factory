@@ -1,17 +1,16 @@
-import { GATEWAY_VM_PROVISIONING_MODELS, isGatewayVmBootDiskType, isGatewayVmDesktop } from "@octogee/shared/types/glm";
 import { parsePlatformConnectConfig, parsePlatformFreeConfig, parsePlatformModelConfig } from "@octogee/shared/types/platform-config";
 import { parseSharedGatewayAutoscalingConfig } from "@octogee/shared/types/shared-gateway-pool";
-import { isSizingTier } from "@octogee/shared/types/sizing";
-import type {
-  ConfigRecord,
-  ConfigRepositories,
-  GatewaySizingProfile,
-  MattermostAdminIdentity,
-  OrchestratorConfig,
-  OrchestratorConfigPatch,
-  PlatformConfigEntry,
-  PlatformConfigKey,
-  PlatformConfigValues,
+import {
+  isGatewaySizingProfile,
+  type ConfigRecord,
+  type ConfigRepositories,
+  type GatewaySizingProfile,
+  type MattermostAdminIdentity,
+  type OrchestratorConfig,
+  type OrchestratorConfigPatch,
+  type PlatformConfigEntry,
+  type PlatformConfigKey,
+  type PlatformConfigValues,
 } from "../config.js";
 import { MalformedRecordError, MissingRecordError, type RecordKey } from "../errors.js";
 import type { OpaqueMap, Revision, Stored } from "../store.js";
@@ -89,30 +88,6 @@ function isPlainMap(value: unknown): value is Readonly<Record<string, unknown>> 
 
 function isNonNegativeSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
-function isVmProfile(value: unknown): boolean {
-  if (!isPlainMap(value)) return false;
-  const { runtime, desktop, machineType, provisioningModel, bootDisk, homeSizeGiB } = value;
-  return (
-    runtime === "gce-vm" &&
-    isGatewayVmDesktop(desktop) &&
-    (machineType === null || typeof machineType === "string") &&
-    (provisioningModel === null || (GATEWAY_VM_PROVISIONING_MODELS as readonly unknown[]).includes(provisioningModel)) &&
-    (bootDisk === null || (isPlainMap(bootDisk) && typeof bootDisk.sizeGb === "number" && isGatewayVmBootDiskType(bootDisk.type))) &&
-    typeof homeSizeGiB === "number"
-  );
-}
-
-function isGatewaySizingProfile(value: unknown): value is GatewaySizingProfile {
-  if (!isPlainMap(value)) return false;
-  if (value.isolation === "shared") return true;
-  return (
-    value.isolation === "isolated" &&
-    isSizingTier(value.sizingTier) &&
-    isVmProfile(value.computer) &&
-    (value.fallbackStorageGb === null || typeof value.fallbackStorageGb === "number")
-  );
 }
 
 function assertSizingProfiles(value: unknown): Record<string, GatewaySizingProfile> {
