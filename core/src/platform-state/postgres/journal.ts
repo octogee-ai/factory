@@ -52,7 +52,7 @@ const ACTION_STARTED_AT = columnFor(OPERATION_AUDITS_TABLE, operationKey(""), "a
 
 export function decodeOperation(row: Row): Stored<OperationRecord> {
   const operation = decodeStored<OperationRecord>(OPERATIONS_TABLE, row);
-  return { ...operation, input: operationInputFromStored(operation.input) };
+  return operation.input === undefined ? operation : { ...operation, input: operationInputFromStored(operation.input) };
 }
 
 export function decodeOperationAudit(row: Row): Stored<OperationAuditRow> {
