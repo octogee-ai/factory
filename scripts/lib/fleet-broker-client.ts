@@ -153,6 +153,7 @@ export interface FleetBrokerClient {
     usage: FleetBrokerUsageData;
   }): Promise<void>;
   recordPreStopFlush(input: FleetBrokerPreStopFlushEvent): Promise<void>;
+  stoppedGatewayPods(hostnames: string[]): Promise<string[]>;
   recordSystemConfigStatus(input: SystemConfigObservedStatus): Promise<void>;
   blobDownloadUrl(input: {
     slug: string;
@@ -540,6 +541,13 @@ export function createFleetBrokerClient(
     },
     recordPreStopFlush(input) {
       return postNoContent("/internal/fleet/prestop-flush", { gatewayId, ...input });
+    },
+    async stoppedGatewayPods(hostnames) {
+      const { stopped } = await postJson<{ stopped?: unknown }>("/internal/fleet/stopped-gateway-pods", { gatewayId, hostnames });
+      if (!Array.isArray(stopped) || !stopped.every((hostname) => typeof hostname === "string")) {
+        throw new Error("fleet-broker stopped-gateway-pods returned an unexpected shape");
+      }
+      return stopped;
     },
     recordSystemConfigStatus(status) {
       return postNoContent("/internal/fleet/system-config-status", {

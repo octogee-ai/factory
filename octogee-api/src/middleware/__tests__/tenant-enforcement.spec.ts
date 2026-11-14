@@ -96,6 +96,7 @@ function app(opts: {
     res.status(opts.handlerStatus ?? 200).json({ ok: true });
   a.post("/internal/probe", enforcement, handler);
   a.post("/internal/fleet/assignment-roster", enforcement, handler);
+  a.post("/internal/fleet/stopped-gateway-pods", enforcement, handler);
   a.post("/internal/probe/:uid", enforcement, handler);
   a.post("/internal/connectors/access-token", enforcement, handler);
   a.post("/internal/connectors/github-project-clone-access", enforcement, handler);
@@ -668,6 +669,23 @@ const STILL_ON_SHARED = {
     const foreignGateway = await request(app({ boundTenant: WALTER }))
       .post("/internal/fleet/agent/web-extract")
       .send({ ...extensionBody, gatewayId: "other", urls: ["https://example.com"] });
+
+    expect(admitted.status).toBe(200);
+    expect(missingGateway.status).toBe(403);
+    expect(foreignGateway.status).toBe(403);
+  });
+
+  it("admits the stopped-pod question only when it names the bound gateway", async () => {
+    const body = { hostnames: ["octogee-gateway-walter-7f9c5d8b6-old01"] };
+    const admitted = await request(app({ boundTenant: WALTER }))
+      .post("/internal/fleet/stopped-gateway-pods")
+      .send({ gatewayId: "walter", ...body });
+    const missingGateway = await request(app({ boundTenant: WALTER }))
+      .post("/internal/fleet/stopped-gateway-pods")
+      .send(body);
+    const foreignGateway = await request(app({ boundTenant: WALTER }))
+      .post("/internal/fleet/stopped-gateway-pods")
+      .send({ gatewayId: "other", ...body });
 
     expect(admitted.status).toBe(200);
     expect(missingGateway.status).toBe(403);
