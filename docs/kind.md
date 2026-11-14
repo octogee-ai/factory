@@ -364,6 +364,11 @@ whose token it is and remembers the answer for up to 60 seconds. On a gateway,
 a revoked token can keep working for up to 120 seconds: 60 at the API plus 60 at
 the gateway. A suspension reaches a gateway within 60 seconds.
 
+The API answers at most 6,000 of a gateway's verify calls a minute, counting
+rejected tokens too. Past that it answers `429` and logs the gateway id once a
+minute. The gateway then answers `503` to a token it has not remembered, while
+tokens it remembers keep working.
+
 ## Talk to the agent
 
 Open the Coach channel in Mattermost and send a message. The agent answers in

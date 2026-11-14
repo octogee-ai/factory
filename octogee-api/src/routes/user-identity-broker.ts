@@ -35,8 +35,15 @@ export function createUserIdentityBrokerRoutes(opts: {
   return router;
 }
 
+export const USER_IDENTITY_GATEWAY_REQUEST_LIMIT = 6_000;
+
 export function userIdentityBrokerHandlers(opts: {
   loadUser: (uid: string) => Promise<UserDocument | null>;
 }): RequestHandler[] {
-  return [requireAuthenticatedUid, brokerRequestLimit(120, "user"), createUserIdentityBrokerRoutes(opts)];
+  return [
+    brokerRequestLimit(USER_IDENTITY_GATEWAY_REQUEST_LIMIT, "gateway"),
+    requireAuthenticatedUid,
+    brokerRequestLimit(120, "user"),
+    createUserIdentityBrokerRoutes(opts),
+  ];
 }
