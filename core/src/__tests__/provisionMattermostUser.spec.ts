@@ -38,6 +38,7 @@ vi.mock("../mattermost/avatars.js", () => ({ mmUploadAvatar: h.mmUploadAvatar })
 
 import { createMattermostChannelHost } from "../channel-host/mattermost.js";
 import { provisionMattermostUser } from "../mattermost/provision.js";
+import { defaultAgentChannelPurpose, installAgentChannelPurpose } from "../mattermost/agent-channel-purpose.js";
 import { DEFAULT_PLACEHOLDER_EMAIL_DOMAIN, installPlaceholderEmailDomain } from "../placeholder-email.js";
 
 const host = createMattermostChannelHost({
@@ -110,6 +111,7 @@ const createdChannelNames = () =>
 beforeEach(() => {
   vi.clearAllMocks();
   installPlaceholderEmailDomain(DEFAULT_PLACEHOLDER_EMAIL_DOMAIN);
+  installAgentChannelPurpose(defaultAgentChannelPurpose);
   h.setDocs({ "users/u1": {} });
   h.mmApiCall.mockImplementation(async (method: string, endpoint: string, body?: { name?: string }) => {
     if (method === "POST" && endpoint === "/users") return { id: "builder-1", delete_at: 0 };
@@ -154,6 +156,16 @@ describe("provisionMattermostUser — new user (happy path)", () => {
       [workspaceDefaultAgentChannelName("acme")]: "Ada's private channel with their agent",
       [workspaceGeneralChannelName("acme")]: "Ada's workspace — general discussion",
     });
+  });
+
+  it("describes the agent channel with an installed purpose", async () => {
+    installAgentChannelPurpose((ownerLabel) => `${ownerLabel}'s studio`);
+
+    await call(HAPPY);
+
+    const agentChannel = h.mmApiCall.mock.calls.find(([m, e, body]: [string, string, { name?: string }]) =>
+      m === "POST" && e === "/channels" && body?.name === workspaceDefaultAgentChannelName("acme"));
+    expect(agentChannel?.[2]).toMatchObject({ purpose: "Ada's studio" });
   });
 
   it("registers the /ui command in the new workspace team, pointed at the callback router", async () => {
