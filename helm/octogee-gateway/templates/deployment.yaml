@@ -206,6 +206,9 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node
+              {{- if $isolatedPod }}
+              subPath: home
+              {{- end }}
             {{- if $isolatedClass }}
             - name: builder-cache
               mountPath: /work/cache
@@ -453,6 +456,9 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node
+              {{- if $isolatedPod }}
+              subPath: home
+              {{- end }}
             {{- if $isolatedClass }}
             - name: builder-cache
               mountPath: /work/cache
@@ -700,6 +706,9 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node
+              {{- if $isolatedPod }}
+              subPath: home
+              {{- end }}
             {{- if $isolatedClass }}
             - name: builder-cache
               mountPath: /work/cache

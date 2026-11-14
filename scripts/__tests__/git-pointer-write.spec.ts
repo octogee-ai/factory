@@ -61,6 +61,20 @@ it("creates and reuses a keypair for a canonical owner", () => {
   expect(generateUserSshKey("alice")).toBe(publicKey);
 });
 
+it("restores private modes on a reused keypair that a volume group walk loosened", () => {
+  const publicKey = generateUserSshKey("alice");
+  const keyDir = path.join(paths.root, "keys", "alice");
+  const keyPath = path.join(keyDir, "id_ed25519");
+  fs.chmodSync(keyDir, 0o2770);
+  fs.chmodSync(keyPath, 0o660);
+  fs.chmodSync(`${keyPath}.pub`, 0o664);
+
+  expect(generateUserSshKey("alice")).toBe(publicKey);
+  expect(fs.statSync(keyDir).mode & 0o7777).toBe(0o700);
+  expect(fs.statSync(keyPath).mode & 0o7777).toBe(0o600);
+  expect(fs.statSync(`${keyPath}.pub`).mode & 0o7777).toBe(0o644);
+});
+
 describe("user Git pointer replacement", () => {
   it.each(["existing", "dangling"])("refreshes a Gitea workspace with a tracked temporary-name symlink to a sibling's %s file", (kind) => {
     const outside = path.join(paths.root, "customers", "bob", "notes.txt");

@@ -94,6 +94,28 @@ describe("helm/octogee-gateway/ — isolated gateway as a Kubernetes pod", () =>
     expect(kinds).not.toContain("PersistentVolumeClaim");
   });
 
+  it("mounts the home from a directory inside the claim, so tightening /home/node never changes the claim root fsGroup checks", () => {
+    const pod = renderDeployment().deployment.spec.template.spec;
+    const homeMounts = [...pod.initContainers, ...pod.containers]
+      .flatMap((entry) => (entry.volumeMounts ?? []).filter((mount) => mount.name === "data").map((mount) => ({ container: entry.name, ...mount })));
+    expect(homeMounts.map((mount) => mount.container)).toEqual(["fix-perms", "gateway", "gateway-edge"]);
+    for (const mount of homeMounts) expect(mount, mount.container).toEqual({ container: mount.container, name: "data", mountPath: "/home/node", subPath: "home" });
+  });
+
+  it("mounts a shared gateway's scratch home at its root", () => {
+    const result = helm({ gatewayId: "shared-a", gatewayClass: "shared", rollStrategy: "surge" });
+    expect(result.status, result.stderr).toBe(0);
+    const deployment = parseAllDocuments(result.stdout).map((doc) => doc.toJS() as { kind?: string } | null)
+      .find((doc) => doc?.kind === "Deployment") as unknown as Deployment;
+    const pod = deployment.spec.template.spec;
+    expect(pod.volumes).toContainEqual({ name: "data", emptyDir: {} });
+    for (const entry of [...pod.initContainers, ...pod.containers]) {
+      for (const mount of (entry.volumeMounts ?? []).filter((candidate) => candidate.name === "data")) {
+        expect(mount, entry.name).toEqual({ name: "data", mountPath: "/home/node" });
+      }
+    }
+  });
+
   it("keeps projects in the home, with no separate project volume, mount or preparation", () => {
     const { deployment } = renderDeployment();
     const pod = deployment.spec.template.spec;

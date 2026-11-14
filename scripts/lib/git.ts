@@ -566,6 +566,7 @@ export function generateUserSshKey(slug: string): string {
   const pubPath = keyPath + ".pub";
 
   if (fs.existsSync(keyPath)) {
+    restrictUserSshKeyModes(keyDir, keyPath, pubPath);
     log(`[git] SSH key already exists for ${slug}`);
     return fs.readFileSync(pubPath, "utf-8").trim();
   }
@@ -574,14 +575,18 @@ export function generateUserSshKey(slug: string): string {
   execFileSync("/usr/bin/ssh-keygen", ["-t", "ed25519", "-N", "", "-f", keyPath, "-C", `octogee-${slug}@gateway`, "-q"], {
     stdio: "pipe",
   });
+  restrictUserSshKeyModes(keyDir, keyPath, pubPath);
+
+  log(`[git] SSH keypair generated for ${slug}`);
+  return fs.readFileSync(pubPath, "utf-8").trim();
+}
+
+function restrictUserSshKeyModes(keyDir: string, keyPath: string, pubPath: string): void {
   /* eslint-disable sonarjs/file-permissions -- restrictive (private key dir), correct */
   fs.chmodSync(keyDir, 0o700);
   fs.chmodSync(keyPath, 0o600);
   fs.chmodSync(pubPath, 0o644);
   /* eslint-enable sonarjs/file-permissions */
-
-  log(`[git] SSH keypair generated for ${slug}`);
-  return fs.readFileSync(pubPath, "utf-8").trim();
 }
 
 export async function deleteUserSshKey(slug: string): Promise<void> {
