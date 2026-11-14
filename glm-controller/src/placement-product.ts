@@ -1,12 +1,13 @@
 import type { GatewayArtifact } from "@octogee/core/gateway-live-release";
 import type { PlatformStateStore } from "@octogee/core/platform-state";
 import type { SizingKeyReader } from "@octogee/core/user-activation-lease";
+import { createRepeatSquelch } from "@octogee/shared/server/repeat-squelch";
 import type { FleetInformer } from "./fleet-informer.js";
 import {
   startGatewayKubernetesObserver,
   type ReadGatewayPodDiagnosticsBatch,
 } from "./gateway-kubernetes-observation.js";
-import { logPlatformPlacementNotices } from "./platform-placement-notices.js";
+import { logPlatformPlacementNotices, PLATFORM_PLACEMENT_NOTICE_REPEAT_MS } from "./platform-placement-notices.js";
 import type { UserHomeMigrationDeps } from "./user-home-migration.js";
 import type { UserPolicyInputsSource } from "./user-placement-document.js";
 
@@ -50,6 +51,7 @@ export function startPlacement(
 
 function startPlatformObserver(deps: PlacementProductDeps): () => void {
   const { store, informer } = deps;
+  const squelch = createRepeatSquelch({ windowMs: PLATFORM_PLACEMENT_NOTICE_REPEAT_MS, now: deps.now });
   return startGatewayKubernetesObserver({
     store,
     namespace: deps.namespace,
@@ -64,7 +66,7 @@ function startPlatformObserver(deps: PlacementProductDeps): () => void {
         informer.gateways() ?? store.gateways.roots.list(),
         informer.assignments() ?? store.gateways.assignments.listAll(),
       ]);
-      logPlatformPlacementNotices({ users, roots, assignments, log: deps.log });
+      logPlatformPlacementNotices({ users, roots, assignments, squelch, log: deps.log });
     },
   });
 }
