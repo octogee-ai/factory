@@ -57,6 +57,7 @@ import {
 } from "./lib/user-identity.js";
 import { chatProxyOwnsHttpPath } from "./chat-proxy/http-paths.js";
 import { stripGatewayPrefix } from "./chat-proxy/gateway-prefix.js";
+import { gatewayEdgeMode } from "./lib/gateway-edge-mode.js";
 import { validateRequiredEnv } from "./lib/required-env.js";
 import type { WsUpgradeRouter } from "@octogee/core/ws/upgrade-router";
 import {
@@ -398,7 +399,7 @@ if (process.env.NODE_ENV !== "test") {
         logInfo: (message, meta) => logger.info(message, meta),
       })
     : undefined;
-  if (process.env.GATEWAY_EDGE_MODE === "agent-control-router") {
+  if (gatewayEdgeMode() === "agent-control-router") {
     const { createAgentControlCallbackRouter } = await import("./agent-control-callback-router.js");
     const namespace = process.env.K8S_NAMESPACE || "default";
     const router = createAgentControlCallbackRouter({
@@ -414,7 +415,7 @@ if (process.env.NODE_ENV !== "test") {
         sha: process.env.BUILD_SHA || "unknown",
       });
     });
-  } else if (process.env.GATEWAY_EDGE_MODE === "router") {
+  } else if (gatewayEdgeMode() === "router") {
     const namespace = process.env.K8S_NAMESPACE || "default";
     const routerLog = (message: string, meta?: Record<string, unknown>) => logger.error(message, meta);
     const server = createGatewayRouter({
