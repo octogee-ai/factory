@@ -34,8 +34,8 @@ function kubectl(routes: Record<string, Reply>): { run: KubectlSubprocess; calls
   return { run, calls };
 }
 
-const claim = (phase: string, createdAt = NOW - 60_000) =>
-  json({ metadata: { name: CLAIM, creationTimestamp: new Date(createdAt).toISOString() }, status: { phase } });
+const claim = (phase: string, createdAt = NOW - 60_000, accessModes = ["ReadWriteOncePod"]) =>
+  json({ metadata: { name: CLAIM, creationTimestamp: new Date(createdAt).toISOString() }, spec: { accessModes }, status: { phase } });
 const events = (...items: Array<{ type: string; reason: string; message: string; at: number }>) =>
   json({ items: items.map((event) => ({
     type: event.type, reason: event.reason, message: event.message, lastTimestamp: new Date(event.at).toISOString(),
@@ -55,7 +55,7 @@ describe("ensuring an isolated pod gateway's home claim", () => {
   const ensure = (run: KubectlSubprocess, served = false) =>
     ensureIsolatedPodHome({ runKubectl: run, namespace: NAMESPACE, log: vi.fn() }, { gatewayId: GATEWAY, homeSizeGiB: 10, served });
 
-  it("creates the claim the chart mounts, sized from the pod profile", async () => {
+  it("creates the claim the chart mounts, sized from the pod profile and mountable by one pod at a time", async () => {
     const k = kubectl({ [GET_CLAIM]: notFound("persistentvolumeclaims", CLAIM), [`create -n ${NAMESPACE} -f -`]: {} });
 
     await ensure(k.run);
@@ -69,7 +69,7 @@ describe("ensuring an isolated pod gateway's home claim", () => {
         namespace: NAMESPACE,
         labels: { "app.kubernetes.io/managed-by": "glm-controller", "octogee.ai/gateway-id": GATEWAY },
       },
-      spec: { accessModes: ["ReadWriteOnce"], resources: { requests: { storage: "10Gi" } } },
+      spec: { accessModes: ["ReadWriteOncePod"], resources: { requests: { storage: "10Gi" } } },
     });
   });
 
@@ -78,6 +78,18 @@ describe("ensuring an isolated pod gateway's home claim", () => {
 
     await ensure(k.run, true);
 
+    expect(k.calls.map((call) => call.args[0])).toEqual(["get"]);
+  });
+
+  it.each([
+    ["ReadWriteOnce", ["ReadWriteOnce"]],
+    ["no access mode", []],
+  ])("refuses to serve an isolated pod from a claim with %s, which more than one pod can mount", async (_name, accessModes) => {
+    const k = kubectl({ [GET_CLAIM]: claim("Bound", NOW - 60_000, accessModes) });
+
+    await expect(ensure(k.run, true)).rejects.toThrow(
+      `isolated gateway ${GATEWAY} home claim ${CLAIM} is not ReadWriteOncePod`,
+    );
     expect(k.calls.map((call) => call.args[0])).toEqual(["get"]);
   });
 

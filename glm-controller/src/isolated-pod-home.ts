@@ -8,6 +8,7 @@ export const ISOLATED_POD_HOME_PENDING_LIMIT_MS = 5 * 60_000;
 export const ISOLATED_POD_BLOCKER_OBSERVE_MS = 60_000;
 
 const NO_AMD64_NODE = "the isolated gateway image is linux/amd64 only, and this cluster has no amd64 node";
+const SINGLE_POD_ACCESS_MODE = "ReadWriteOncePod";
 
 export function isolatedPodHomeClaimName(gatewayId: string): string {
   return `octogee-gateway-${gatewayId}-data`;
@@ -73,7 +74,17 @@ export async function ensureIsolatedPodHome(
   input: { gatewayId: string; homeSizeGiB: number; served: boolean },
 ): Promise<void> {
   const name = isolatedPodHomeClaimName(input.gatewayId);
-  if (await kubectlJson(deps, ["get", "pvc", name, "-n", deps.namespace]) !== null) return;
+  const existing = await kubectlJson<{ spec?: { accessModes?: string[] } }>(deps, ["get", "pvc", name, "-n", deps.namespace]);
+  if (existing !== null) {
+    const accessModes = existing.spec?.accessModes ?? [];
+    if (accessModes.length !== 1 || accessModes[0] !== SINGLE_POD_ACCESS_MODE) {
+      throw new Error(
+        `isolated gateway ${input.gatewayId} home claim ${name} is not ${SINGLE_POD_ACCESS_MODE} ` +
+          `(${accessModes.join(", ") || "no access mode"}); an isolated pod's lock recovery needs a home only one pod can mount`,
+      );
+    }
+    return;
+  }
   if (input.served) {
     throw new Error(
       `isolated gateway ${input.gatewayId} has served from home claim ${name}, which is missing; ` +
@@ -88,7 +99,7 @@ export async function ensureIsolatedPodHome(
       namespace: deps.namespace,
       labels: { "app.kubernetes.io/managed-by": "glm-controller", "octogee.ai/gateway-id": input.gatewayId },
     },
-    spec: { accessModes: ["ReadWriteOnce"], resources: { requests: { storage: `${input.homeSizeGiB}Gi` } } },
+    spec: { accessModes: [SINGLE_POD_ACCESS_MODE], resources: { requests: { storage: `${input.homeSizeGiB}Gi` } } },
   });
   const args = ["create", "-n", deps.namespace, "-f", "-"];
   const result = await deps.runKubectl(args, { stdin: manifest });
