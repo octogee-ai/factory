@@ -173,6 +173,16 @@ function section(title, read) {
   }
 }
 
+function homeClaimName(gatewayId) {
+  return `octogee-gateway-${gatewayId}-data`;
+}
+
+function gatewayObjectNames(gatewayId, pods) {
+  const replicaSets = pods.flatMap(pod => (pod.metadata?.ownerReferences ?? [])
+    .filter(owner => owner.kind === "ReplicaSet").map(owner => owner.name));
+  return [...new Set([`octogee-gateway-${gatewayId}`, ...replicaSets, ...pods.map(pod => pod.metadata.name), homeClaimName(gatewayId)])];
+}
+
 export function gatewayDiagnostics(deps, gatewayId) {
   let pods = [];
   let podReadError = null;
@@ -187,7 +197,7 @@ export function gatewayDiagnostics(deps, gatewayId) {
       if (podReadError) throw podReadError;
       return podLines(pods);
     }),
-    ...section("Its events, oldest first", () => eventLines(deps.gatewayEvents(gatewayId))),
+    ...section("Its events, oldest first", () => eventLines(deps.gatewayEvents(gatewayObjectNames(gatewayId, pods)))),
     ...section("Network policies that select its pod", () => policyLines(deps.networkPolicies(), pods)),
     ...section(`The last ${LOG_TAIL_LINES} lines of its gateway container's log`, () => tail(deps.gatewayLog(gatewayId))),
   ];
@@ -221,7 +231,7 @@ export async function run(deps, options) {
   try {
     return await serveParkResumeAndRetire(deps, options, gatewayId);
   } catch (error) {
-    throw new Error(`${error.message}\n${gatewayDiagnostics(deps, gatewayId)}`);
+    throw new Error(redactSecrets(`${error.message}\n${gatewayDiagnostics(deps, gatewayId)}`));
   }
 }
 
@@ -289,11 +299,11 @@ export function isolatedDependencies(base, options) {
       [...kubectl, "logs", deployment(gatewayId), "-c", "gateway", "--previous", `--tail=${LOG_TAIL_LINES}`]),
     gatewayPods: gatewayId => JSON.parse(command("kubectl",
       [...kubectl, "get", "pods", "-l", `gateway-instance=${gatewayId}`, "-o", "json"])).items,
-    gatewayEvents: gatewayId => JSON.parse(command("kubectl", [...kubectl, "get", "events", "-o", "json"])).items
-      .filter(event => event.involvedObject?.name?.startsWith(`octogee-gateway-${gatewayId}`)),
+    gatewayEvents: names => names.flatMap(name => JSON.parse(command("kubectl",
+      [...kubectl, "get", "events", "--field-selector", `involvedObject.name=${name}`, "-o", "json"])).items),
     networkPolicies: () => JSON.parse(command("kubectl", [...kubectl, "get", "networkpolicies", "-o", "json"])).items,
     homeClaimPhase: gatewayId => command("kubectl",
-      [...kubectl, "get", "pvc", `octogee-gateway-${gatewayId}-data`, "--ignore-not-found", "-o", "jsonpath={.status.phase}"])
+      [...kubectl, "get", "pvc", homeClaimName(gatewayId), "--ignore-not-found", "-o", "jsonpath={.status.phase}"])
       .trim() || null,
     gatewayPodCount: gatewayId => command("kubectl",
       [...kubectl, "get", "pods", "-l", `gateway-instance=${gatewayId}`, "-o", "name"])
@@ -319,7 +329,7 @@ async function main() {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch(error => {
-    console.error(`[isolated-gateway] ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`[isolated-gateway] ${redactSecrets(error instanceof Error ? error.message : String(error))}`);
     process.exit(1);
   });
 }

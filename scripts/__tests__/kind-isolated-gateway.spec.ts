@@ -24,7 +24,7 @@ interface Scenario {
   gatewayStartsAfterMs?: number;
   markerReadError?: string;
   previousLog?: string;
-  kubernetes?: { pods?: unknown[]; events?: unknown[]; networkPolicies?: unknown[] };
+  kubernetes?: { pods?: unknown[]; events?: Array<{ involvedObject: { name: string } }>; networkPolicies?: unknown[] };
 }
 
 const RESUMED_PROCESS_STARTS_MS = 30_000;
@@ -154,7 +154,7 @@ function cluster(scenario: Scenario = {}) {
       return scenario.previousLog;
     },
     gatewayPods: () => scenario.kubernetes?.pods ?? [],
-    gatewayEvents: () => scenario.kubernetes?.events ?? [],
+    gatewayEvents: (names: string[]) => (scenario.kubernetes?.events ?? []).filter(event => names.includes(event.involvedObject.name)),
     networkPolicies: () => scenario.kubernetes?.networkPolicies ?? [],
     homeClaimPhase: () => claim,
     gatewayPodCount: () => pods,
@@ -266,6 +266,35 @@ describe("kind isolated gateway smoke", () => {
     expect(failure).not.toContain("gitea-token-9a8b7c");
   });
 
+  it("lists the events of the gateway's own Deployment, ReplicaSet, pod and home claim, and no other gateway's", async () => {
+    const replicaSet = `octogee-gateway-${ISOLATED}-b7db69b87`;
+    const pod = {
+      metadata: {
+        name: `${replicaSet}-lbr56`,
+        labels: { app: "octogee-gateway", "gateway-instance": ISOLATED },
+        ownerReferences: [{ kind: "ReplicaSet", name: replicaSet }],
+      },
+      status: { phase: "Pending" },
+    };
+    const event = (name: string, message: string, at: string) =>
+      ({ type: "Normal", reason: "Seen", lastTimestamp: at, involvedObject: { kind: "Object", name }, message });
+    const events = [
+      event(`octogee-gateway-${ISOLATED}`, "deployment scaled", "2026-11-14T03:40:00Z"),
+      event(replicaSet, "replica set created the pod", "2026-11-14T03:40:01Z"),
+      event(pod.metadata.name, "pod scheduled", "2026-11-14T03:40:02Z"),
+      event(`octogee-gateway-${ISOLATED}-data`, "home claim bound", "2026-11-14T03:40:03Z"),
+      event(`octogee-gateway-${ISOLATED}0-6f5d8c9b4-x2k7p`, "another gateway's pod scheduled", "2026-11-14T03:40:04Z"),
+    ];
+    const { deps } = cluster({ identityReadyAfterBoot: false, kubernetes: { pods: [pod], events } });
+
+    const failure = await run(deps, options).then(() => null, (error: Error) => error.message);
+
+    for (const message of ["deployment scaled", "replica set created the pod", "pod scheduled", "home claim bound"]) {
+      expect(failure).toContain(message);
+    }
+    expect(failure).not.toContain("another gateway's pod scheduled");
+  });
+
   it("still fails with the original error when the diagnostics cannot be read", async () => {
     const { deps } = cluster({ identityReadyAfterBoot: false });
     const broken = {
@@ -279,6 +308,18 @@ describe("kind isolated gateway smoke", () => {
     expect(failure).toContain(`Timed out after 900s waiting for ${ISOLATED} to mark its workspace identities ready for this boot`);
     expect(failure).toContain("could not be read: kubectl get pods exited with 1: connection refused");
     expect(failure).toContain("could not be read: kubectl get networkpolicies exited with 1: forbidden");
+  });
+
+  it.each([
+    ["the gateway log's last identity failure", { log: `${IDENTITY_FAILURE}: Error: broker refused authorization: Bearer leaked-identity-5d4c` }, "Bearer [redacted]"],
+    ["the last marker read failure", { markerReadError: "error: exec refused for token=leaked-kubectl-7e6f" }, "token=[redacted]"],
+  ])("keeps a secret out of %s that the failure quotes", async (_source, scenario, redacted) => {
+    const { deps } = cluster({ identityReadyAfterBoot: false, ...scenario });
+
+    const failure = await run(deps, options).then(() => null, (error: Error) => error.message);
+
+    expect(failure).toContain(redacted);
+    expect(failure).not.toContain("leaked-");
   });
 
   it("fails when the home does not survive park and resume", async () => {
