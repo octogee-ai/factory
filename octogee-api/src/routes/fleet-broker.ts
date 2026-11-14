@@ -1808,6 +1808,16 @@ export function userIdentityForRoot(value: unknown, gatewayId: string): UserIden
   };
 }
 
+function computerCaller(bound: GatewayBinding): boolean {
+  return !!bound.podUid && /^\d+$/.test(bound.podUid) && bound.podName === gatewayVmPodName(bound.gatewayId, bound.podUid);
+}
+
+async function podHostedIsolatedCaller(reader: Pick<PlatformStateRepositories, "fleetRegistry">, bound: GatewayBinding): Promise<boolean> {
+  return !!bound.podUid && (await reader.fleetRegistry.get(bound.gatewayId))?.runtime === "cluster";
+}
+
+const BOOT_MODE_REFUSED = Symbol("boot mode refused");
+
 function installUserIdentityRoute(router: Router, store: PlatformStateStore): void {
   router.post("/builder-identity", async (req, res) => {
     const bound = boundGateway(req, res);
@@ -1817,17 +1827,22 @@ function installUserIdentityRoute(router: Router, store: PlatformStateStore): vo
       return;
     }
     const nativeBoot = req.body?.nativeBoot === true;
-    if (nativeBoot && (!bound.podUid || !/^\d+$/.test(bound.podUid) || bound.podName !== gatewayVmPodName(bound.gatewayId, bound.podUid))) {
-      res.status(403).json(FORBIDDEN);
-      return;
-    }
     const identity = await store.transaction({ label: "fleet-broker.builder-identity", readOnly: true }, async (transaction) => {
+      if (nativeBoot && !computerCaller(bound) && !(await podHostedIsolatedCaller(transaction, bound))) return BOOT_MODE_REFUSED;
       const gateway = await transaction.gateways.roots.get(bound.gatewayId);
       const identity = userIdentityForRoot(gateway, bound.gatewayId);
       if (!nativeBoot || !gateway || !identity || identity.state !== "claimed") return identity;
       const boot = await isolatedBootMode({ reader: transaction, gateway });
       return { ...identity, bootMode: boot.mode, ...(boot.migrationId ? { activationMigrationId: boot.migrationId } : {}) };
     });
+    if (identity === BOOT_MODE_REFUSED) {
+      logger.warn("[fleet-broker] user boot mode refused: the caller is neither the gateway's computer nor a pod of a pod-hosted gateway", {
+        gatewayId: bound.gatewayId,
+        podName: bound.podName,
+      });
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
     if (!identity) {
       logger.error("[fleet-broker] user identity refused: gateway root is missing or illegal", {
         gatewayId: bound.gatewayId,
