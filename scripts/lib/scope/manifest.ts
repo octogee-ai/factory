@@ -296,16 +296,6 @@ export interface ScopeEdge {
 
 export const EDGES: readonly ScopeEdge[] = [
   {
-    when: "platform/scripts/ops/run-emulator-vitest.mjs",
-    jobs: [
-      JOBS.functionsEmulator,
-      JOBS.gatewayEdgeEmulator,
-      JOBS.glmControllerEmulator,
-      JOBS.octogeeApiEmulator,
-    ],
-    reason: "the product's Firebase emulator runner, overlaid at this path, launches every package emulator suite",
-  },
-  {
     when: "platform/core/",
     jobs: [
       JOBS.productCore,
@@ -325,16 +315,16 @@ export const EDGES: readonly ScopeEdge[] = [
   {
     when: "product/test-helpers/",
     jobs: [
-      JOBS.gatewayEdge,
+      JOBS.userLifecycleEmulator,
       JOBS.gatewayEdgeEmulator,
-      JOBS.octogeeApi,
+      JOBS.glmControllerEmulator,
       JOBS.octogeeApiEmulator,
       JOBS.functions,
       JOBS.functionsEmulator,
       JOBS.tests,
     ],
     reason:
-      "@octogee/test-helpers (firestore-emulator) is consumed by the gateway-edge + octogee-api + functions emulator specs; test-helpers/package.json's firebase-admin range is also swept by tests/specs/firebase-admin-major-alignment.spec.ts",
+      "@octogee/test-helpers holds the product's Firebase emulator runner, firebase-tools and firestore-emulator helpers, which every package emulator suite runs on; functions installs it as a directory dependency; test-helpers/package.json's firebase-admin range is also swept by tests/specs/firebase-admin-major-alignment.spec.ts",
   },
   {
     when: "platform/gateway-edge/",

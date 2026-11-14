@@ -231,14 +231,17 @@ describe("resolveScope — cross-package hazard edges", () => {
     );
   });
 
-  it("product/test-helpers/ change runs the test-helpers job + its emulator-spec consumers", () => {
+  it.each([
+    "product/test-helpers/src/firestore-emulator.ts",
+    "product/test-helpers/run-emulator-vitest.mjs",
+  ])("product emulator tooling change %s runs every package emulator suite", (file) => {
     expectJobs(
-      ["product/test-helpers/src/firestore-emulator.ts"],
+      [file],
       [
         "test-helpers",
-        "gateway-edge",
+        "customer-lifecycle-emulator",
         "gateway-edge-emulator",
-        "octogee-api",
+        "glm-controller-emulator",
         "octogee-api-emulator",
         "functions",
         "functions-emulator",
@@ -282,22 +285,6 @@ describe("resolveScope — cross-package hazard edges", () => {
     expectJobs(
       ["platform/scripts/ops/audit-coverage.ts"],
       ["scripts", "customer-lifecycle-emulator", "platform-tests", "tests"],
-    );
-  });
-
-  it("the product's emulator runner change exercises every package emulator suite", () => {
-    expectJobs(
-      ["product/scripts/ops/run-emulator-vitest.mjs"],
-      [
-        "scripts",
-        "customer-lifecycle-emulator",
-        "functions-emulator",
-        "gateway-edge-emulator",
-        "glm-controller-emulator",
-        "octogee-api-emulator",
-        "platform-tests",
-        "tests",
-      ],
     );
   });
 
