@@ -20,6 +20,8 @@ interface Scenario {
   log?: string;
   lastError?: string | null;
   homeSurvives?: boolean;
+  gatewayStartsAfterMs?: number;
+  markerReadError?: string;
 }
 
 const RESUMED_PROCESS_STARTS_MS = 30_000;
@@ -35,6 +37,8 @@ function cluster(scenario: Scenario = {}) {
   let claim: string | null = null;
   let boots = 0;
   let resumedProcessStartsAt: number | null = null;
+  let runningFrom = 0;
+  const running = () => pods > 0 && now >= runningFrom;
   const home = new Map<string, string>();
   let sent = 0;
 
@@ -76,6 +80,7 @@ function cluster(scenario: Scenario = {}) {
         return { user: { id: "uid-1", name: "lin", provisioningStatus: "complete", mountedGatewayId: mounted } };
       }
       if (noun === "user" && verb === "migrate" && args[2] === "lin" && args[3] === "--to-isolated=pod-s") {
+        runningFrom = now + (scenario.gatewayStartsAfterMs ?? 0);
         boot(scenario.identityReadyAfterBoot !== false);
         return { dryRun: false, response: { uid: "uid-1", gatewayId: ISOLATED, operationId: "op-1" } };
       }
@@ -90,6 +95,7 @@ function cluster(scenario: Scenario = {}) {
       if (noun === "gateway" && verb === "park") { pods = 0; mounted = "none"; return { dryRun: false, response: {} }; }
       if (noun === "gateway" && verb === "resume") {
         pods = 1;
+        runningFrom = now;
         resumedProcessStartsAt = now + RESUMED_PROCESS_STARTS_MS;
         return { dryRun: false, response: {} };
       }
@@ -131,14 +137,18 @@ function cluster(scenario: Scenario = {}) {
     readGatewayFile: (gatewayId: string, path: string) => {
       settle();
       expect(gatewayId).toBe(ISOLATED);
-      if (pods === 0) throw new Error(`no running pod for ${gatewayId}`);
-      if (path === BOOT_FILE || path === READY_FILE) events.push("identity read");
+      if (!running()) throw new Error(`container "gateway" of ${gatewayId} is not running`);
+      if (path === BOOT_FILE || path === READY_FILE) {
+        events.push("identity read");
+        if (scenario.markerReadError) throw new Error(scenario.markerReadError);
+      }
       return home.get(path) ?? null;
     },
     writeGatewayFile: (_gatewayId: string, path: string, content: string) => { home.set(path, content); },
     gatewayLog: () => scenario.log ?? "",
     homeClaimPhase: () => claim,
     gatewayPodCount: () => pods,
+    gatewayRunning: () => { settle(); return running(); },
   };
   return { deps, events, sql };
 }
@@ -195,6 +205,24 @@ describe("kind isolated gateway smoke", () => {
       `Timed out after 900s waiting for ${ISOLATED} to mark its workspace identities ready for this boot`,
     );
     expect(events.filter(event => event === "user migrate lin")).toHaveLength(1);
+  });
+
+  it("waits through a gateway container that has not started yet without counting it as a marker read failure", async () => {
+    const { deps } = cluster({ gatewayStartsAfterMs: 120_000 });
+
+    await expect(run(deps, options)).resolves.toMatchObject({ gatewayId: ISOLATED });
+  });
+
+  it("fails fast when the markers cannot be read three times in a row while the gateway container runs", async () => {
+    const { deps, events } = cluster({ markerReadError: "error: unable to upgrade connection: Forbidden" });
+
+    const failure = await run(deps, options).then(() => null, (error: Error) => error.message);
+
+    expect(failure).toContain(`${ISOLATED}'s gateway container is running, but its identity markers could not be read 3 times in a row. `);
+    expect(failure).toContain("The last marker read failed: error: unable to upgrade connection: Forbidden");
+    expect(events.filter(event => event === "identity read")).toHaveLength(3);
+    expect(deps.clock.now()).toBeLessThan(60_000);
+    expect(events).not.toContain("chat post");
   });
 });
 

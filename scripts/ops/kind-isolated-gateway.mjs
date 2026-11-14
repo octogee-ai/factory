@@ -28,6 +28,7 @@ const IDENTITY_BOOT = "/home/node/.openclaw/workspace-identity-boot";
 const IDENTITY_READY = "/home/node/.openclaw/workspace-identity-ready";
 const HOME_MARKER = "/home/node/kind-isolated-gateway-marker";
 const BOOT_TIMEOUT_MS = 900_000;
+const MARKER_READ_FAILURE_LIMIT = 3;
 
 const GATEWAY_LEDGER_SQL = `SELECT event::text FROM platform.model_broker_usage_events
 WHERE event->>'gatewayId' = :'gateway' AND created_at >= :'since'::bigint ORDER BY created_at;
@@ -62,18 +63,26 @@ function blockerNote(deps, gatewayId) {
 
 export async function waitForWorkspaceIdentities(deps, gatewayId, bootBeforePark = null) {
   let readFailure = null;
+  let readFailuresInARow = 0;
   try {
     await waitFor(() => {
+      if (!deps.gatewayRunning(gatewayId)) {
+        readFailuresInARow = 0;
+        return false;
+      }
       try {
         const markers = {
           boot: deps.readGatewayFile(gatewayId, IDENTITY_BOOT),
           ready: deps.readGatewayFile(gatewayId, IDENTITY_READY),
         };
         readFailure = null;
+        readFailuresInARow = 0;
         return identityReady(markers, bootBeforePark);
       } catch (error) {
         readFailure = error.message;
-        return false;
+        readFailuresInARow += 1;
+        if (readFailuresInARow < MARKER_READ_FAILURE_LIMIT) return false;
+        throw new Error(`${gatewayId}'s gateway container is running, but its identity markers could not be read ${readFailuresInARow} times in a row`);
       }
     }, { timeoutMs: BOOT_TIMEOUT_MS, intervalMs: 10_000, label: `${gatewayId} to mark its workspace identities ready for this boot` }, deps.clock);
   } catch (error) {
@@ -171,6 +180,10 @@ export function isolatedDependencies(base, options) {
     gatewayPodCount: gatewayId => command("kubectl",
       [...kubectl, "get", "pods", "-l", `gateway-instance=${gatewayId}`, "-o", "name"])
       .split("\n").filter(Boolean).length,
+    gatewayRunning: gatewayId => command("kubectl",
+      [...kubectl, "get", "pods", "-l", `gateway-instance=${gatewayId}`, "-o",
+        'jsonpath={.items[*].status.containerStatuses[?(@.name=="gateway")].state.running.startedAt}'])
+      .trim() !== "",
   };
 }
 

@@ -472,8 +472,10 @@ at the same time:
 4. It returns the user to the shared gateway, retires the isolated one, and
    checks its home claim is gone.
 
-If the identities never become ready, the job prints the gateway's last
-`Workspace identity initialization failed` log line.
+The job reads the identity markers only while the gateway's container is
+running. It fails at once if they can't be read three times in a row while the
+container runs. If the identities never become ready, the job prints the
+gateway's last `Workspace identity initialization failed` log line.
 
 Both jobs run in the `agent-round-trip` environment, which only `main` can use;
 the installer stores the environment's `OPENROUTER_API_KEY` secret in the
