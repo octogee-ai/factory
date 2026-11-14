@@ -39,7 +39,12 @@ const PRODUCT_CHECKOUT_SPECS = [
   "__tests__/vite-third-party-licenses.spec.ts",
 ];
 
+const GIT_CHECKOUT_SPECS = [
+  "__tests__/publish-plugin.spec.ts",
+];
+
 const insideProductCheckout = existsSync(path.resolve(__dirname, "../../product"));
+const insideGitCheckout = existsSync(path.resolve(__dirname, "../.git"));
 
 export default defineConfig({
   resolve: {
@@ -54,6 +59,7 @@ export default defineConfig({
       "**/*.emulator.spec.ts",
       ...(process.platform === "linux" ? [] : LINUX_HOST_SPECS),
       ...(insideProductCheckout ? [] : PRODUCT_CHECKOUT_SPECS),
+      ...(insideGitCheckout ? [] : GIT_CHECKOUT_SPECS),
     ],
     setupFiles: ["./test-setup/deployment-targets.ts", "./test-setup/user-entitlements.ts", "./test-setup/loopback-listen.ts"],
     // Operator-tooling specs spawn real subprocesses (kubectl shims, tsx
