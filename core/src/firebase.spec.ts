@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 function installFirebaseAdminMocks(apps: unknown[]) {
@@ -53,10 +54,24 @@ describe("core firebase bootstrap", () => {
     const { module, mocks } = await loadFirebase([]);
 
     expect(module.FIREBASE_PROJECT_ID).toBe("octogee-test");
-    expect(module.OCTOGEE_ENV).toBe("test");
     expect(mocks.initializeApp).not.toHaveBeenCalled();
     expect(mocks.getFirestore).not.toHaveBeenCalled();
     expect(mocks.getStorage).not.toHaveBeenCalled();
+  });
+
+  it("reads no deployment targets at import, so a main imported after it can still install them", async () => {
+    vi.stubEnv("FIREBASE_PROJECT_ID", "octogee-test");
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await loadFirebase([]);
+    const targets = await import("./deployment-environment.js");
+    const document = targets.loadDeploymentTargetsDocument(fileURLToPath(new URL("./deployment-targets.json", import.meta.url)));
+
+    try {
+      expect(() => targets.installDeploymentTargets(document)).not.toThrow();
+    } finally {
+      targets.resetDeploymentTargetsForTests();
+    }
   });
 
   it("initializes admin credentials at the first database use in a cold octogee-test process", async () => {
@@ -75,11 +90,11 @@ describe("core firebase bootstrap", () => {
     expect(mocks.getFirestore).toHaveBeenCalledOnce();
     expect(mocks.getFirestore).toHaveBeenCalledWith(mocks.defaultApp);
     expect(log.mock.calls.map(([line]) => JSON.parse(String(line)))).toContainEqual(expect.objectContaining({
-      service: "provisioner", severity: "INFO", message: expect.stringContaining("Firebase:"),
+      service: "provisioner", severity: "INFO", message: expect.stringMatching(/^Firebase: .*octogee-test/),
     }));
   });
 
-  it("reuses an existing admin app and resolves prod from GCLOUD_PROJECT", async () => {
+  it("reuses an existing admin app and resolves the project from GCLOUD_PROJECT", async () => {
     vi.stubEnv("FIREBASE_PROJECT_ID", "");
     vi.stubEnv("GCLOUD_PROJECT", "octogee");
     vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -88,7 +103,6 @@ describe("core firebase bootstrap", () => {
     const { module, mocks } = await loadFirebase([existing]);
 
     expect(module.FIREBASE_PROJECT_ID).toBe("octogee");
-    expect(module.OCTOGEE_ENV).toBe("prod");
     expect(firestoreKind(module.db)).toBe("firestore");
     expect(mocks.initializeApp).not.toHaveBeenCalled();
     expect(mocks.getFirestore).toHaveBeenCalledWith(existing);
@@ -118,14 +132,5 @@ describe("core firebase bootstrap", () => {
     expect(module.getStorage()).toEqual({ kind: "storage" });
     expect(mocks.initializeApp).toHaveBeenCalledOnce();
     expect(mocks.getStorage).toHaveBeenCalledWith(mocks.defaultApp);
-  });
-
-  it("surfaces unknown environment for unrecognized project ids", async () => {
-    vi.stubEnv("FIREBASE_PROJECT_ID", "local-dev");
-    vi.spyOn(console, "log").mockImplementation(() => undefined);
-
-    const { module } = await loadFirebase([{ name: "existing" }]);
-
-    expect(module.OCTOGEE_ENV).toBe("unknown");
   });
 });
