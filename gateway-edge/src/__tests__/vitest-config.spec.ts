@@ -4,7 +4,6 @@ import type { AddressInfo } from "node:net";
 import request from "supertest";
 import { describe, expect, it } from "vitest";
 import config from "../../vitest.config.js";
-import emulatorConfig from "../../vitest.emulator.config.js";
 
 interface VitestConfig {
   test?: {
@@ -22,20 +21,12 @@ describe("gateway-edge vitest config", () => {
     expect(cfg.test?.exclude).toEqual(["dist/**", "node_modules/**"]);
   });
 
-  it("loads the deployment target fixture and the loopback listen shim in both run modes, and the Firestore test store and Firebase sign-in for emulator specs", () => {
+  it("loads the deployment target fixture and the loopback listen shim", () => {
     expect((config as VitestConfig).test?.setupFiles).toEqual([
       "./src/test-setup/deployment-targets.ts",
       "./src/test-setup/octogee-entitlements.ts",
       "./src/test-setup/loopback-listen.ts",
       "./src/test-setup/public-app-origins.ts",
-    ]);
-    expect((emulatorConfig as VitestConfig).test?.setupFiles).toEqual([
-      "./src/test-setup/deployment-targets.ts",
-      "./src/test-setup/octogee-entitlements.ts",
-      "./src/test-setup/loopback-listen.ts",
-      "./src/test-setup/public-app-origins.ts",
-      "./src/test-setup/firestore-platform-state.ts",
-      "./src/test-setup/firebase-user-identity.ts",
     ]);
   });
 

@@ -1,37 +1,46 @@
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  getIdTokenForUid,
-  setupEmulatorTest,
-} from "@octogee/test-helpers/firestore-emulator";
-
-import { createApp } from "../index.js";
-import { db } from "../lib/db.js";
-
-const mockReadConnectorAccessToken = vi.hoisted(() => vi.fn());
-vi.mock("../lib/connector-tokens", () => ({
-  readConnectorAccessToken: mockReadConnectorAccessToken,
+const h = vi.hoisted(() => ({
+  documents: new Map<string, Record<string, unknown>>(),
+  readConnectorAccessToken: vi.fn(),
 }));
 
-setupEmulatorTest({
-  env: {
-    OCTOGEE_KMS_KEY_NAME:
-      "projects/octogee-test/locations/us-central1/keyRings/test/cryptoKeys/test",
-  },
+vi.mock("../lib/platform-state.js", async (importOriginal) => {
+  const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return {
+    ...(await importOriginal<typeof import("../lib/platform-state.js")>()),
+    platformStateStore: createDocumentFixtureStore(h.documents),
+  };
 });
 
+vi.mock("../lib/connector-tokens", () => ({
+  readConnectorAccessToken: h.readConnectorAccessToken,
+}));
+
+const { platformStateStore } = await import("../lib/platform-state.js");
+const { installBearerUids } = await import("./helpers/user-bearer.js");
+const { createApp } = await import("../index.js");
+
 const UID = "gh-repos-uid";
-const USERNAME = "ghreposowner";
+const AUTHORIZATION = `Bearer token-${UID}`;
+
+installBearerUids(
+  async (token) => {
+    if (token !== `token-${UID}`) throw new Error("unknown bearer");
+    return UID;
+  },
+  () => ({ accountLifecycle: { status: "active" } }),
+);
 
 async function seed(role: "user" | "admin"): Promise<void> {
-  await db.collection("workspaces").doc(USERNAME).set({ id: USERNAME, slug: USERNAME, ownerUid: UID });
-  await db.collection("users").doc(UID).set({ uid: UID, username: USERNAME, workspaceId: USERNAME });
-  await db.collection("users").doc(UID).collection("system").doc("config").set({ role });
+  await platformStateStore.users.records.create({ uid: UID, createdAt: 1 });
+  await platformStateStore.users.records.patch(UID, { role });
 }
 
 beforeEach(() => {
-  mockReadConnectorAccessToken.mockReset().mockResolvedValue(null);
+  h.documents.clear();
+  h.readConnectorAccessToken.mockReset().mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -46,26 +55,24 @@ afterEach(() => {
 describe("GET /workspace/github/repos — mounted + caller's own connection", () => {
   it("403s a non-admin (route reachable, not 404)", async () => {
     await seed("user");
-    const token = await getIdTokenForUid(UID);
     const r = await request(createApp())
       .get("/api/workspace/github/repos")
-      .set("Authorization", `Bearer ${token}`);
+      .set("Authorization", AUTHORIZATION);
     expect(r.status, r.text).toBe(403);
   });
 
   it("422 github_not_connected for an admin without a github connection", async () => {
     await seed("admin");
-    const token = await getIdTokenForUid(UID);
     const r = await request(createApp())
       .get("/api/workspace/github/repos")
-      .set("Authorization", `Bearer ${token}`);
+      .set("Authorization", AUTHORIZATION);
     expect(r.status, r.text).toBe(422);
     expect(r.body.reason).toBe("github_not_connected");
   });
 
   it("lists repos with the caller's own brokered token", async () => {
     await seed("admin");
-    mockReadConnectorAccessToken.mockResolvedValue("gho_callers_own_token");
+    h.readConnectorAccessToken.mockResolvedValue("gho_callers_own_token");
 
     const realFetch: typeof fetch = globalThis.fetch.bind(globalThis);
     let seenAuth: string | undefined;
@@ -93,13 +100,12 @@ describe("GET /workspace/github/repos — mounted + caller's own connection", ()
       );
     }) as typeof fetch);
 
-    const token = await getIdTokenForUid(UID);
     const r = await request(createApp())
       .get("/api/workspace/github/repos")
-      .set("Authorization", `Bearer ${token}`);
+      .set("Authorization", AUTHORIZATION);
 
     expect(r.status, r.text).toBe(200);
-    expect(mockReadConnectorAccessToken).toHaveBeenCalledWith(UID, "github");
+    expect(h.readConnectorAccessToken).toHaveBeenCalledWith(UID, "github");
     expect(seenAuth).toBe("Bearer gho_callers_own_token");
     expect(r.body.repos).toEqual([
       {

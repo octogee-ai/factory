@@ -9,15 +9,13 @@ const repoRoot = path.resolve(root, "..");
 
 const directoryDependencies = [
   ["core", "@octogee/shared", "devDependencies", "file:../shared"],
-  ["../functions", "@octogee/test-helpers", "devDependencies", "file:../platform/test-helpers"],
+  ["../functions", "@octogee/test-helpers", "devDependencies", "file:../product/test-helpers"],
   ["gateway-edge", "@octogee/core", "dependencies", "file:../core"],
   ["gateway-edge", "@octogee/shared", "dependencies", "file:../shared"],
-  ["gateway-edge", "@octogee/test-helpers", "devDependencies", "file:../test-helpers"],
   ["glm-controller", "@octogee/core", "dependencies", "file:../core"],
   ["glm-controller", "@octogee/shared", "dependencies", "file:../shared"],
   ["octogee-api", "@octogee/core", "dependencies", "file:../core"],
   ["octogee-api", "@octogee/shared", "dependencies", "file:../shared"],
-  ["octogee-api", "@octogee/test-helpers", "devDependencies", "file:../test-helpers"],
   ["scripts", "@octogee/core", "dependencies", "file:../core"],
   ["scripts", "@octogee/shared", "dependencies", "file:../shared"],
 ] as const;
@@ -121,7 +119,7 @@ describe("directory dependency repository contract", () => {
 
   it("copies each packed dependency and consumer npm config before Docker installs", () => {
     const api = dockerfile("octogee-api/Dockerfile");
-    for (const source of ["core", "shared", "test-helpers"]) {
+    for (const source of ["core", "shared"]) {
       expectBefore(api, `COPY ${source}/package.json`, "RUN npm ci --ignore-scripts");
       expectBefore(api, `COPY ${source}/dist`, "RUN npm ci --ignore-scripts");
     }
@@ -136,7 +134,7 @@ describe("directory dependency repository contract", () => {
     expectBefore(api, "COPY --from=overlay runner/package.json","RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund");
 
     const edge = dockerfile("gateway-edge/Dockerfile");
-    for (const source of ["core", "shared", "test-helpers"]) {
+    for (const source of ["core", "shared"]) {
       expectBefore(edge, `COPY ${source}/package.json`, "RUN npm ci --ignore-scripts");
       expectBefore(edge, `COPY ${source}/dist`, "RUN npm ci --ignore-scripts");
     }
@@ -196,7 +194,7 @@ describe("directory dependency repository contract", () => {
       .readFileSync(path.join(root, ".dockerignore"), "utf8")
       .split("\n")
       .map((line) => line.trim());
-    for (const source of ["core", "shared", "test-helpers"]) {
+    for (const source of ["core", "shared"]) {
       expect(lines).toContain(`!${source}/dist/`);
       expect(lines).toContain(`!${source}/dist/**`);
     }

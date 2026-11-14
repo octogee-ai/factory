@@ -4,7 +4,6 @@ import type { AddressInfo } from "node:net";
 import request from "supertest";
 import { describe, expect, it } from "vitest";
 import unitConfig from "../vitest.config.js";
-import emulatorConfig from "../vitest.emulator.config.js";
 
 interface VitestConfig {
   test?: {
@@ -15,13 +14,8 @@ interface VitestConfig {
 }
 
 describe("scripts vitest configs", () => {
-  it("loads the deployment target fixture and the loopback listen shim in both run modes", () => {
+  it("loads the deployment target fixture and the loopback listen shim", () => {
     expect((unitConfig as VitestConfig).test?.setupFiles).toEqual([
-      "./test-setup/deployment-targets.ts",
-      "./test-setup/user-entitlements.ts",
-      "./test-setup/loopback-listen.ts",
-    ]);
-    expect((emulatorConfig as VitestConfig).test?.setupFiles).toEqual([
       "./test-setup/deployment-targets.ts",
       "./test-setup/user-entitlements.ts",
       "./test-setup/loopback-listen.ts",

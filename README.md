@@ -49,7 +49,7 @@ and a domain. [See every account and tier](docs/getting-started.md#what-you-need
 
 - `AGENTS.md` is the contract every agent loads.
 - `docs/handbook/` holds the Dev Workflow chapters of the handbook.
-- The platform packages: `core`, `shared`, `test-helpers`, the fleet controller
+- The platform packages: `core`, `shared`, the fleet controller
   in `glm-controller`, `gateway-edge`, and `octogee-api`, with `infra`, `helm`,
   `terraform`, `templates` and `scripts` beside them. `tests/` holds the
   cross-package platform specs.

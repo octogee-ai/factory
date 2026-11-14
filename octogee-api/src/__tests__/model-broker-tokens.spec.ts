@@ -8,10 +8,6 @@ import {
   createModelBrokerTokenStore,
   hashModelBrokerToken,
 } from "../lib/model-broker-tokens.js";
-import { setupEmulatorTest } from "@octogee/test-helpers/firestore-emulator";
-
-setupEmulatorTest();
-
 const gatewayTokenInput = {
   gatewayId: "jack",
   ownerUid: "uid-jack",

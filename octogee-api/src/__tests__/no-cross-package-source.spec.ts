@@ -7,20 +7,6 @@ const here = dirname(fileURLToPath(import.meta.url));
 const SRC = resolve(here, ".."); // octogee-api/src
 const PKG_ROOT = resolve(here, "../.."); // octogee-api
 const GATEWAY_EDGE_SRC = resolve(PKG_ROOT, "../gateway-edge/src");
-const ALLOWED_TEST_CROSS_PACKAGE_IMPORTS = new Set([
-  ...[
-    "google-calendar-client.js",
-    "gmail-client.js",
-    "drive-client.js",
-    "docs-client.js",
-    "sheets-client.js",
-    "tasks-client.js",
-    "contacts-client.js",
-    "obsidian-client.js",
-  ].map((client) =>
-    `src/__tests__/productivity-boundaries.emulator.spec.ts::../../../infra/gateway/extensions/product/octogee-connector-tools/${client}`,
-  ),
-]);
 
 function tsFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -49,8 +35,6 @@ describe("octogee-api imports no sibling-package source (except gateway-edge rou
         const target = resolve(dirname(file), m[1]);
         if (!relative(PKG_ROOT, target).startsWith("..")) continue; // inside octogee-api
         if (!relative(GATEWAY_EDGE_SRC, target).startsWith("..")) continue; // gateway-edge routes — allowed
-        const importKey = `${relative(PKG_ROOT, file)}::${m[1]}`;
-        if (ALLOWED_TEST_CROSS_PACKAGE_IMPORTS.has(importKey)) continue;
         offenders.push(`${relative(PKG_ROOT, file)} → ${m[1]}`);
       }
     }

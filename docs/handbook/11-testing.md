@@ -16,9 +16,8 @@ Vitest. Ordinary contributions need no cloud credentials or provider keys.
 ## Quick start without cloud credentials
 
 Use Node 24, the version CI uses, and npm. There are no npm workspaces: install
-each package on its own. `core`, `shared` and `test-helpers` commit their built
-`dist/`, so other packages install them as `file:` dependencies without a
-registry.
+each package on its own. `core` and `shared` commit their built `dist/`, so
+other packages install them as `file:` dependencies without a registry.
 
 From the repository root:
 
@@ -68,9 +67,9 @@ The **Checks** workflow runs on every pull request and push to `main`:
     `node ../scripts/ci/core-postgres.mjs` against a throwaway PostgreSQL 16
     server with pgvector.
   - `gateway-edge`, `octogee-api` and `tests`: typecheck and `npm test`.
-  - `libraries`: `shared` and `test-helpers` (typecheck, build, the
-    committed `dist/` check, test), `glm-controller` (typecheck and test), and
-    the plugins under `infra/gateway/extensions/platform/`.
+  - `libraries`: `shared` (typecheck, build, the committed `dist/` check,
+    test), `glm-controller` (typecheck and test), and the plugins under
+    `infra/gateway/extensions/platform/`.
 - **checks** passes only when both of the above pass.
 
 Branch protection on `main` requires `checks`, `dco` (every commit signed off)
@@ -80,10 +79,12 @@ PR jobs have read-only repository access and no cloud credentials.
 
 ## Emulator suites
 
-Some packages also have `*.emulator.spec.ts` suites, run with
-`npm run test:emulator --prefix <package>` where that script exists. They need
-Java 21 and start the Firebase emulators themselves; never point them at real
-credentials. Plain `npm test` excludes them, and Checks does not run them.
+The platform packages have no emulator suites of their own. A product overlay
+that adds `*.emulator.spec.ts` files to a package also supplies that package's
+`test-emulator.mjs`; run it with `node test-emulator.mjs` from the package's
+`.overlay/` directory. Those suites need Java 21 and start the Firebase
+emulators themselves; never point them at real credentials. Plain `npm test`
+excludes them, and Checks does not run them.
 
 ## Troubleshooting local runs
 
@@ -153,8 +154,8 @@ the Firestore and Auth emulators for an emulator suite. Never use an inline
 query's behavior and stays green while the real store diverges. Pure-logic unit
 tests that spy on a non-db collaborator are unaffected.
 
-For emulator suites, `@octogee/test-helpers/firestore-emulator` provides
-`getAdminDb()` to seed, `setupEmulatorTest()` (fails loudly without the
+For a product's emulator suites, its `@octogee/test-helpers/firestore-emulator`
+provides `getAdminDb()` to seed, `setupEmulatorTest()` (fails loudly without the
 emulator and resets per test), and `useAuthToken(uid)` /
 `getIdTokenForUid(uid)`, which mint a real emulator ID token for Auth-gated
 routes.

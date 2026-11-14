@@ -199,13 +199,17 @@ describe("resolveScope — ownership", () => {
 });
 
 describe("unit package gates", () => {
-  it.each(["core", "shared", "test-helpers"])(
+  it.each([
+    ["core", "../scripts/ops/verify-committed-dist.mjs"],
+    ["shared", "../scripts/ops/verify-committed-dist.mjs"],
+    ["test-helpers", "../../platform/scripts/ops/verify-committed-dist.mjs"],
+  ])(
     "%s rebuilds and verifies committed dist",
-    (packageName) => {
+    (packageName, verifier) => {
       const unitPackage = UNIT_PACKAGES.find(({ name }) => name === packageName);
 
       expect(unitPackage?.typecheck).toBe(
-        "npm run typecheck && npm run build && node ../scripts/ops/verify-committed-dist.mjs",
+        `npm run typecheck && npm run build && node ${verifier}`,
       );
     },
   );
@@ -236,21 +240,20 @@ describe("resolveScope — cross-package hazard edges", () => {
     );
   });
 
-  it("platform/test-helpers/ change runs the test-helpers job + its emulator-spec consumers", () => {
-    // @octogee/test-helpers (firestore-emulator) is consumed by the
-    // gateway-edge, octogee-api, and functions emulator specs, + tests (its
-    // package.json's firebase-admin range is swept by firebase-admin-major-alignment.spec.ts).
+  it.each([
+    "product/test-helpers/src/firestore-emulator.ts",
+    "product/test-helpers/run-emulator-vitest.mjs",
+  ])("product emulator tooling change %s runs every package emulator suite", (file) => {
     expectJobs(
-      ["platform/test-helpers/src/firestore-emulator.ts"],
+      [file],
       [
         "test-helpers",
-        "gateway-edge",
+        "customer-lifecycle-emulator",
         "gateway-edge-emulator",
-        "octogee-api",
+        "glm-controller-emulator",
         "octogee-api-emulator",
         "functions",
         "functions-emulator",
-        "platform-tests",
         "tests",
       ],
     );
@@ -291,22 +294,6 @@ describe("resolveScope — cross-package hazard edges", () => {
     expectJobs(
       ["platform/scripts/ops/audit-coverage.ts"],
       ["scripts", "customer-lifecycle-emulator", "platform-tests", "tests"],
-    );
-  });
-
-  it("the shared emulator runner change exercises every package emulator suite", () => {
-    expectJobs(
-      ["platform/scripts/ops/run-emulator-vitest.mjs"],
-      [
-        "scripts",
-        "customer-lifecycle-emulator",
-        "functions-emulator",
-        "gateway-edge-emulator",
-        "glm-controller-emulator",
-        "octogee-api-emulator",
-        "platform-tests",
-        "tests",
-      ],
     );
   });
 

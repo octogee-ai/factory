@@ -3,14 +3,8 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
-const firebaseToolLockfiles = [
-  "gateway-edge/package-lock.json",
-  "octogee-api/package-lock.json",
-  "scripts/package-lock.json",
-];
 const xmlParserLockfiles = [
   "core/package-lock.json",
-  "test-helpers/package-lock.json",
 ];
 
 function packageVersions(packages: Record<string, { version?: string }>, packageName: string): string[] {
@@ -46,12 +40,6 @@ describe("transitive dependency security floors", () => {
     expect(packageVersions(packages, "@hono/node-server").every((version) => isAtLeast(version, [2, 1, 6]))).toBe(false);
     expect(() => packageVersions({}, "@hono/node-server")).toThrow();
     expect(() => packageVersions({ "node_modules/@hono/node-server": {} }, "@hono/node-server")).toThrow();
-  });
-
-  it.each(firebaseToolLockfiles)("keeps Firebase tooling in %s above advisory ranges", (lockfile) => {
-    expect(lockVersions(lockfile, "@hono/node-server").every((version) => isAtLeast(version, [2, 1, 6]))).toBe(true);
-    expect(lockVersions(lockfile, "hono").every((version) => isAtLeast(version, [4, 12, 27]))).toBe(true);
-    expect(lockVersions(lockfile, "fast-uri").every((version) => isAtLeast(version, [3, 1, 4]))).toBe(true);
   });
 
   it.each(xmlParserLockfiles)("keeps XML parsing in %s above advisory ranges", (lockfile) => {

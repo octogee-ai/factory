@@ -13,12 +13,14 @@ function fakeNode(version: string): string {
   return `${bin}:${process.env.PATH}`;
 }
 import { ALL_JOBS, UNIT_PACKAGES } from "../lib/scope/manifest.js";
-import { CHECK_LANES, OVERLAY_COMMAND, checkPlan, checkSeconds, executeChecks, jobLabel, jobSeconds, nodeVersionCheck, overlayPackages, selectCheckLane, dependencyInstaller, vitestOptions } from "../lib/ci-checks.js";
+
+const PRODUCT_EMULATOR_JOBS: string[] = ["customer-lifecycle-emulator", "gateway-edge-emulator", "glm-controller-emulator", "octogee-api-emulator"];
+import { CHECK_LANES, OVERLAY_COMMAND, PRODUCT_EMULATOR_ENTRY, checkPlan, checkSeconds, executeChecks, jobLabel, jobSeconds, nodeVersionCheck, overlayPackages, selectCheckLane, dependencyInstaller, vitestOptions } from "../lib/ci-checks.js";
 
 describe("portable Linux PR checks", () => {
   it("runs every registered test on a global change, leaving installer construction out of default CI", () => {
     const plan = checkPlan(["package-lock.json"], "tests");
-    expect([...new Set(plan.map(job => job.name))].sort()).toEqual(ALL_JOBS.filter(name => name !== "desktop-package").sort());
+    expect([...new Set(plan.map(job => job.name))].sort()).toEqual(ALL_JOBS.filter(name => name !== "desktop-package" && !PRODUCT_EMULATOR_JOBS.includes(name)).sort());
     for (const pkg of UNIT_PACKAGES) {
       expect(plan.find(job => job.name === pkg.name)).toMatchObject({
         directory: pkg.dir, nodeVersion: pkg.nodeVersion ?? 24,
@@ -63,7 +65,6 @@ describe("portable Linux PR checks", () => {
 
   it("keeps scoped checks and cross-package installs", () => {
     const plan = checkPlan(["platform/gateway-edge/src/index.ts"], "tests");
-    expect(plan.map(job => job.name)).toContain("octogee-api-emulator");
     expect(plan.map(job => job.name)).not.toContain("app");
     expect(plan.find(job => job.name === "octogee-api")?.installs).toContain("platform/gateway-edge");
     expect(plan.find(job => job.name === "glm-controller-emulator")).toBeUndefined();
@@ -92,7 +93,15 @@ describe("portable Linux PR checks", () => {
 
   it("runs every test job on a full run, whatever the diff", () => {
     expect([...new Set(checkPlan(["docs/INDEX.md"], "tests", false, true).map(job => job.name))].sort())
-      .toEqual(ALL_JOBS.filter(name => name !== "desktop-package").sort());
+      .toEqual(ALL_JOBS.filter(name => name !== "desktop-package" && !PRODUCT_EMULATOR_JOBS.includes(name)).sort());
+  });
+
+  it("runs a package's emulator suite only from a product overlay that supplies one", () => {
+    const everyPackage = new Set(["scripts", "gateway-edge", "glm-controller", "octogee-api"]);
+    const names = (tree: { products?: Set<string>; productEmulators?: Set<string> }) => checkPlan(["package-lock.json"], "tests", false, false, tree).map(job => job.name);
+    expect(names({})).not.toEqual(expect.arrayContaining([expect.stringMatching(/^(customer-lifecycle|gateway-edge|glm-controller|octogee-api)-emulator$/)]));
+    expect(names({ products: everyPackage })).not.toEqual(expect.arrayContaining([expect.stringMatching(/^(customer-lifecycle|gateway-edge|glm-controller|octogee-api)-emulator$/)]));
+    expect(names({ products: everyPackage, productEmulators: everyPackage })).toEqual(expect.arrayContaining(PRODUCT_EMULATOR_JOBS));
   });
 
   it("scans only the diff for secrets on a docs-only pull request", () => {
@@ -214,18 +223,18 @@ describe("portable Linux PR checks", () => {
   });
 
   it("runs a product package's emulator suite in the overlay, where the product specs live", () => {
-    const jobs = checkPlan(["platform/glm-controller/src/index.ts"], "tests", false, false, { products: new Set(["glm-controller"]) });
+    const jobs = checkPlan(["platform/glm-controller/src/index.ts"], "tests", false, false, { products: new Set(["glm-controller"]), productEmulators: new Set(["glm-controller"]) });
     expect(jobs.filter(job => job.name === "glm-controller-emulator")).toEqual([expect.objectContaining({
       directory: ".overlay/glm-controller",
       setup: [OVERLAY_COMMAND],
       installs: ["platform/scripts", ".overlay/glm-controller"],
-      commands: ["node ../../platform/scripts/ops/sync-local-file-deps.mjs --consumer .", "npm run test:emulator"],
+      commands: ["node ../../platform/scripts/ops/sync-local-file-deps.mjs --consumer .", `node ${PRODUCT_EMULATOR_ENTRY}`],
     })]);
     expect(selectCheckLane(jobs, "emulators").map(job => job.name)).toContain("glm-controller-emulator");
   });
 
   it("checks a product package change against both its platform package and the overlay", () => {
-    const names = checkPlan(["product/glm-controller/src/main.ts"], "tests", false, false, { products: new Set(["glm-controller"]) }).map(job => job.name);
+    const names = checkPlan(["product/glm-controller/src/main.ts"], "tests", false, false, { products: new Set(["glm-controller"]), productEmulators: new Set(["glm-controller"]) }).map(job => job.name);
     expect(names).toEqual(expect.arrayContaining(["glm-controller", "glm-controller-product", "glm-controller-emulator"]));
   });
 
