@@ -4,10 +4,14 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { OpenClawCommandOptions, OpenClawCommandResult } from "../lib/openclaw-cli.js";
-import { recoverRestartedGatewayContainerLocks } from "../lib/gateway-container-restart-locks.js";
+import { recoverIsolatedPodGatewayLocks, recoverRestartedGatewayContainerLocks } from "../lib/stopped-gateway-locks.js";
 
 const THIS_POD = "octogee-gateway-shared-0a1b2c3d4e5f-6c9f7d5b8-k2x9q";
 const EARLIER_POD = "octogee-gateway-shared-0a1b2c3d4e5f-6c9f7d5b8-p7r4m";
+const GATEWAY = "jane-s-1a2b3c4d";
+const ISOLATED_POD = `octogee-gateway-${GATEWAY}-7f9c5d8b6-new01`;
+const EVICTED_POD = `octogee-gateway-${GATEWAY}-7f9c5d8b6-old01`;
+const ISOLATED = { GATEWAY_ID: GATEWAY, GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "cluster" };
 const FIRST_INSTANCE = "4026532911";
 const SECOND_INSTANCE = "4026533187";
 const SIBLING_CONTAINER = "4026532874";
@@ -40,11 +44,13 @@ afterEach(() => {
 function harness(input: {
   holders?: string[];
   record?: unknown;
+  hostname?: string;
   pidNamespace?: string;
   env?: NodeJS.ProcessEnv;
   confirmOutput?: OpenClawCommandResult;
+  start?: "container" | "isolated-pod";
 }) {
-  const stateDir = mkdtempSync(path.join(tmpdir(), "gateway-container-restart-locks-"));
+  const stateDir = mkdtempSync(path.join(tmpdir(), "stopped-gateway-locks-"));
   stateDirs.push(stateDir);
   if (input.record !== undefined) {
     writeFileSync(path.join(stateDir, RECORD), typeof input.record === "string" ? input.record : JSON.stringify(input.record));
@@ -59,13 +65,16 @@ function harness(input: {
     }
     return { code: 0, stdout: inspection(input.holders ?? []) };
   };
-  const recover = () => recoverRestartedGatewayContainerLocks({
+  const options = {
     env,
-    hostname: THIS_POD,
+    hostname: input.hostname ?? THIS_POD,
     pidNamespace: input.pidNamespace ?? SECOND_INSTANCE,
     run,
-    log: (message) => logs.push(message),
-  });
+    log: (message: string) => logs.push(message),
+  };
+  const recover = () => input.start === "isolated-pod"
+    ? recoverIsolatedPodGatewayLocks(options)
+    : recoverRestartedGatewayContainerLocks(options);
   const record = () => JSON.parse(readFileSync(path.join(stateDir, RECORD), "utf8")) as unknown;
   return { recover, calls, logs, record, stateDir };
 }
@@ -92,7 +101,7 @@ describe("recoverRestartedGatewayContainerLocks", () => {
     ]);
     expect(calls.every((call) => call.env.OPENCLAW_STATE_DIR === stateDir)).toBe(true);
     expect(record()).toEqual({ host: THIS_POD, pidNamespaces: [FIRST_INSTANCE, SECOND_INSTANCE] });
-    expect(logs.join("\n")).toContain(`recovered 2 Gateway lock record(s) held by earlier gateway container(s) of pod ${THIS_POD}`);
+    expect(logs.join("\n")).toContain(`pod ${THIS_POD}: recovered 2 Gateway lock record(s) whose holders stopped`);
   });
 
   it("records this container before it inspects, so a container killed mid-recovery is still provable", async () => {
@@ -118,7 +127,7 @@ describe("recoverRestartedGatewayContainerLocks", () => {
   it.each([
     ["this container's own namespace", [fileHolder(THIS_POD, SECOND_INSTANCE)]],
     ["a namespace this pod's gateway container never recorded", [fileHolder(THIS_POD, SIBLING_CONTAINER)]],
-    ["another pod", [leaseHolder(EARLIER_POD, FIRST_INSTANCE)]],
+    ["another pod of a shared gateway, whose home is not a single-pod claim", [leaseHolder(EARLIER_POD, FIRST_INSTANCE)]],
     ["a host with no PID namespace", [leaseHolder(THIS_POD, FIRST_INSTANCE).replace(`/pid-ns ${FIRST_INSTANCE}`, "")]],
     ["an earlier container and an unproven holder together", [fileHolder(THIS_POD, FIRST_INSTANCE), leaseHolder(THIS_POD, SIBLING_CONTAINER)]],
     ["a record OpenClaw describes in a form this check does not know", ["PostgreSQL Gateway owner lease: owned elsewhere."]],
@@ -128,7 +137,7 @@ describe("recoverRestartedGatewayContainerLocks", () => {
     await expect(recover()).resolves.toBe("held");
 
     expect(calls.map((call) => call.args)).toEqual([["gateway", "recover-lock", "--json"]]);
-    expect(logs.join("\n")).toContain("not proven to be an earlier gateway container of this pod");
+    expect(logs.join("\n")).toContain("holder not proven stopped");
   });
 
   it("starts a fresh record when the home's record belongs to an earlier pod", async () => {
@@ -140,11 +149,12 @@ describe("recoverRestartedGatewayContainerLocks", () => {
     expect(calls).toEqual([]);
   });
 
-  it("covers isolated gateways in a pod", async () => {
+  it("recovers an isolated pod's earlier container and earlier pod records together", async () => {
     const { recover, calls } = harness({
-      holders: [fileHolder(THIS_POD, FIRST_INSTANCE)],
-      record: { host: THIS_POD, pidNamespaces: [FIRST_INSTANCE] },
-      env: { GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "cluster" },
+      hostname: ISOLATED_POD,
+      holders: [fileHolder(ISOLATED_POD, FIRST_INSTANCE), leaseHolder(EVICTED_POD, FIRST_INSTANCE)],
+      record: { host: ISOLATED_POD, pidNamespaces: [FIRST_INSTANCE] },
+      env: ISOLATED,
     });
 
     await expect(recover()).resolves.toBe("recovered");
@@ -155,7 +165,7 @@ describe("recoverRestartedGatewayContainerLocks", () => {
   it("leaves a VM gateway alone, whose container lifecycle Kubernetes does not own", async () => {
     const { recover, calls, stateDir } = harness({
       record: undefined,
-      env: { GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "gce-vm" },
+      env: { ...ISOLATED, GATEWAY_RUNTIME_KIND: "gce-vm" },
     });
 
     await expect(recover()).resolves.toBe("not-a-pod");
@@ -180,5 +190,79 @@ describe("recoverRestartedGatewayContainerLocks", () => {
     });
 
     await expect(recover()).rejects.toThrow("Gateway lock recovery did not report a recovery");
+  });
+});
+
+describe("recoverIsolatedPodGatewayLocks", () => {
+  it("recovers the records an earlier pod of this gateway left on its single-pod home claim", async () => {
+    const { recover, calls, logs } = harness({
+      start: "isolated-pod",
+      hostname: ISOLATED_POD,
+      holders: [fileHolder(EVICTED_POD, FIRST_INSTANCE), leaseHolder(EVICTED_POD, FIRST_INSTANCE)],
+      env: ISOLATED,
+    });
+
+    await expect(recover()).resolves.toBe("recovered");
+
+    expect(calls.map((call) => call.args)).toEqual([
+      ["gateway", "recover-lock", "--json"],
+      ["gateway", "recover-lock", "--confirm", FINGERPRINT, "--json"],
+    ]);
+    expect(logs.join("\n")).toContain(`pod ${ISOLATED_POD}: recovered 2 Gateway lock record(s) whose holders stopped`);
+  });
+
+  it("also recovers the records of an earlier gateway container in this pod, and leaves the container record as it is", async () => {
+    const containers = { host: ISOLATED_POD, pidNamespaces: [FIRST_INSTANCE, SECOND_INSTANCE] };
+    const { recover, calls, record } = harness({
+      start: "isolated-pod",
+      hostname: ISOLATED_POD,
+      holders: [fileHolder(ISOLATED_POD, FIRST_INSTANCE), leaseHolder(EVICTED_POD, FIRST_INSTANCE)],
+      record: containers,
+      env: ISOLATED,
+    });
+
+    await expect(recover()).resolves.toBe("recovered");
+
+    expect(calls).toHaveLength(2);
+    expect(record()).toEqual(containers);
+  });
+
+  it.each([
+    ["this container", fileHolder(ISOLATED_POD, SECOND_INSTANCE)],
+    ["another gateway's pod", fileHolder("octogee-gateway-john-s-9f8e7d6c-7f9c5d8b6-old01", FIRST_INSTANCE)],
+    ["a hostname the kubelet truncated from a longer pod name", fileHolder(`octogee-gateway-${GATEWAY}-7f9c5d8b6-ol`, FIRST_INSTANCE)],
+    ["a pod of this gateway that is not a Deployment pod", fileHolder(`octogee-gateway-${GATEWAY}-old01`, FIRST_INSTANCE)],
+  ])("leaves the records to OpenClaw when a holder is %s", async (_name, holder) => {
+    const { recover, calls, logs } = harness({
+      start: "isolated-pod",
+      hostname: ISOLATED_POD,
+      holders: [holder],
+      record: { host: ISOLATED_POD, pidNamespaces: [SECOND_INSTANCE] },
+      env: ISOLATED,
+    });
+
+    await expect(recover()).resolves.toBe("held");
+
+    expect(calls.map((call) => call.args)).toEqual([["gateway", "recover-lock", "--json"]]);
+    expect(logs.join("\n")).toContain("holder not proven stopped");
+  });
+
+  it.each([
+    ["a shared gateway", { GATEWAY_CLASS: "shared" }],
+    ["a VM gateway", { ...ISOLATED, GATEWAY_RUNTIME_KIND: "gce-vm" }],
+  ])("leaves %s alone", async (_name, env) => {
+    const { recover, calls } = harness({ start: "isolated-pod", holders: [leaseHolder(EARLIER_POD, FIRST_INSTANCE)], env });
+
+    await expect(recover()).resolves.toBe("not-an-isolated-pod");
+
+    expect(calls).toEqual([]);
+  });
+
+  it("refuses an isolated pod without its gateway id", async () => {
+    const { recover, calls } = harness({ start: "isolated-pod", hostname: ISOLATED_POD, env: { ...ISOLATED, GATEWAY_ID: " " } });
+
+    await expect(recover()).rejects.toThrow("GATEWAY_ID is required");
+
+    expect(calls).toEqual([]);
   });
 });

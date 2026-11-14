@@ -6,8 +6,6 @@ import { isolatedBootMode } from "@octogee/core/isolated-prelaunch";
 import type { ProvisioningProjection } from "@octogee/core/provisionSteps";
 import { sharedAgentAnchorMigrationScope, sharedAssignedSourceSurgeAnchorScope } from "../lib/shared-agent-anchor-migration.js";
 import { installWorkspaceBlobBrokerRoute, type WorkspaceBlobStore } from "./fleet-broker-workspace-blob.js";
-import { installStoppedGatewayPodsRoute } from "./fleet-broker-stopped-gateway-pods.js";
-import { createGatewayPodPresence, type GatewayPodExists } from "../lib/gateway-pod-presence.js";
 import { readUserRestoreAuthoritySnapshot } from "@octogee/core/fleet-state";
 import {
   FenceMismatchError,
@@ -256,7 +254,6 @@ export interface ProvisionedUserReport {
 
 interface FleetBrokerRouteDeps {
   workspaceBlobStore?: WorkspaceBlobStore;
-  gatewayPodExists?: GatewayPodExists;
   reconcileDefaultAgentProjectMembership?: (input: ProjectAgentMembershipInput) => Promise<ProjectAgentMembershipResult>;
   provisionMattermost?: (input: {
     uid: string;
@@ -4216,7 +4213,6 @@ export function createFleetBrokerRoutes(opts: FleetBrokerRouteOptions): Router {
   installVmRuntimeRoutes(router, deps);
   installVmEgressRoutes(router, deps);
   installAgentRoutes(router, deps);
-  installStoppedGatewayPodsRoute(router, { bound: boundGateway, podExists: opts.gatewayPodExists ?? createGatewayPodPresence() });
   installWorkspaceBlobBrokerRoute(router, { store: deps.store, blobStore: opts.workspaceBlobStore, authorize: async (req, res, slug) => {
     req.body = { slug };
     const assigned = await requireAssignedSlug(deps.store, req, res);

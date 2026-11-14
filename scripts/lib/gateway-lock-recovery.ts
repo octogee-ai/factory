@@ -1,6 +1,8 @@
 import type { OpenClawCommand, OpenClawCommandResult } from "./openclaw-cli.js";
 
 const HOLDER = /(?:^|: )holder (?:\d+|unknown) at ([^\s,/]+)(?:\/pid-ns (\d+))?, last renewed /u;
+const MAX_HOSTNAME_LENGTH = 63;
+const REPLICA_SET_POD_SUFFIX = /^[a-z0-9]{1,10}-[a-z0-9]{5}$/u;
 
 export interface GatewayLockHolder {
   host: string;
@@ -48,6 +50,45 @@ export async function inspectGatewayLocks(run: OpenClawCommand, env: NodeJS.Proc
     throw new Error(`${what} has an unexpected shape`);
   }
   return { present, holders, confirmation: String(confirmation) };
+}
+
+export interface StoppedGatewayLockHolders {
+  hostname: string;
+  earlierContainerNamespaces: string[];
+  singlePodHomeGatewayId: string | null;
+}
+
+function isDeploymentPodOf(gatewayId: string, hostname: string): boolean {
+  const prefix = `octogee-gateway-${gatewayId}-`;
+  return hostname.length <= MAX_HOSTNAME_LENGTH && hostname.startsWith(prefix) &&
+    REPLICA_SET_POD_SUFFIX.test(hostname.slice(prefix.length));
+}
+
+function holderStopped(holder: GatewayLockHolder | null, stopped: StoppedGatewayLockHolders): boolean {
+  if (!holder) return false;
+  if (holder.host === stopped.hostname) {
+    return holder.pidNamespace !== null && stopped.earlierContainerNamespaces.includes(holder.pidNamespace);
+  }
+  return stopped.singlePodHomeGatewayId !== null && isDeploymentPodOf(stopped.singlePodHomeGatewayId, holder.host);
+}
+
+export async function recoverStoppedGatewayLocks(input: {
+  env: NodeJS.ProcessEnv;
+  run: OpenClawCommand;
+  log: (message: string) => void;
+  stopped: StoppedGatewayLockHolders;
+}): Promise<"absent" | "held" | "recovered"> {
+  const inspection = await inspectGatewayLocks(input.run, input.env);
+  if (!inspection.present) return "absent";
+  const pod = input.stopped.hostname;
+  const unproven = inspection.holders.filter((holder) => !holderStopped(parseGatewayLockHolder(holder), input.stopped));
+  if (unproven.length) {
+    input.log(`[gateway-locks] pod ${pod}: leaving Gateway lock records to OpenClaw; holder not proven stopped: ${unproven.join(" | ")}`);
+    return "held";
+  }
+  const removed = await recoverInspectedGatewayLocks(input.run, input.env, inspection.confirmation);
+  input.log(`[gateway-locks] pod ${pod}: recovered ${removed} Gateway lock record(s) whose holders stopped`);
+  return "recovered";
 }
 
 export async function recoverInspectedGatewayLocks(run: OpenClawCommand, env: NodeJS.ProcessEnv, confirmation: string): Promise<number> {

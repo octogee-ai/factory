@@ -55,7 +55,7 @@ describe("ensuring an isolated pod gateway's home claim", () => {
   const ensure = (run: KubectlSubprocess, served = false) =>
     ensureIsolatedPodHome({ runKubectl: run, namespace: NAMESPACE, log: vi.fn() }, { gatewayId: GATEWAY, homeSizeGiB: 10, served });
 
-  it("creates the claim the chart mounts, sized from the pod profile", async () => {
+  it("creates the claim the chart mounts, sized from the pod profile and mountable by one pod at a time", async () => {
     const k = kubectl({ [GET_CLAIM]: notFound("persistentvolumeclaims", CLAIM), [`create -n ${NAMESPACE} -f -`]: {} });
 
     await ensure(k.run);
@@ -69,7 +69,7 @@ describe("ensuring an isolated pod gateway's home claim", () => {
         namespace: NAMESPACE,
         labels: { "app.kubernetes.io/managed-by": "glm-controller", "octogee.ai/gateway-id": GATEWAY },
       },
-      spec: { accessModes: ["ReadWriteOnce"], resources: { requests: { storage: "10Gi" } } },
+      spec: { accessModes: ["ReadWriteOncePod"], resources: { requests: { storage: "10Gi" } } },
     });
   });
 

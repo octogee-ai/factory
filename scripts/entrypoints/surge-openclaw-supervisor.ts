@@ -1,6 +1,6 @@
 import { prepareIsolatedPrelaunchConfig, systemConfigPath } from "../lib/system-config.js";
 import { runOpenClaw } from "../lib/openclaw-cli.js";
-import { recoverStoppedPodGatewayLocks } from "../lib/stopped-pod-lock-recovery.js";
+import { currentGatewayContainerPidNamespace, recoverIsolatedPodGatewayLocks } from "../lib/stopped-gateway-locks.js";
 import { prepareUserSystemStore } from "../lib/user-system-store.js";
 import { userClaimSlug } from "@octogee/shared/server/user-claim";
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
@@ -1028,11 +1028,11 @@ async function main(): Promise<void> {
     readIdentity: () => createFleetBrokerClient(gatewayId, revisionId).builderIdentity({ nativeBoot: true }),
   });
   const boot = await readBootMode();
-  await recoverStoppedPodGatewayLocks({
+  await recoverIsolatedPodGatewayLocks({
     env: { ...process.env, OPENCLAW_STATE_DIR: openclawDir, OPENCLAW_CONFIG_PATH: systemConfigPath(openclawDir) },
     hostname: os.hostname(),
+    pidNamespace: await currentGatewayContainerPidNamespace(),
     run: runOpenClaw,
-    stoppedPods: (hostnames) => createFleetBrokerClient(gatewayId, revisionId).stoppedGatewayPods(hostnames),
     log,
   });
   const supervisor = await startSurgeOpenClawSupervisor({

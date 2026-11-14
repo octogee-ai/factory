@@ -88,7 +88,7 @@ export async function ensureIsolatedPodHome(
       namespace: deps.namespace,
       labels: { "app.kubernetes.io/managed-by": "glm-controller", "octogee.ai/gateway-id": input.gatewayId },
     },
-    spec: { accessModes: ["ReadWriteOnce"], resources: { requests: { storage: `${input.homeSizeGiB}Gi` } } },
+    spec: { accessModes: ["ReadWriteOncePod"], resources: { requests: { storage: `${input.homeSizeGiB}Gi` } } },
   });
   const args = ["create", "-n", deps.namespace, "-f", "-"];
   const result = await deps.runKubectl(args, { stdin: manifest });
