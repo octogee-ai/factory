@@ -2,7 +2,7 @@ import { migrationCancellationDeferred } from "./fleet-state.js";
 import { readSharedSourceRecoveryAuthority, readSharedSourceRecoverySupersession, SharedSourceRecoveryConflict } from "./shared-source-recovery.js";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { isOperationAuditRecord, isOperationAuditRow, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, isValidNewGatewayId, isGatewayClass, isGatewayProfile, resolveGatewayClass, resolveGatewayImageProfile, resolveGatewayRuntime, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
+import { isOperationAuditRecord, isOperationAuditRow, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, isValidNewGatewayId, isGatewayClass, isGatewayProfile, resolveGatewayClass, resolveGatewayImageProfile, resolveGatewayRuntime, isGatewayRuntime, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
 import { DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS, } from "@octogee/shared/types/platform-config";
 import { accountAllowsInteractiveAccess, } from "@octogee/shared/types/account-lifecycle";
 import { isReleasePayload, isGatewayRuntimeDoc, } from "@octogee/shared/types/gateway-releases";
@@ -810,8 +810,9 @@ function projectImageTag(data, glmDoc) {
         return data.version;
     return typeof glmDoc?.imageTag === "string" ? glmDoc.imageTag : null;
 }
-function syntheticGatewayDoc(id) {
-    return { id, data: () => ({ gatewayId: id }) };
+function syntheticGatewayDoc(id, glmDoc) {
+    const lastError = isPlainRecord(glmDoc?.lastError) ? glmDoc.lastError : undefined;
+    return { id, data: () => ({ gatewayId: id, ...(lastError ? { lastError } : {}) }) };
 }
 function effectiveHeartbeatDoc(gatewayId, glmDoc) {
     const hb = glmDoc?.heartbeat;
@@ -879,9 +880,9 @@ async function retirementRefusal(store, gatewayId, runtime, asked) {
         : null;
 }
 async function mountedUsersBlockingRetirement(store, gatewayId, runtime) {
-    const parkedVm = runtime.root.desiredStatus === "paused" &&
-        resolveGatewayRuntime((await store.fleetRegistry.get(gatewayId))?.runtime) === "gce-vm";
-    return parkedVm ? [] : [...readMountedSlugs(runtime.heartbeat ?? undefined)];
+    const parkedIsolated = runtime.root.desiredStatus === "paused" && runtime.root.gatewayClass === "builder" &&
+        isGatewayRuntime((await store.fleetRegistry.get(gatewayId))?.runtime);
+    return parkedIsolated ? [] : [...readMountedSlugs(runtime.heartbeat ?? undefined)];
 }
 function gatewayRetirementBlocker(gatewayId, runtime) {
     if (runtime.root.desiredStatus === "running" &&
@@ -3295,7 +3296,7 @@ export function addAdminFleetRoutes(router, deps) {
                 const doc = effectiveHeartbeatDoc(gatewayId, glmDoc);
                 if (!doc && !shouldProjectDesiredOnlyGateway(glmDoc) && !retiredButListed)
                     return [];
-                return [{ doc: doc ?? syntheticGatewayDoc(gatewayId), glmDoc }];
+                return [{ doc: doc ?? syntheticGatewayDoc(gatewayId, glmDoc), glmDoc }];
             });
             const summaries = gatewayInputs.map(({ doc, glmDoc }) => projectGatewaySummary(doc, glmDoc, now));
             const readBatch = deps.readGatewayPodDiagnosticsBatch;

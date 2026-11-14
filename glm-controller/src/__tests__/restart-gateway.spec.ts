@@ -3,6 +3,7 @@ import type { Operation, OperationStep } from "@octogee/shared/types/glm";
 import { createRestartGatewayHandler } from "../handlers/restart-gateway";
 import type { RestartGatewayDeps } from "../handlers/restart-gateway";
 import type { OperationContext } from "../operation-router";
+import type { KubeOps } from "../lib/kube-ops";
 
 function mkOp(overrides: Partial<Operation> = {}): Operation {
   return {
@@ -29,14 +30,27 @@ function mkCtx() {
   return { ctx, reported };
 }
 
+function kubeOps(restartOpenClawInPlace: KubeOps["restartOpenClawInPlace"] = vi.fn(async () => undefined)): KubeOps {
+  const unused = (name: string) => vi.fn(async () => {
+    throw new Error(`restart-gateway must not call kubeOps.${name}`);
+  });
+  return {
+    scaleDeployment: unused("scaleDeployment"),
+    restartOpenClawInPlace,
+    readDeployedReplicas: unused("readDeployedReplicas"),
+    readAvailableReplicas: unused("readAvailableReplicas"),
+    readGatewayPodDiagnostics: unused("readGatewayPodDiagnostics"),
+    readGatewayPodDiagnosticsBatch: unused("readGatewayPodDiagnosticsBatch"),
+    deletePersistentVolumeClaim: unused("deletePersistentVolumeClaim"),
+    deleteSecret: unused("deleteSecret"),
+    deleteServiceAccount: unused("deleteServiceAccount"),
+    deleteService: unused("deleteService"),
+  };
+}
+
 function mkDeps(overrides: Partial<RestartGatewayDeps> = {}): RestartGatewayDeps {
   return {
-    kubeOps: {
-      scaleDeployment: vi.fn(async () => undefined),
-      restartOpenClawInPlace: vi.fn(async () => undefined),
-      readDeployedReplicas: vi.fn(async () => 1),
-      deletePersistentVolumeClaim: vi.fn(async () => undefined),
-    },
+    kubeOps: kubeOps(),
     namespace: "octogee-test",
     resolveLiveRevisionId: vi.fn(async (gatewayId: string) => `${gatewayId}-r7`),
     now: () => 1000,
@@ -138,14 +152,9 @@ describe("createRestartGatewayHandler", () => {
 
   it("reports the openclaw-restart step failed when kubeOps throws, surfacing the error message", async () => {
     const deps = mkDeps({
-      kubeOps: {
-        scaleDeployment: vi.fn(async () => undefined),
-        restartOpenClawInPlace: vi.fn(async () => {
+      kubeOps: kubeOps(vi.fn(async () => {
           throw new Error("kubectl: connection refused");
-        }),
-        readDeployedReplicas: vi.fn(async () => 1),
-        deletePersistentVolumeClaim: vi.fn(async () => undefined),
-      },
+        })),
     });
     const handler = createRestartGatewayHandler(deps);
     const { ctx, reported } = mkCtx();
@@ -161,16 +170,11 @@ describe("createRestartGatewayHandler", () => {
 
   it("treats a restart against an already failed pod as idempotently satisfied", async () => {
     const deps = mkDeps({
-      kubeOps: {
-        scaleDeployment: vi.fn(async () => undefined),
-        restartOpenClawInPlace: vi.fn(async () => {
+      kubeOps: kubeOps(vi.fn(async () => {
           throw new Error(
             "cannot exec into a container in a completed pod; current phase is Failed",
           );
-        }),
-        readDeployedReplicas: vi.fn(async () => 1),
-        deletePersistentVolumeClaim: vi.fn(async () => undefined),
-      },
+        })),
     });
     const { ctx, reported } = mkCtx();
 
@@ -187,16 +191,11 @@ describe("createRestartGatewayHandler", () => {
     const log = vi.fn();
     const deps = mkDeps({
       log,
-      kubeOps: {
-        scaleDeployment: vi.fn(async () => undefined),
-        restartOpenClawInPlace: vi.fn(async () => {
+      kubeOps: kubeOps(vi.fn(async () => {
           throw new Error(
             "openclaw gateway restart (in-place) deploy/octogee-gateway-shared-0 ns=octogee-test failed (code=1): Gateway not reachable at ws://127.0.0.1:18789 (ECONNREFUSED)",
           );
-        }),
-        readDeployedReplicas: vi.fn(async () => 1),
-        deletePersistentVolumeClaim: vi.fn(async () => undefined),
-      },
+        })),
     });
     const { ctx, reported } = mkCtx();
 
@@ -213,14 +212,9 @@ describe("createRestartGatewayHandler", () => {
 
   it("treats a restart against a disappeared pod as idempotently satisfied", async () => {
     const deps = mkDeps({
-      kubeOps: {
-        scaleDeployment: vi.fn(async () => undefined),
-        restartOpenClawInPlace: vi.fn(async () => {
+      kubeOps: kubeOps(vi.fn(async () => {
           throw new Error('Error from server (NotFound): pods "octogee-gateway-walter-abc" not found');
-        }),
-        readDeployedReplicas: vi.fn(async () => 1),
-        deletePersistentVolumeClaim: vi.fn(async () => undefined),
-      },
+        })),
     });
 
     const result = await createRestartGatewayHandler(deps)(mkOp(), mkCtx().ctx);

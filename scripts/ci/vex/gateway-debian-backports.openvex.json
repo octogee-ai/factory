@@ -1,0 +1,27 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/octogee-ai/octogee-cloud/blob/main/scripts/ci/vex/gateway-debian-backports.openvex.json",
+  "author": "Octogee",
+  "timestamp": "2026-11-13T23:16:00Z",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": { "name": "CVE-2026-6653" },
+      "products": [
+        { "@id": "pkg:deb/debian/libxml2@2.12.7%2Bdfsg%2Breally2.9.14-2.1%2Bdeb13u3%2Boctogee1?arch=amd64" },
+        { "@id": "pkg:deb/debian/libxml2@2.12.7%2Bdfsg%2Breally2.9.14-2.1%2Bdeb13u3%2Boctogee1?arch=arm64" }
+      ],
+      "status": "fixed",
+      "status_notes": "The listed Debian packages include the libxml2 fix backported in https://github.com/octogee-ai/octogee-cloud/pull/85 and verified in https://github.com/octogee-ai/octogee-cloud/actions/runs/43523218467."
+    },
+    {
+      "vulnerability": { "name": "CVE-2026-60002" },
+      "products": [
+        { "@id": "pkg:deb/debian/openssh-client@10.0p1-7%2Bdeb13u4%2Boctogee1?arch=amd64&epoch=1" },
+        { "@id": "pkg:deb/debian/openssh-client@10.0p1-7%2Bdeb13u4%2Boctogee1?arch=arm64&epoch=1" }
+      ],
+      "status": "fixed",
+      "status_notes": "The listed Debian packages include the OpenSSH client fix backported in https://github.com/octogee-ai/octogee-cloud/pull/85 and verified in https://github.com/octogee-ai/octogee-cloud/actions/runs/43523218467."
+    }
+  ]
+}

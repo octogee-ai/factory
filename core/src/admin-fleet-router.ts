@@ -22,6 +22,7 @@ import {
   resolveGatewayClass,
   resolveGatewayImageProfile,
   resolveGatewayRuntime,
+  isGatewayRuntime,
   deriveGatewayIdentity,
   type GatewayClass,
   type GlmOperationRecord,
@@ -1371,8 +1372,9 @@ function projectImageTag(data: GlmDoc, glmDoc: GlmDoc | undefined): string | nul
   return typeof glmDoc?.imageTag === "string" ? glmDoc.imageTag : null;
 }
 
-function syntheticGatewayDoc(id: string): FirestoreDocLike {
-  return { id, data: () => ({ gatewayId: id }) };
+function syntheticGatewayDoc(id: string, glmDoc: GlmDoc | undefined): FirestoreDocLike {
+  const lastError = isPlainRecord(glmDoc?.lastError) ? glmDoc.lastError : undefined;
+  return { id, data: () => ({ gatewayId: id, ...(lastError ? { lastError } : {}) }) };
 }
 
 function effectiveHeartbeatDoc(
@@ -1463,9 +1465,9 @@ async function mountedUsersBlockingRetirement(
   gatewayId: string,
   runtime: DurableGatewayRuntime,
 ): Promise<string[]> {
-  const parkedVm = runtime.root.desiredStatus === "paused" &&
-    resolveGatewayRuntime((await store.fleetRegistry.get(gatewayId))?.runtime) === "gce-vm";
-  return parkedVm ? [] : [...readMountedSlugs(runtime.heartbeat ?? undefined)];
+  const parkedIsolated = runtime.root.desiredStatus === "paused" && runtime.root.gatewayClass === "builder" &&
+    isGatewayRuntime((await store.fleetRegistry.get(gatewayId))?.runtime);
+  return parkedIsolated ? [] : [...readMountedSlugs(runtime.heartbeat ?? undefined)];
 }
 
 function gatewayRetirementBlocker(
@@ -4752,7 +4754,7 @@ router.get(
           if (retired && !retiredButListed) return [];
           const doc = effectiveHeartbeatDoc(gatewayId, glmDoc);
           if (!doc && !shouldProjectDesiredOnlyGateway(glmDoc) && !retiredButListed) return [];
-          return [{ doc: doc ?? syntheticGatewayDoc(gatewayId), glmDoc }];
+          return [{ doc: doc ?? syntheticGatewayDoc(gatewayId, glmDoc), glmDoc }];
         });
         const summaries = gatewayInputs.map(({ doc, glmDoc }) =>
           projectGatewaySummary(doc, glmDoc, now),

@@ -284,13 +284,13 @@ describe("createGatewayVmClient lifecycle", () => {
       if (call.method === "POST") return { status: 200, data: { name: "identity", status: "RUNNING" } };
       return { status: 200, data: { name: "identity", status: "DONE" } };
     });
-    await clientWith(request).client.setServiceAccount(input.instanceName, input.zone, input.serviceAccountEmail);
+    await clientWith(request).client.setServiceAccount(input.instanceName, "us-west1-b", input.serviceAccountEmail);
     expect(calls).toEqual([
-      { url: `${BASE}/zones/${input.zone}/instances/${input.instanceName}/setServiceAccount`, method: "POST", body: {
+      { url: `${BASE}/zones/us-west1-b/instances/${input.instanceName}/setServiceAccount`, method: "POST", body: {
         email: input.serviceAccountEmail,
         scopes: ["https://www.googleapis.com/auth/cloud-platform", "https://www.googleapis.com/auth/userinfo.email"],
       } },
-      { url: `${BASE}/zones/${input.zone}/operations/identity`, method: "GET" },
+      { url: `${BASE}/zones/us-west1-b/operations/identity`, method: "GET" },
     ]);
   });
 
@@ -482,7 +482,7 @@ describe("createGatewayVmClient lifecycle", () => {
     await expect(client.describe("x", "us-west1-b")).rejects.toThrow(/http 403/);
     await expect(client.delete("x", "us-west1-b")).rejects.toThrow(/http 403/);
     await expect(client.stop("x", "us-west1-b")).rejects.toThrow(/http 403/);
-    await expect(client.list({ zones: ["us-west1-b"], labels: { purpose: "octogee-computer" } })).rejects.toThrow(/http 403/);
+    await expect(client.list({ labels: { purpose: "octogee-computer" } })).rejects.toThrow(/http 403/);
     await expect(client.findByLabels({ "octogee-owner-uid": "uida" })).rejects.toThrow(/http 403/);
   });
 });
@@ -581,13 +581,14 @@ describe("createGatewayVmClient listing", () => {
 });
 
 describe("createGatewayVmClient — zone walk", () => {
-  const input = {
+  const input: CreateGatewayVmInput = {
     instanceName: "octogee-computer-test-abc",
     zones: ["us-central1-b", "us-central1-c", "us-central1-f"],
     machineType: "n2-standard-4",
     imageFamily: "octogee-computer",
-    diskSizeGb: 40, homeDiskSizeGb: 20,
-    provisioningModel: "SPOT" as const,
+    diskSizeGb: 40, bootDiskType: "pd-ssd", homeDiskSizeGb: 20,
+    provisioningModel: "SPOT",
+    desktop: "omarchy",
     serviceAccountEmail: "computer@octogee.iam.gserviceaccount.com",
     subnetwork: "regions/us-central1/subnetworks/default",
     labels: { "octogee-owner-uid": "uida" },

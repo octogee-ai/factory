@@ -39,8 +39,17 @@ function harness(
   vm: Partial<GatewayVmClient> = {},
   home: { completedAt?: () => number | null; cancelled?: () => boolean; parked?: UserParkedVm | null; replacement?: GatewayVmDeps["replaceStoppedVm"] } = {},
 ) {
+  const unused = (name: string) => vi.fn(() => { throw new Error(`the gateway-vm handler must not call vm.${name}`); });
   const client: GatewayVmClient = {
-    create: vi.fn(async () => ({ description, provisioningModel: "SPOT", fellBackToStandard: false, alreadyExisted: false })),
+    expandHome: unused("expandHome"),
+    deleteRetainingHome: unused("deleteRetainingHome"),
+    setProvisioningModel: unused("setProvisioningModel"),
+    suspend: unused("suspend"),
+    resume: unused("resume"),
+    readBootImage: unused("readBootImage"),
+    readFamilyImage: unused("readFamilyImage"),
+    readImage: unused("readImage"),
+    create: vi.fn(async () => ({ description, provisioningModel: "SPOT" as const, fellBackToStandard: false, alreadyExisted: false })),
     describe: vi.fn(async () => description),
     find: vi.fn(async () => null),
     findByLabels: vi.fn(async () => null),

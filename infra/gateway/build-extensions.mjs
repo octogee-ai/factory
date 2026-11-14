@@ -37,7 +37,7 @@ function installBundleInputs(dir) {
     );
   }
   console.error(`[extension-build] bundle inputs: ${name} (${dependencies.join(", ")})`);
-  run(name, npm, ["ci", "--omit=dev", "--no-audit", "--no-fund"], dir);
+  run(name, npm, ["ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"], dir);
 }
 
 function bundle(dir) {

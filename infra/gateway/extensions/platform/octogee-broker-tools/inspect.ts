@@ -26,15 +26,21 @@ function inspectionPayload(input: Record<string, unknown>): Record<string, unkno
 }
 const METHOD = "octogee.broker.inspect";
 
-function inspectionConfig(value: unknown): { url: URL; tokenPath: string } {
-  const config = (value ?? {}) as Config;
-  const url = brokerOrigin(config.brokerUrl ?? process.env.FLEET_BROKER_URL ?? process.env.OCTOGEE_API_URL ?? "https://api.octogee.com");
-  url.pathname = "/internal/byok/broker-inspect";
-  return { url, tokenPath: config.tokenPath ?? process.env.OCTOGEE_API_SA_TOKEN_PATH ?? "/var/run/octogee/api-token/token" };
+class BrokerUrlMissing extends Error {
+  constructor() { super("no broker URL; set the brokerUrl plugin config, FLEET_BROKER_URL or OCTOGEE_API_URL"); }
 }
 
-export function registerBrokerInspection(api: Pick<OpenClawPluginApi, "registerGatewayMethod" | "pluginConfig" | "registrationMode">,
-  deps: { fetchImpl?: typeof fetch; readToken?: (file: string) => Promise<string> } = {}): void {
+function inspectionConfig(value: unknown, env: NodeJS.ProcessEnv): { url: URL; tokenPath: string } {
+  const config = (value ?? {}) as Config;
+  const broker = config.brokerUrl || env.FLEET_BROKER_URL || env.OCTOGEE_API_URL;
+  if (!broker) throw new BrokerUrlMissing();
+  const url = brokerOrigin(broker);
+  url.pathname = "/internal/byok/broker-inspect";
+  return { url, tokenPath: config.tokenPath ?? env.OCTOGEE_API_SA_TOKEN_PATH ?? "/var/run/octogee/api-token/token" };
+}
+
+export function registerBrokerInspection(api: Pick<OpenClawPluginApi, "registerGatewayMethod" | "pluginConfig" | "registrationMode" | "logger">,
+  deps: { fetchImpl?: typeof fetch; readToken?: (file: string) => Promise<string>; env?: NodeJS.ProcessEnv } = {}): void {
   if (api.registrationMode && ["discovery", "tool-discovery", "setup-only", "cli-metadata"].includes(api.registrationMode)) return;
   api.registerGatewayMethod(METHOD, async request => {
     const { params, respond, client, signal, hasCurrentClientAuthority } = request;
@@ -50,7 +56,7 @@ export function registerBrokerInspection(api: Pick<OpenClawPluginApi, "registerG
     }
     try {
       current();
-      const { url, tokenPath } = inspectionConfig(api.pluginConfig);
+      const { url, tokenPath } = inspectionConfig(api.pluginConfig, deps.env ?? process.env);
       const token = (await (deps.readToken ?? (file => readFile(file, "utf8")))(tokenPath)).trim();
       current();
       if (!token) throw new BrokerMetadataUnavailable();
@@ -60,7 +66,8 @@ export function registerBrokerInspection(api: Pick<OpenClawPluginApi, "registerG
       current();
       if (payload.schemaVersion !== 1 || payload.agentId !== params.agentId) throw new BrokerMetadataUnavailable();
       respond(true, inspectionPayload(payload));
-    } catch {
+    } catch (error) {
+      if (error instanceof BrokerUrlMissing) api.logger.error(`[broker-inspect] ${error.message}`);
       respond(false, undefined, { code: "UNAVAILABLE", message: "Owner-authorized broker metadata unavailable" });
     }
   }, { scope: "operator.read" });

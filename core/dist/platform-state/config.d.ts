@@ -1,7 +1,7 @@
 import type { PlatformConnectConfig, PlatformFreeConfig, PlatformModelConfig } from "@octogee/shared/types/platform-config";
-import type { GatewayRuntime, GatewayVmBootDiskType, GatewayVmDesktop, GatewayVmProvisioningModel } from "@octogee/shared/types/glm";
+import { type GatewayRuntime, type GatewayVmBootDiskType, type GatewayVmDesktop, type GatewayVmProvisioningModel } from "@octogee/shared/types/glm";
 import type { SharedGatewayAutoscalingConfig } from "@octogee/shared/types/shared-gateway-pool";
-import type { SizingTier } from "@octogee/shared/types/sizing";
+import { type SizingTier } from "@octogee/shared/types/sizing";
 import type { OpaqueMap, RecordPatch, Revision, Stored, TimeInput } from "./store.js";
 export type GatewayIsolation = "shared" | "isolated";
 export interface GatewayVmProfile {
@@ -15,14 +15,22 @@ export interface GatewayVmProfile {
     } | null;
     readonly homeSizeGiB: number;
 }
+export interface GatewayPodProfile {
+    readonly runtime: Extract<GatewayRuntime, "cluster">;
+    readonly homeSizeGiB: number;
+}
+export type GatewayComputerProfile = GatewayVmProfile | GatewayPodProfile;
 export type GatewaySizingProfile = {
     readonly isolation: "shared";
 } | {
     readonly isolation: "isolated";
     readonly sizingTier: SizingTier;
-    readonly computer: GatewayVmProfile;
+    readonly computer: GatewayComputerProfile;
     readonly fallbackStorageGb: number | null;
 };
+export declare function isGatewayVmProfile(value: unknown): value is GatewayVmProfile;
+export declare function isGatewayPodProfile(value: unknown): value is GatewayPodProfile;
+export declare function isGatewaySizingProfile(value: unknown): value is GatewaySizingProfile;
 export declare function isolatedSizingTier(profile: GatewaySizingProfile | null): SizingTier | null;
 export declare function requireSizingProfile(profiles: Readonly<Record<string, GatewaySizingProfile>>, sizingKey: string): GatewaySizingProfile;
 export interface OrchestratorConfig {

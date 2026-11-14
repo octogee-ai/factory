@@ -26,6 +26,7 @@ const USER_VALUES: Record<string, string> = {
 };
 
 const VM_VALUES: Record<string, string> = { ...USER_VALUES, computerDesktop: "omarchy" };
+const POD_VALUES: Record<string, string> = { ...USER_VALUES, runtimeKind: "cluster" };
 
 interface Container {
   name: string;
@@ -65,6 +66,7 @@ describe("helm/octogee-gateway/ — User identity is never rendered", () => {
     ["Shared", { gatewayClass: "shared" }],
     ["X11 gateway VM", USER_VALUES],
     ["Omarchy gateway VM", { ...VM_VALUES, sizingTier: "m" }],
+    ["Kubernetes isolated gateway", POD_VALUES],
   ])("supplies declared browser origins to the %s edge process", (_label, values) => {
     const { pod } = renderPod("origin-proof", values);
     const edge = pod.spec.containers.find((container) => container.name === "gateway-edge")!;
@@ -75,6 +77,7 @@ describe("helm/octogee-gateway/ — User identity is never rendered", () => {
   it.each([
     ["X11 VM", USER_VALUES],
     ["Omarchy VM", { ...VM_VALUES, sizingTier: "m" }],
+    ["Kubernetes", POD_VALUES],
   ])("renders a %s isolated pod with no owner or slug env, annotation, label, or path", (_label, values) => {
     const { pod, rendered } = renderPod("b-alice", values);
 
@@ -92,19 +95,17 @@ describe("helm/octogee-gateway/ — User identity is never rendered", () => {
     expect(rendered).not.toMatch(/ownerUid and builderSlug/);
   });
 
-  it("ignores owner values a caller still passes", () => {
-    const { rendered } = renderPod("b-x", { ...USER_VALUES, ownerUid: "uid-alice", builderSlug: "alice" });
+  it.each([
+    ["VM", USER_VALUES],
+    ["Kubernetes", POD_VALUES],
+  ])("ignores owner values a caller still passes to a %s isolated gateway", (_label, values) => {
+    const { rendered } = renderPod("b-x", { ...values, ownerUid: "uid-alice", builderSlug: "alice" });
     expect(rendered).not.toContain("uid-alice");
     expect(rendered).not.toMatch(/\balice\b/);
   });
 
   it("renders a user without an owner", () => {
     expect(() => renderPod("b-unowned", USER_VALUES)).not.toThrow();
-  });
-
-  it.each(["x11", "omarchy", "none"])("refuses to render a %s user as a Kubernetes Deployment", (computerDesktop) => {
-    expect(() => renderPod("b-alice", { ...USER_VALUES, computerDesktop, sizingTier: "m", runtimeKind: "cluster" }))
-      .toThrow(/renders only as a GCE VM bundle/);
   });
 
   it("keeps the Omarchy VM's own project materialization volume for its runtime to bind", () => {

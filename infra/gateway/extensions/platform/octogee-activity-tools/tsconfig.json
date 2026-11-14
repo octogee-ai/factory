@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "skipLibCheck": true,
+    "types": ["node", "vitest/globals"],
+    "noEmit": true
+  },
+  "include": ["*.ts", "__tests__/**/*.ts"],
+  "exclude": [
+    "index.ts",
+    "final-reply-notifications.ts",
+    "__tests__/final-reply-notifications.spec.ts",
+    "__tests__/final-reply-registration.spec.ts"
+  ]
+}

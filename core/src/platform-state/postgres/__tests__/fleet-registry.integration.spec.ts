@@ -115,7 +115,7 @@ describe.skipIf(!dsn)("PostgreSQL fleet registry", { timeout: 30_000 }, () => {
       vmImages: { gateway: "gateway:1" },
       vmEgress: { mode: "open" } as never,
       surgeCrashLoopEvictions: { count: 0 },
-      openclawHealthyBuild: { sha: "abc" },
+      openclawHealthyBuild: "abc",
     });
     await registry().create(full);
     await registry().create(runtimeRecord("flexo", { runtime: "gce-vm", vm: null }));

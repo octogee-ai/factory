@@ -785,7 +785,7 @@ describe("gateway-rpc", () => {
       await expect(client.cronRequest(method, params)).resolves.toEqual({ method });
     });
     it("refuses any other method without calling the gateway", async () => {
-      const handler = vi.fn(() => ({ ok: true, payload: {} }));
+      const handler = vi.fn<RpcHandler>(() => ({ ok: true, payload: {} }));
       server.setHandler("cron.migration", handler);
       await expect(client.cronRequest("cron.migration" as never, {})).rejects.toThrow("cron.migration");
       expect(handler).not.toHaveBeenCalled();

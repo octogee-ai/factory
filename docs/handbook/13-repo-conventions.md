@@ -5,7 +5,7 @@ order: 13
 part: Dev Workflow
 audience: [agent]
 description: Standalone package builds, internal package links, lint, dependencies, and repository settings.
-updated: 2026-07-11
+updated: 2026-11-13
 ---
 
 # Repo Conventions
@@ -13,16 +13,12 @@ updated: 2026-07-11
 ## No npm workspaces — per-package builds
 
 Each package has its own `node_modules` and builds standalone via
-`npm run --prefix <pkg>`. The root `package.json` delegates. This matters for
-Docker/CI: every Dockerfile and CI job relies on the per-package `cd X && npm ci`
-pattern. A workspaces foundation was attempted (#867) and reverted because it
-broke that pattern. Revisit only with appetite for the bigger refactor (single
-root install + Dockerfile workspace copies).
+`npm run --prefix <pkg>`. The root `package.json` only holds lint. Every
+Dockerfile and CI job relies on the per-package `cd X && npm ci` pattern; moving
+to workspaces would mean a single root install and workspace copies in every
+Dockerfile.
 
 Consequences to keep in mind:
-- **CI lint/knip jobs need `npm ci` for EVERY workspace in `knip.json`**, not
-  just the ones running tests. Missing installs surface as
-  `Cannot find module 'vitest/config'` or false-positive "unused dependencies".
 - **Cross-package spec imports break per-package `tsc`** — keep specs in the
   owning package's `__tests__/` (see [11 — Testing](11-testing.md)).
 - **A shared type leaf imported cross-package must stay dependency-free.**
@@ -35,8 +31,8 @@ Consequences to keep in mind:
   cross-package consumer never imports, keep the shared leaf at zero imports.
 - **A fresh `git worktree` doesn't materialize `node_modules`** (gitignored),
   and a per-package `tsc --noEmit` can transitively pull in ANOTHER package's
-  *source* via a real relative import (e.g. `gateway-edge` importing
-  `../../../scripts/lib/admin-fleet-router.js`) — so typechecking the package
+  *source* via a real relative import (e.g. a `tests/` spec importing
+  `../../scripts/lib/...`) — so typechecking the package
   you touched needs `npm ci` in whatever it transitively imports too, not just
   itself. Tell-tale: every `TS2307 Cannot find module` lands in
   `../scripts/...`/`../shared/...`, none in your own package's `src/` — that's
@@ -53,7 +49,8 @@ Consumers declare them as `file:../<package>` dependencies and own an
 package on `npm ci`; it does not create a source symlink or build on install.
 
 Source-package CI rebuilds and verifies committed `dist/`. A source plus `dist/`
-change leaves consumer locks byte-stable; the local synchronizer refreshes only a
+change leaves consumer locks byte-stable. Each consumer's `pretest` and
+`pretypecheck` run `scripts/ops/sync-local-file-deps.mjs`, which refreshes only a
 stale installed package and must not change a lock. Dockerfiles copy each required
 internal package's `package.json` and `dist/`, plus the consumer `.npmrc`, before
 installing dependencies.
@@ -66,19 +63,13 @@ do not create a standing ceremony or bump unrelated packages on touch.
 Stateful-service upgrades deserve a focused rollback check because their data
 may not roll back with the image.
 
-During the Monday Dependabot dependency review, reevaluate the Ops Agent model
-alongside its GA OpenClaw runtime. Compare current pricing, latency, tool-call
-reliability, and answer quality on a short source/log support question. Record
-“keep GPT-6 Luna” or a proposed replacement in the dependency PR review; the
-operator confirms any model switch. Dependabot updates the runtime image pin,
-not the model selection. This review adds no scheduled build or model sweep.
-
 ## Lint
 
-Run the owning package's lint when code changes. Fix new warnings in the code;
+Lint runs once at the root: `npm ci && npm run lint` (ESLint with
+`--max-warnings=0`). Fix new warnings in the code;
 do not weaken a rule or raise a threshold merely to make the count pass. A
 targeted suppression is acceptable for a real false positive with a short
-reason. CI owns the repository-wide lint pass.
+reason.
 
 ## Platform settings via the GitHub UI
 
@@ -92,12 +83,14 @@ Related: [10 — Engineering Principles](10-engineering-principles.md), [11 — 
 
 ## Platform boundary
 
-`scripts/lib/platform-boundary.json` names the platform entrypoints, the
-product modules, and a ratchet of product modules the platform still reaches.
-`scripts/__tests__/platform-boundary.spec.ts` walks the import graph from every
-entrypoint: a new product import fails the build, and a ratchet entry that is
-no longer reached must be removed. Product routes enter the platform only
-through `createPlatformApp({ product })` in `octogee-api/src/app.ts` and the
-`productRoutes` option of `mountClusterRoutes`; `octogee-api/src/index.ts` and
-`octogee-api/src/product.ts` are the product composition roots. The split is
-specified in `docs/specs/PLATFORM-PRODUCT-SPLIT.md`.
+Code built on top of this repository reaches it only through its entrypoints
+and options, never the other way round. `scripts/lib/platform-boundary.json`
+names the entrypoints, the modules outside them, and a ratchet of outside
+modules still reached. `scripts/__tests__/platform-boundary.spec.ts` walks the
+import graph from every entrypoint: a new outside import fails, and a ratchet
+entry that is no longer reached must be removed. That spec needs the embedding
+checkout, so it is skipped in this repository alone. Routes added by an
+embedding app enter through `createPlatformApp(opts)` in
+`octogee-api/src/app.ts` and the `productRoutes` option of
+`mountClusterRoutes` in `gateway-edge/src/routes/mount-cluster-routes.ts`; `octogee-api/src/main.ts` serves the platform API with no
+additions. `npm run gate` in `scripts/` keeps the embedding app's names out.

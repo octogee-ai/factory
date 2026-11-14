@@ -5,10 +5,10 @@ import { attemptNeverHeldSource, rearmOwnedLegacyMigration } from "./legacy-migr
 
 function fixture(migrationId: string, operationId = "op-1") {
   const steps = [{ name: "keys-sync-state", status: "failed" as const, error: "request timed out" }];
-  const operation = { id: operationId, kind: "migrate-user", status: "failed", attempts: 1, startedAt: 1_000,
+  const operation: Operation = { id: operationId, kind: "migrate-user", status: "failed", attempts: 1, createdBy: "test", createdAt: 900, startedAt: 1_000,
     completedAt: 2_000, error: "reaped: controller restarted mid-op", input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
     steps, schedulerHandoff: { migrationId, uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
-  } as Operation;
+  };
   const path = `glmOperations/${operationId}`;
   const records: Record<string, Record<string, unknown>> = {
     [path]: operation as unknown as Record<string, unknown>,
@@ -18,7 +18,7 @@ function fixture(migrationId: string, operationId = "op-1") {
   };
   const store = createDocumentFixtureStore(records);
   const rearm = () => rearmOwnedLegacyMigration({ store, operationId, now: 3_000, admitted: () => true });
-  return { operation, records, rearm, stored: () => records[path] === operation ? undefined : records[path] };
+  return { operation, records, rearm, stored: () => Object.is(records[path], operation) ? undefined : records[path] };
 }
 
 describe("claimed scheduler recovery evidence", () => {

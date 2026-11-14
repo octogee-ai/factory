@@ -1,0 +1,27 @@
+{
+  "id": "octogee-status-tools",
+  "name": "Octogee Status Tools",
+  "version": "0.1.0",
+  "description": "octogee_status — gateway class, credential path, and live token-budget window for this agent's owner.",
+  "contracts": {
+    "tools": ["octogee_status"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "brokerUrl": {
+        "type": "string",
+        "description": "Base URL of octogee-api/fleet broker. Defaults to FLEET_BROKER_URL, OCTOGEE_API_URL, or in-cluster octogee-api."
+      },
+      "tokenPath": {
+        "type": "string",
+        "description": "Path to the projected gateway service-account token."
+      },
+      "gatewayClass": {
+        "type": "string",
+        "description": "This pod's gateway class (shared|builder), from GATEWAY_CLASS."
+      }
+    }
+  }
+}

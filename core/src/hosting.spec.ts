@@ -14,7 +14,8 @@ import {
   releaseToChannel,
   releaseVersion,
   withCollectedFile,
-} from "./hosting";
+  type CollectedFiles,
+} from "./hosting.js";
 
 const tmpDirs: string[] = [];
 function makeDist(tree: Record<string, string>): string {
@@ -72,7 +73,7 @@ function res(ok: boolean, body: unknown = {}, status = ok ? 200 : 500) {
   } as unknown as Response;
 }
 
-const collected = { files: { "/index.html": "h1", "/app.js": "h2" }, blobs: { h1: "AAA", h2: "BBB" } };
+const collected: CollectedFiles = { files: { "/index.html": "h1", "/app.js": "h2" }, blobs: { h1: "AAA", h2: "BBB" } };
 
 describe("deployCollectedFiles", () => {
   it("runs create→populate→upload(required only)→finalize→release and returns the .web.app url", async () => {

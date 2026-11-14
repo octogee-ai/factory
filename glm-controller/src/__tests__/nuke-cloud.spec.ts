@@ -280,7 +280,7 @@ describe("nukeUserCloudSide — hosting step (PR #3)", () => {
   });
 
   it("does NOT extract projectSlugs from repoNames anymore (regression: the old slice produced 'proj-<slug>' instead of '<slug>')", async () => {
-    const deleteHostingSites = vi.fn(async () => ({ deleted: 1 }));
+    const deleteHostingSites = vi.fn<NonNullable<NukeCloudDeps["deleteHostingSites"]>>(async () => ({ deleted: 1 }));
     const deps = mkDeps({ deleteHostingSites });
 
 await nukeUserCloudSide(
@@ -291,7 +291,7 @@ await nukeUserCloudSide(
       deps,
     );
     expect(deleteHostingSites).toHaveBeenCalledWith("alice", ["blog"]);
-    const args = deleteHostingSites.mock.calls[0]![1] as string[];
+    const args = deleteHostingSites.mock.calls[0]![1];
     expect(args).not.toContain("proj-blog");
   });
 });

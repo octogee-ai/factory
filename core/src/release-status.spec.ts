@@ -228,7 +228,7 @@ describe("release status", () => {
     });
   });
 
-  it.each([
+  it.each<{ roots: Record<string, DocData>; defaultGatewayId: string | null; defaultSelection: string }>([
     { roots: {}, defaultGatewayId: null, defaultSelection: "unconfigured" },
     { roots: { "gateways/shared-0": gatewayRoot("shared-0", { configSchemaVersion: 0 }) }, defaultGatewayId: "shared-0", defaultSelection: "invalid" },
   ])("blocks convergence with incomplete authoritative roots: $defaultSelection", async ({ roots, defaultGatewayId, defaultSelection }) => {
@@ -305,7 +305,6 @@ describe("release status", () => {
   ] as const)("reports %s without waiting or mutating", (observation, overrides) => {
     const input: ReleaseStatusGatewayInput = {
       gatewayId: "default",
-      desiredStatus: "running",
       desiredRelease: 4,
       liveRelease: 4,
       desiredImageTag: "abc1234-oc2026.7.1",

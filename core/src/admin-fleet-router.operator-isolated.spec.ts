@@ -164,6 +164,20 @@ describe("giving a user an isolated gateway", () => {
     expect(h.records.get(`gateways/${res.body.gatewayId}`)).toMatchObject({ sizingTier: "l" });
   });
 
+  it("gives a gateway from a profile that runs it as a Kubernetes pod", async () => {
+    const h = harness(fleet({ "config/orchestrator": { defaultGatewayId: SHARED, sharedGatewayIds: [SHARED], sizingProfiles: {
+      ...FIXTURE_SIZING_PROFILES,
+      pod: { isolation: "isolated", sizingTier: "s", fallbackStorageGb: null, computer: { runtime: "cluster", homeSizeGiB: 10 } },
+    } } }));
+
+    const res = await give(h, { sizingProfile: "pod" }).expect(202);
+
+    expect(h.records.get(`gateways/${res.body.gatewayId}`)).toMatchObject({
+      gatewayClass: "builder", sizingTier: "s", ownerUid: UID, builderAccess: { controlIdentity: "per-user" },
+    });
+    expect(h.records.get(`${GLM_OPERATIONS_COLLECTION}/${res.body.operationId}`)).toMatchObject({ kind: "migrate-user", status: "pending" });
+  });
+
   it("answers a dry run with the plan and writes nothing", async () => {
     const h = harness(fleet());
     const before = h.fleetState();
@@ -328,8 +342,11 @@ describe("retiring an isolated gateway", () => {
     return seed;
   };
 
-  it("retires a returned gateway whose parked VM left a last heartbeat that still lists the user", async () => {
-    const h = harness(lastHeartbeatStillListsUser({ desiredStatus: "paused" }, { runtime: "gce-vm" }));
+  it.each([
+    ["VM", "gce-vm"],
+    ["pod", "cluster"],
+  ] as const)("retires a returned gateway whose parked %s left a last heartbeat that still lists the user", async (_name, runtimeKind) => {
+    const h = harness(lastHeartbeatStillListsUser({ desiredStatus: "paused" }, { runtime: runtimeKind }));
 
     const res = await retire(h).expect(202);
 
@@ -341,7 +358,8 @@ describe("retiring an isolated gateway", () => {
 
   it.each([
     ["a running VM gateway", { desiredStatus: "running" }, { runtime: "gce-vm" }],
-    ["a paused pod gateway", { desiredStatus: "paused" }, {}],
+    ["a paused gateway with no runtime stamp", { desiredStatus: "paused" }, {}],
+    ["a running pod gateway", { desiredStatus: "running" }, { runtime: "cluster" }],
   ] as const)("still refuses %s whose heartbeat lists a mounted user", async (_name, root, runtimeKind) => {
     const h = harness(lastHeartbeatStillListsUser(root, runtimeKind));
 
@@ -604,5 +622,19 @@ describe("holding a user for the operator", () => {
     const openclaw = (h.records.get(`users/${UID}`)!.provisioning as { openclaw: Row }).openclaw;
     expect(openclaw).toMatchObject({ managedBy: "operator", activationLease: { leaseId: "lease-1", status: "requested" } });
     expect(h.records.get(`gateways/${SHARED}/assignments/${UID}`)).toBeUndefined();
+  });
+});
+
+describe("listing an isolated gateway that has not started", () => {
+  it("shows why it has not started before its first heartbeat", async () => {
+    const message = "the isolated gateway image is linux/amd64 only, and this cluster has no amd64 node";
+    const seed = fleet({ ...ownedGateway(), ...runtime(OWNED, "starting", { runtime: "cluster", lastError: { message, at: 5_000 } }) });
+    seed[`${GLM_GATEWAYS_COLLECTION}/${OWNED}`].heartbeat = {};
+    const h = harness(seed);
+
+    const res = await request(h.app).get("/gateways").expect(200);
+
+    const listed = (res.body.gateways as Row[]).find((gateway) => gateway.gatewayId === OWNED);
+    expect(listed).toMatchObject({ lastError: { message, at: new Date(5_000).toISOString() } });
   });
 });

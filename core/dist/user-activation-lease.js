@@ -146,6 +146,18 @@ export function activationDemandEligibility(user, sizingKey, profile) {
             },
         };
     }
+    if (profile?.isolation === "isolated" && profile.computer.runtime !== "gce-vm") {
+        return {
+            result: {
+                statusCode: 409,
+                body: {
+                    code: "builder-runtime-not-vm",
+                    error: "Self-service activation needs a VM sizing profile; an operator gives an isolated gateway that runs as a pod",
+                    entitlementTier: sizingKey,
+                },
+            },
+        };
+    }
     const slug = nonEmptyString(user.slug);
     if (!slug) {
         return {

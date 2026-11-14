@@ -16,10 +16,10 @@
     "pretest:emulator": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "test:emulator": "config=\"$PWD/vitest.emulator.config.ts\" && cd ../scripts && node ops/run-emulator-vitest.mjs --only firestore --project demo-platform --firebase-config ../../firebase.json --config \"$config\" --env GCLOUD_PROJECT=demo-platform",
     "pretypecheck": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit -p tsconfig.spec.json"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "3.1163.0",
+    "@aws-sdk/client-s3": "3.1164.0",
     "@google-cloud/kms": "^6.3.0",
     "@octogee/core": "file:../core",
     "@octogee/shared": "file:../shared",
