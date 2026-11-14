@@ -638,7 +638,7 @@ async function syncGatewayModelKeySecrets(
       });
       if (
         result.changed &&
-        gatewayClass === "builder" &&
+        gatewayClass === "isolated" &&
         gateway.desiredStatus === "running"
       ) {
         changedBrokerGateways.add(gateway.gatewayId);
@@ -853,7 +853,7 @@ interface GatewayConvergencePassDeps {
 }
 
 function isIsolatedGateway(gateway: DurableGateway): boolean {
-  return gateway.gatewayClass === "builder" &&
+  return gateway.gatewayClass === "isolated" &&
     gateway.allocation?.kind === "disposable-builder";
 }
 
@@ -1201,7 +1201,7 @@ async function upsertGateway(
     gatewayClass: gateway.gatewayClass,
     sizingTier: gateway.sizingTier,
     vmSpec: GATEWAY_VM_SPEC,
-    assertStorage: gateway.gatewayClass === "builder" && replicas > 0
+    assertStorage: gateway.gatewayClass === "isolated" && replicas > 0
       ? (runtime) => assertIsolatedRuntimeStorage({ store, runtime, ownerUid: gateway.ownerUid })
       : undefined,
     log,
@@ -1218,7 +1218,7 @@ async function upsertGateway(
     await transaction.fleetRegistry.patch(gateway.gatewayId, runtimePatch, { revision: current.revision });
   });
   if (!(await gatewayRuntimeMutationAllowed(store, gateway.gatewayId))) return;
-  const isolatedPod = runtimeKind === "cluster" && gateway.gatewayClass === "builder";
+  const isolatedPod = runtimeKind === "cluster" && gateway.gatewayClass === "isolated";
   if (isolatedPod && replicas > 0) {
     await passDeps.ensureIsolatedPodHome({
       gatewayId: gateway.gatewayId,
@@ -1740,7 +1740,7 @@ async function attemptClaimOrQueueOperation(
             id: runningOperation.id,
             kind: runningOperation.kind,
             input: runningOperation.input,
-            customerMigrationV2: runningOperation.customerMigrationV2,
+            userMigrationV2: runningOperation.userMigrationV2,
             cutoverCommittedAt: runningOperation.cutoverCommittedAt,
           }] : []);
         pendingOpsSameKind = pending.flatMap((pendingOperation) =>
@@ -1756,7 +1756,7 @@ async function attemptClaimOrQueueOperation(
             createdAt: pendingOperation.createdAt,
             queuedAt: pendingOperation.queuedAt,
             nextAttemptAt: pendingOperation.nextAttemptAt,
-            customerMigrationV2: pendingOperation.customerMigrationV2,
+            userMigrationV2: pendingOperation.userMigrationV2,
             cutoverCommittedAt: pendingOperation.cutoverCommittedAt,
           }] : []);
       }
@@ -1778,7 +1778,7 @@ async function attemptClaimOrQueueOperation(
           nextAttemptAt: freshOperation.nextAttemptAt,
           input: freshOperation.input,
           schedulerHandoff: freshOperation.schedulerHandoff,
-          customerMigrationV2: freshOperation.customerMigrationV2,
+          userMigrationV2: freshOperation.userMigrationV2,
           cutoverCommittedAt: freshOperation.cutoverCommittedAt,
         }, rolloutLanes),
         now: Date.now(),
@@ -1995,7 +1995,7 @@ async function runClaimedOperation(
         assertActiveOperationClaim(op,data,true);
         if (!data) throw new Error("user migration V2 operation unavailable");
         if (sourceTransferBlocksRelease(data.sourceTransferExecution) && state.phase !== "sourceQuiesced") throw new Error("source transfer termination not observed");
-        const current = data.customerMigrationV2;
+        const current = data.userMigrationV2;
         if (current) {
           if (
             current.operationId !== state.operationId ||
@@ -2010,7 +2010,7 @@ async function runClaimedOperation(
           throw new Error("user migration V2 must start with its operation-bound initialized state");
         }
         await tx.journal.operations.patch(op.id, {
-          customerMigrationV2: state,
+          userMigrationV2: state,
           lastProgressAt: Date.now(),
         });
       });
@@ -2035,7 +2035,7 @@ async function runClaimedOperation(
         attemptHistory: freshOp.attemptHistory,
         startedAt: freshOp.startedAt,
         output: freshOp.output,
-        customerMigrationV2: freshOp.customerMigrationV2,
+        userMigrationV2: freshOp.userMigrationV2,
         schedulerHandoff: freshOp.schedulerHandoff,
         schedulerHandoffReleased: freshOp.schedulerHandoffReleased,
         cutoverCommittedAt: freshOp.cutoverCommittedAt,
@@ -2156,7 +2156,7 @@ export function buildGatewayHeartbeatPollerDeps(
     },
     onUnreachable: async (gatewayId: string) => {
       const gateway = await readDesiredRoot(store, gatewayId) as DurableGateway | null;
-      if (gateway?.desiredStatus === "running" && gateway.gatewayClass === "builder") recoverVm(gatewayId);
+      if (gateway?.desiredStatus === "running" && gateway.gatewayClass === "isolated") recoverVm(gatewayId);
       if (await shouldReconcileDisposablePrelaunch(store, gateway)) {
         requestReconcileTickRef.fire?.(gatewayId);
       }
@@ -3017,7 +3017,7 @@ function migrationProjectCheckoutScope(
     return "workspace-only";
   }
   if (
-    root.gatewayClass === "builder" &&
+    root.gatewayClass === "isolated" &&
     root.allocation?.kind === "disposable-builder" &&
     root.allocation.claimedByUid === uid
   ) {
@@ -3251,8 +3251,8 @@ async function buildHandlers(
     resolveGatewayUrl: (gatewayId, options) => resolveGatewayFleetUrl(store, gatewayId, options),
     observeSourceTransfer: async (op) => {
       const fresh = await store.journal.operations.get(op.id);
-      if (!fresh?.customerMigrationV2) return undefined;
-      const context={op,state:fresh.customerMigrationV2};
+      if (!fresh?.userMigrationV2) return undefined;
+      const context={op,state:fresh.userMigrationV2};
       const observed=await retainedSourceRunner(store,context).observe();
       if (observed?.status==='failed' && observed.targetCleanup==='pending') await cleanupRetainedSource(store,privateKey,context);
       return retainedSourceRunner(store,context).observe();
@@ -3419,7 +3419,7 @@ async function buildHandlers(
     deleteGatewayModelKeySource: async (gatewayId) => {
       await modelKeySourceIssuer.syncGatewayModelKeySource({
         gatewayId,
-        gatewayClass: "builder",
+        gatewayClass: "isolated",
         desiredStatus: "retired",
       });
     },
@@ -4161,7 +4161,7 @@ export async function resolveGatewayPlacement(
     return { ok: false, reason: "revision-not-ready" };
   }
   const runtime = await state.fleetRegistry.get(toGatewayId);
-  const blocker = gateway.gatewayClass === "builder" ? runtime?.lastError?.message : null;
+  const blocker = gateway.gatewayClass === "isolated" ? runtime?.lastError?.message : null;
   const rejected = (reason: "no-live-revision" | "revision-not-ready") =>
     ({ ok: false as const, reason, ...(blocker ? { blocker } : {}) });
   if (gateway.liveRelease == null) return rejected("no-live-revision");
