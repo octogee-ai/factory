@@ -33,6 +33,7 @@ import {
 import { readInstalledOpenClawBuild } from "../lib/openclaw-installed-build.js";
 import { isPerUserControlIdentity } from "@octogee/shared/types/openclaw-proxy-identity";
 import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
+import type { UserIdentity } from "../../shared/types/user-identity.js";
 
 const DEFAULT_HEALTH_TIMEOUT_MS = 600_000;
 const DEFAULT_STOP_GRACE_MS = 30_000;
@@ -975,18 +976,29 @@ export function createSurgeOpenClawBootWatcher(input: {
     : undefined });
 }
 
-async function nativeBootMode(gatewayId: string, revisionId: string): Promise<{ prelaunchBoot: boolean; activationMigrationId?: string; userAuthorityKey?: string }> {
-  let prelaunchBoot = false;
-  let userAuthorityKey: string | undefined;
-  let activationMigrationId: string | undefined;
-  if (process.env.GATEWAY_RUNTIME_KIND === "gce-vm") {
-    const identity = await createFleetBrokerClient(gatewayId, revisionId).builderIdentity({ nativeBoot: true });
-    if (identity.state !== "claimed" || !identity.bootMode) throw new Error("Native user boot mode is unavailable");
-    prelaunchBoot = identity.bootMode === "prelaunch";
-    userAuthorityKey = JSON.stringify([identity.gatewayId, identity.ownerUid, identity.builderSlug, identity.leaseId, identity.generation]);
-    activationMigrationId = identity.activationMigrationId;
-  }
-  return { prelaunchBoot, activationMigrationId, userAuthorityKey };
+export interface UserBootMode {
+  prelaunchBoot: boolean;
+  activationMigrationId?: string;
+  userAuthorityKey?: string;
+}
+
+function isolatedRuntime(env: NodeJS.ProcessEnv): boolean {
+  return env.GATEWAY_RUNTIME_KIND === "gce-vm" ||
+    (isIsolatedGatewayClassValue(env.GATEWAY_CLASS) && env.GATEWAY_RUNTIME_KIND === "cluster");
+}
+
+export async function userBootMode(input: {
+  env: NodeJS.ProcessEnv;
+  readIdentity: () => Promise<UserIdentity>;
+}): Promise<UserBootMode> {
+  if (!isolatedRuntime(input.env)) return { prelaunchBoot: false };
+  const identity = await input.readIdentity();
+  if (identity.state !== "claimed" || !identity.bootMode) throw new Error("Native user boot mode is unavailable");
+  return {
+    prelaunchBoot: identity.bootMode === "prelaunch",
+    ...(identity.activationMigrationId ? { activationMigrationId: identity.activationMigrationId } : {}),
+    userAuthorityKey: JSON.stringify([identity.gatewayId, identity.ownerUid, identity.builderSlug, identity.leaseId, identity.generation]),
+  };
 }
 
 async function main(): Promise<void> {
@@ -1008,7 +1020,11 @@ async function main(): Promise<void> {
     log,
     installedOpenClawBuild: () => readInstalledOpenClawBuild(OPENCLAW_BINARY),
   });
-  const boot = await nativeBootMode(gatewayId, revisionId);
+  const readBootMode = () => userBootMode({
+    env: process.env,
+    readIdentity: () => createFleetBrokerClient(gatewayId, revisionId).builderIdentity({ nativeBoot: true }),
+  });
+  const boot = await readBootMode();
   const supervisor = await startSurgeOpenClawSupervisor({
     openclawDir,
     podUid,
@@ -1016,9 +1032,9 @@ async function main(): Promise<void> {
     bootWatcher,
     ...boot,
     prepareSystemStore: (assertStopped) => prepareUserSystemStore({ root: openclawDir, assertCurrent: assertStopped, log,
-      readAuthority: async () => (await nativeBootMode(gatewayId, revisionId)).userAuthorityKey }),
+      readAuthority: async () => (await readBootMode()).userAuthorityKey }),
     assertPrelaunchAuthority: async () => {
-      const current = await nativeBootMode(gatewayId, revisionId);
+      const current = await readBootMode();
       if (!current.prelaunchBoot || !boot.userAuthorityKey || current.userAuthorityKey !== boot.userAuthorityKey) throw new Error("Isolated prelaunch authority changed");
     },
     preparePrelaunch: async (assertHeld) => {
