@@ -1232,6 +1232,7 @@ async function upsertGateway(
     });
     await transaction.fleetRegistry.patch(gateway.gatewayId, runtimePatch, { revision: current.revision });
   });
+  if (!(await gatewayRuntimeMutationAllowed(store, gateway.gatewayId))) return;
   const isolatedPod = runtimeKind === "cluster" && gateway.gatewayClass === "builder";
   if (isolatedPod && replicas > 0) {
     await passDeps.ensureIsolatedPodHome({
@@ -1240,7 +1241,6 @@ async function upsertGateway(
       served: gateway.liveRelease !== null,
     });
   }
-  if (!(await gatewayRuntimeMutationAllowed(store, gateway.gatewayId))) return;
   await helm.upsertInstance({
     ...desiredOpts,
     ...(isolatedPod ? { rollStrategy: "recreate" as const } : {}),
