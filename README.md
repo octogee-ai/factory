@@ -53,8 +53,6 @@ and a domain. [See every account and tier](docs/getting-started.md#what-you-need
   in `glm-controller`, `gateway-edge`, and `octogee-api`, with `infra`, `helm`,
   `terraform`, `templates` and `scripts` beside them. `tests/` holds the
   cross-package platform specs.
-- `SHIP.md` shows the shape of the four commands that move a build to TEST, to
-  PROD, and to a single isolated gateway. Identities are placeholders.
 
 The Octogee product keeps its own private repository and builds on top of this
 one.
