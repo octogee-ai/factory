@@ -3,7 +3,7 @@ import {
   createGatewayServiceAccountEnsurer,
   serviceAccountManifest,
 } from "../gateway-service-account-ensurer.js";
-import type { KubectlSubprocessResult } from "../fleet-ingress.js";
+import type { KubectlSubprocess, KubectlSubprocessResult } from "../fleet-ingress.js";
 
 function ok(stdout = ""): KubectlSubprocessResult {
   return { stdout, stderr: "", code: 0 };
@@ -107,7 +107,7 @@ describe("serviceAccountManifest", () => {
 
 describe("createGatewayServiceAccountEnsurer", () => {
   it("applies the gateway-scoped KSA via kubectl apply -f - (idempotent create-or-update)", async () => {
-    const runKubectl = vi.fn(async () => ok());
+    const runKubectl = vi.fn<KubectlSubprocess>(async () => ok());
     const log = vi.fn();
     const ensurer = createGatewayServiceAccountEnsurer({ runKubectl, log });
 
@@ -124,7 +124,7 @@ describe("createGatewayServiceAccountEnsurer", () => {
   });
 
   it("passes the operator Workload Identity annotation into the applied manifest", async () => {
-    const runKubectl = vi.fn(async () => ok());
+    const runKubectl = vi.fn<KubectlSubprocess>(async () => ok());
     const ensurer = createGatewayServiceAccountEnsurer({ runKubectl, log: vi.fn() });
 
     await ensurer.ensureServiceAccount({

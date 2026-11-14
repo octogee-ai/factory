@@ -26,6 +26,7 @@ interface Root {
 }
 
 type Rows = Record<string, Record<string, unknown>>;
+type OperationRow = Record<string, unknown> & { input: Record<string, unknown> };
 
 function durableRoot(gatewayId: string, fields: Omit<Root, "gatewayId" | "latestRelease" | "desiredRelease" | "liveRelease">): Root {
   return { gatewayId, latestRelease: 1, desiredRelease: 1, liveRelease: 1, ...fields };
@@ -128,7 +129,7 @@ function retiredRoot(operationId: string): Root {
   });
 }
 
-function retirementOperation(status: string): Record<string, unknown> {
+function retirementOperation(status: string): OperationRow {
   return {
     kind: "retire-gateway", status, gatewayId: "builder-alice",
     input: { gatewayId: "builder-alice", retirementClaimVersion: 1, uid: "uid-1" },
@@ -142,7 +143,7 @@ function recoveredRoot(operationId: string): Root {
   };
 }
 
-function recoveryOperation(): Record<string, unknown> {
+function recoveryOperation(): OperationRow {
   return {
     kind: "recover-unreachable-disposable", status: "succeeded", gatewayId: "builder-alice",
     input: { uid: "uid-1", builderSlug: "alice", gatewayId: "builder-alice", leaseId: "lease-1", generation: 1 },
@@ -239,11 +240,11 @@ describe("owned user gateway retirement", () => {
       const roots = { "builder-alice": recoveredRoot(operationId) };
       const recovery = recoveryOperation();
       recovery.input = { ...recovery.input, ...change };
-      const operations = {
+      const operations: Rows = {
         [operationId]: retirementOperation("succeeded"),
         ...(artifact === "legacy operation" ? { [recoveryId]: recovery } : {}),
       };
-      const receipts = artifact === "receipt" ? { [recoveryId]: recovery } : {};
+      const receipts: Rows = artifact === "receipt" ? { [recoveryId]: recovery } : {};
       const { store, deleted } = harness(roots, operations, {}, {}, [], {}, receipts);
 
       await expect(ensureOwnedGatewaysRetired({ store, uid: "uid-1", deletionId: "delete-1", now: 100 }))

@@ -162,7 +162,7 @@ describe("reassertConvergedContextFiles under a product-supplied policy", () => 
     installPolicy({ templateKey: "studio-eu", removedFiles: [] });
     const dir = customerDir();
 
-    const changed = reassertConvergedContextFiles("alice", dir, {});
+    const changed = reassertConvergedContextFiles("alice", dir, { planInputs: {} });
 
     expect(changed.sort()).toEqual(["AGENTS.md", "TOOLS.md"]);
     expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("# studio-eu AGENTS\n");
@@ -175,7 +175,7 @@ describe("reassertConvergedContextFiles under a product-supplied policy", () => 
     fs.writeFileSync(path.join(dir, "HEARTBEAT.md"), "retired\n", "utf-8");
     fs.writeFileSync(path.join(dir, "BOOTSTRAP.md"), "kept\n", "utf-8");
 
-    const changed = reassertConvergedContextFiles("alice", dir, {});
+    const changed = reassertConvergedContextFiles("alice", dir, { planInputs: {} });
 
     expect(changed).toContain("HEARTBEAT.md");
     expect(fs.existsSync(path.join(dir, "HEARTBEAT.md"))).toBe(false);
@@ -188,7 +188,7 @@ describe("reassertConvergedContextFiles under a product-supplied policy", () => 
     const dir = customerDir();
     fs.writeFileSync(path.join(dir, "BOOTSTRAP.md"), "kept\n", "utf-8");
 
-    expect(reassertConvergedContextFiles("alice", dir, {})).not.toContain("BOOTSTRAP.md");
+    expect(reassertConvergedContextFiles("alice", dir, { planInputs: {} })).not.toContain("BOOTSTRAP.md");
     expect(fs.existsSync(path.join(dir, "BOOTSTRAP.md"))).toBe(true);
   });
 
@@ -198,7 +198,7 @@ describe("reassertConvergedContextFiles under a product-supplied policy", () => 
     const dir = customerDir();
     fs.writeFileSync(path.join(dir, file), "user content\n", "utf-8");
 
-    expect(() => reassertConvergedContextFiles("alice", dir, {})).toThrow(/user-owned/);
+    expect(() => reassertConvergedContextFiles("alice", dir, { planInputs: {} })).toThrow(/user-owned/);
     expect(fs.readFileSync(path.join(dir, file), "utf-8")).toBe("user content\n");
   });
 
@@ -209,7 +209,7 @@ describe("reassertConvergedContextFiles under a product-supplied policy", () => 
     fs.writeFileSync(path.join(dir, "USER.md"), "- **Name:** Alice\nCoach notes stay.\n", "utf-8");
     fs.writeFileSync(path.join(dir, "BOOTSTRAP.md"), "retired\n", "utf-8");
 
-    const changed = reassertConvergedContextFiles("alice", dir, {});
+    const changed = reassertConvergedContextFiles("alice", dir, { planInputs: {} });
 
     expect(changed).toContain("BOOTSTRAP.md");
     expect(changed).not.toContain("USER.md");
@@ -233,7 +233,7 @@ describe("reassertConvergedContextFiles under a product-supplied policy", () => 
   it("fails loud when the policy names a template that does not exist", () => {
     installPolicy({ templateKey: "absent", removedFiles: [] });
 
-    expect(() => reassertConvergedContextFiles("alice", customerDir(), {})).toThrow(/tiers\/absent/);
+    expect(() => reassertConvergedContextFiles("alice", customerDir(), { planInputs: {} })).toThrow(/tiers\/absent/);
   });
 });
 

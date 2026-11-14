@@ -205,7 +205,7 @@ describe("system config platform invariants", () => {
     const gateway = config.gateway as {
       auth: Record<string, unknown> & { identityScopes: Record<string, string[]> };
       trustedProxies: string[];
-      roles: { default: string; definitions: Record<string, { scopes: string[] }> };
+      roles: { default: string; definitions: Record<string, { scopes: string[]; agents?: string[] }> };
     };
     expect(gateway.auth.mode).toBe("trusted-proxy");
     expect(gateway.auth).not.toHaveProperty("token");

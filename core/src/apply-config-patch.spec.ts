@@ -28,17 +28,46 @@ import {
   replaceUserAgentsInFullAgentList,
   staleProjectAgentAccountNulls,
 } from "./apply-config-patch.js";
-import { OpenclawWireError, type GatewayRpcClient } from "./gateway-rpc.js";
+import { OpenclawWireError, type ConfigGetResult, type GatewayRpcClient } from "./gateway-rpc.js";
+
+type ConfigPatchFn = GatewayRpcClient["configPatch"];
+
+function configRead(config: unknown, hash: string): ConfigGetResult {
+  return { config, hash, configRevisionHash: "r1", appliedConfigHash: "r1" };
+}
+
+function unusedRpc(method: string) {
+  return () => { throw new Error(`applyConfigPatch must not call ${method}`); };
+}
 
 function makeFakeRpc(overrides: Partial<GatewayRpcClient> = {}): GatewayRpcClient {
   return {
-    configGet: overrides.configGet ?? vi.fn(async () => ({ config: {}, hash: "h1", configRevisionHash: "r1", appliedConfigHash: "r1" })),
-    configPatch:
-      overrides.configPatch ??
-      vi.fn(async () => ({ ok: true as const, path: "/fake/openclaw.json" })),
-    channelsStatus: overrides.channelsStatus ?? vi.fn(async () => ({ channels: [] })),
-    isGatewayUp: overrides.isGatewayUp ?? vi.fn(async () => true),
-    close: overrides.close ?? vi.fn(async () => {}),
+    configGet: vi.fn(async () => configRead({}, "h1")),
+    configPatch: vi.fn<ConfigPatchFn>(async () => ({ ok: true, path: "/fake/openclaw.json" })),
+    channelsStatus: vi.fn(async () => ({ channels: [] })),
+    isGatewayUp: vi.fn(async () => true),
+    close: vi.fn(async () => {}),
+    configApply: unusedRpc("configApply"),
+    configPatchAndWaitForChange: unusedRpc("configPatchAndWaitForChange"),
+    channelsStatusConnectionGeneration: unusedRpc("channelsStatusConnectionGeneration"),
+    channelsStop: unusedRpc("channelsStop"),
+    channelsStart: unusedRpc("channelsStart"),
+    secretsReload: unusedRpc("secretsReload"),
+    modelsAuthRefresh: unusedRpc("modelsAuthRefresh"),
+    brokerProfilesMaterialize: unusedRpc("brokerProfilesMaterialize"),
+    gatewayRestartRequest: unusedRpc("gatewayRestartRequest"),
+    sessionsList: unusedRpc("sessionsList"),
+    sessionsReset: unusedRpc("sessionsReset"),
+    sessionsAbort: unusedRpc("sessionsAbort"),
+    toolsCatalog: unusedRpc("toolsCatalog"),
+    schedulerMigration: unusedRpc("schedulerMigration"),
+    cronRequest: unusedRpc("cronRequest"),
+    cronJobCount: unusedRpc("cronJobCount"),
+    cronAdd: unusedRpc("cronAdd"),
+    agentsCreate: unusedRpc("agentsCreate"),
+    agentsDelete: unusedRpc("agentsDelete"),
+    agentsDetach: unusedRpc("agentsDetach"),
+    ...overrides,
   };
 }
 
@@ -79,8 +108,8 @@ describe("applyConfigPatch — RPC happy path", () => {
   });
 
   it("calls configGet then configPatch with the hash returned by the server", async () => {
-    const getFn = vi.fn(async () => ({ config: { bindings: [] }, hash: "abc" }));
-    const patchFn = vi.fn(async () => ({ ok: true as const, path: "/x" }));
+    const getFn = vi.fn(async () => configRead({ bindings: [] }, "abc"));
+    const patchFn = vi.fn<ConfigPatchFn>(async () => ({ ok: true, path: "/x" }));
     const rpc = makeFakeRpc({ configGet: getFn, configPatch: patchFn });
 
     const result = await applyConfigPatch(
@@ -102,7 +131,7 @@ describe("applyConfigPatch — RPC happy path", () => {
   it("passes the current config snapshot to buildPatch so callers can merge arrays", async () => {
     const current = { bindings: [{ agentId: "a", match: { peer: { id: "p" } } }] };
     const rpc = makeFakeRpc({
-      configGet: vi.fn(async () => ({ config: current, hash: "h" })),
+      configGet: vi.fn(async () => configRead(current, "h")),
     });
 
     let seen: unknown;
@@ -169,10 +198,10 @@ describe("applyConfigPatch — RPC happy path", () => {
   it("still sends an opted-in patch when any requested value differs", async () => {
     const configPatch = vi.fn(async () => ({ ok: true as const }));
     const rpc = makeFakeRpc({
-      configGet: vi.fn(async () => ({
-        config: { agents: { list: [{ id: "octogee-alice-coach", model: "old" }] } },
-        hash: "current-hash",
-      })),
+      configGet: vi.fn(async () => configRead(
+        { agents: { list: [{ id: "octogee-alice-coach", model: "old" }] } },
+        "current-hash",
+      )),
       configPatch,
     });
 
@@ -220,7 +249,7 @@ describe("applyConfigPatch — hash-mismatch", () => {
       .mockRejectedValueOnce(new OpenclawWireError("hash-mismatch", "stale 1"))
       .mockRejectedValueOnce(new OpenclawWireError("hash-mismatch", "stale 2"))
       .mockResolvedValueOnce({ ok: true as const });
-    const sleep = vi.fn(async () => {});
+    const sleep = vi.fn(async (_ms: number) => {});
 
     await applyConfigPatch(
       { buildPatch: () => ({}) },
@@ -257,7 +286,7 @@ describe("applyConfigPatch — hash-mismatch", () => {
     });
     const configGet = vi.fn(async () => {
       events.push("configGet");
-      return { config: {}, hash: "h1" };
+      return configRead({}, "h1");
     });
 
     await expect(
@@ -299,7 +328,7 @@ describe("applyConfigPatch — transient RPC errors retry with backoff", () => {
         new OpenclawWireError("connect-failed", "WS open timed out after 10000ms"),
       )
       .mockResolvedValueOnce({ config: {}, hash: "h1" });
-    const sleep = vi.fn(async () => {});
+    const sleep = vi.fn(async (_ms: number) => {});
     const rpc = makeFakeRpc({ configGet });
 
     const result = await applyConfigPatch(
@@ -333,7 +362,7 @@ describe("applyConfigPatch — transient RPC errors retry with backoff", () => {
     const configGet = vi.fn(async () => {
       throw new OpenclawWireError("timeout", "response timed out");
     });
-    const sleep = vi.fn(async () => {});
+    const sleep = vi.fn(async (_ms: number) => {});
 
     await expect(
       applyConfigPatch(
@@ -479,7 +508,7 @@ describe("applyConfigPatch — superseded reload", () => {
   it("accepts a persisted patch whose reload a newer write superseded without writing again", async () => {
     const cache = { current: { v: 1 }, hash: "h1" };
     const configPatch = vi.fn().mockRejectedValueOnce(superseded());
-    const sleep = vi.fn(async () => {});
+    const sleep = vi.fn(async (_ms: number) => {});
 
     const result = await applyConfigPatch(
       { buildPatch: () => ({ v: 2 }) },
@@ -512,7 +541,7 @@ describe("applyConfigPatch — permanent RPC errors throw without retry", () => 
     const configGet = vi.fn()
       .mockRejectedValueOnce(new OpenclawWireError("auth-failed", "gateway starting; retry shortly"))
       .mockResolvedValueOnce({ config: {}, hash: "h1" });
-    const sleep = vi.fn(async () => {});
+    const sleep = vi.fn(async (_ms: number) => {});
 
     const result = await applyConfigPatch(
       { buildPatch: () => ({}) },
@@ -528,7 +557,7 @@ describe("applyConfigPatch — permanent RPC errors throw without retry", () => 
     const configGet = vi.fn()
       .mockRejectedValueOnce(new OpenclawWireError("auth-failed", "Error: User profile catalog is not ready"))
       .mockResolvedValueOnce({ config: {}, hash: "h1" });
-    const sleep = vi.fn(async () => {});
+    const sleep = vi.fn(async (_ms: number) => {});
     const result = await applyConfigPatch(
       { buildPatch: () => ({}) },
       { ...baseOpts({ sleep }), rpc: makeFakeRpc({ configGet }) },
@@ -541,7 +570,7 @@ describe("applyConfigPatch — permanent RPC errors throw without retry", () => 
     const configGet = vi.fn(async () => {
       throw new OpenclawWireError("auth-failed", "bad token");
     });
-    const sleep = vi.fn(async () => {});
+    const sleep = vi.fn(async (_ms: number) => {});
 
     await expect(
       applyConfigPatch(
@@ -558,7 +587,7 @@ describe("applyConfigPatch — permanent RPC errors throw without retry", () => 
     const configPatch = vi.fn(async () => {
       throw new OpenclawWireError("invalid-patch", "invalid config: channels.mattermost.accounts");
     });
-    const sleep = vi.fn(async () => {});
+    const sleep = vi.fn(async (_ms: number) => {});
 
     await expect(
       applyConfigPatch(
@@ -573,7 +602,7 @@ describe("applyConfigPatch — permanent RPC errors throw without retry", () => 
     const configGet = vi.fn(async () => {
       throw new OpenclawWireError("invalid-response", "malformed");
     });
-    const sleep = vi.fn(async () => {});
+    const sleep = vi.fn(async (_ms: number) => {});
 
     await expect(
       applyConfigPatch(
@@ -591,7 +620,7 @@ describe("applyConfigPatch — permanent RPC errors throw without retry", () => 
         "SecretRef at agents.list[].memorySearch.remote.apiKey contains a redacted id placeholder with no matching original value.",
       );
     });
-    const sleep = vi.fn(async () => {});
+    const sleep = vi.fn(async (_ms: number) => {});
 
     await expect(
       applyConfigPatch(
@@ -749,7 +778,7 @@ describe("applyConfigPatch — server retry-after hint", () => {
   });
 
   it("honors `retry after Ns` from rpc-error messages instead of local backoff", async () => {
-    const sleep = vi.fn(async () => {});
+    const sleep = vi.fn(async (_ms: number) => {});
     const configPatch = vi
       .fn()
       .mockRejectedValueOnce(
@@ -772,7 +801,7 @@ describe("applyConfigPatch — server retry-after hint", () => {
   });
 
   it("falls through to exponential backoff when the message has no retry-after hint", async () => {
-    const sleep = vi.fn(async () => {});
+    const sleep = vi.fn(async (_ms: number) => {});
     const configGet = vi
       .fn()
       .mockRejectedValueOnce(new OpenclawWireError("connect-failed", "ECONNRESET"))
@@ -827,7 +856,7 @@ describe("applyConfigPatch — abort signal", () => {
   it("throws immediately if the signal is already aborted", async () => {
     const ctrl = new AbortController();
     ctrl.abort(new Error("cancelled by caller"));
-    const configGet = vi.fn(async () => ({ config: {}, hash: "h" }));
+    const configGet = vi.fn(async () => configRead({}, "h"));
 
     await expect(
       applyConfigPatch(
@@ -888,9 +917,9 @@ const ctrl = new AbortController();
 describe("applyConfigPatch — config cache", () => {
   it("uses cached current+hash on first attempt instead of calling configGet", async () => {
     const cache = { current: { bindings: [{ agentId: "a" }] }, hash: "cached-hash" };
-    const configGet = vi.fn(async () => ({ config: {}, hash: "fresh" }));
-    const configPatch = vi.fn(async () => ({
-      ok: true as const,
+    const configGet = vi.fn(async () => configRead({}, "fresh"));
+    const configPatch = vi.fn<ConfigPatchFn>(async () => ({
+      ok: true,
       hash: "new-hash",
       config: { bindings: [{ agentId: "a" }, { agentId: "b" }] },
     }));
@@ -957,7 +986,7 @@ describe("applyConfigPatch — config cache", () => {
 
   it("falls back to configGet when cache hash is empty (first call)", async () => {
     const cache = { current: undefined as unknown, hash: "" };
-    const configGet = vi.fn(async () => ({ config: { v: 1 }, hash: "fresh" }));
+    const configGet = vi.fn(async () => configRead({ v: 1 }, "fresh"));
     const configPatch = vi.fn(async () => ({
       ok: true as const,
       hash: "after",
@@ -975,7 +1004,7 @@ describe("applyConfigPatch — config cache", () => {
 
   it("on hash-mismatch with cache, refetches via configGet and invalidates the write response", async () => {
     const cache = { current: { v: 0 }, hash: "stale" };
-    const configGet = vi.fn(async () => ({ config: { v: 1 }, hash: "fresh" }));
+    const configGet = vi.fn(async () => configRead({ v: 1 }, "fresh"));
     const configPatch = vi
       .fn()
       .mockRejectedValueOnce(new OpenclawWireError("hash-mismatch", "config changed since last load"))
@@ -1009,7 +1038,7 @@ describe("applyConfigPatch — config cache", () => {
         },
       },
     };
-    const configGet = vi.fn(async () => ({ config: normalized, hash: "h2" }));
+    const configGet = vi.fn(async () => configRead(normalized, "h2"));
     const configPatch = vi
       .fn()
       .mockResolvedValueOnce({
@@ -1045,7 +1074,7 @@ describe("applyConfigPatch — config cache", () => {
 
   it("clears cache hash when configPatch response omits hash (server pre-fork-patch)", async () => {
     const cache = { current: { v: 1 }, hash: "h1" };
-    const configPatch = vi.fn(async () => ({ ok: true as const, path: "/x" }));
+    const configPatch = vi.fn<ConfigPatchFn>(async () => ({ ok: true, path: "/x" }));
 
     await applyConfigPatch(
       { buildPatch: () => ({}) },
@@ -1058,9 +1087,9 @@ expect(cache.hash).toBe("");
 
 describe("applyConfigPatch — replacePaths threading (OC destructive-array guard)", () => {
   it("passes buildReplacePaths(current) to rpc.configPatch alongside the patch", async () => {
-    const configPatch = vi.fn(async () => ({ ok: true as const, path: "/x" }));
+    const configPatch = vi.fn<ConfigPatchFn>(async () => ({ ok: true, path: "/x" }));
     const rpc = makeFakeRpc({
-      configGet: vi.fn(async () => ({ config: { tag: "cfg1" }, hash: "h1" })),
+      configGet: vi.fn(async () => configRead({ tag: "cfg1" }, "h1")),
       configPatch,
     });
 
@@ -1080,10 +1109,7 @@ describe("applyConfigPatch — replacePaths threading (OC destructive-array guar
   });
 
   it("recomputes replacePaths from the re-fetched config on hash-mismatch retry", async () => {
-    const configs = [
-      { config: { tag: "stale-cfg" }, hash: "stale" },
-      { config: { tag: "fresh-cfg" }, hash: "fresh" },
-    ];
+    const configs = [configRead({ tag: "stale-cfg" }, "stale"), configRead({ tag: "fresh-cfg" }, "fresh")];
     const configGet = vi.fn(async () => configs.shift()!);
     const configPatch = vi
       .fn()
@@ -1103,14 +1129,14 @@ describe("applyConfigPatch — replacePaths threading (OC destructive-array guar
   });
 
   it("omits the third arg entirely when buildReplacePaths is absent or returns []", async () => {
-    const configPatch = vi.fn(async () => ({ ok: true as const, path: "/x" }));
+    const configPatch = vi.fn<ConfigPatchFn>(async () => ({ ok: true, path: "/x" }));
     await applyConfigPatch(
       { buildPatch: () => ({}) },
       { ...baseOpts(), rpc: makeFakeRpc({ configPatch }) },
     );
     expect(configPatch.mock.calls[0][2]).toBeUndefined();
 
-    const configPatchEmpty = vi.fn(async () => ({ ok: true as const, path: "/x" }));
+    const configPatchEmpty = vi.fn<ConfigPatchFn>(async () => ({ ok: true, path: "/x" }));
     await applyConfigPatch(
       { buildPatch: () => ({}), buildReplacePaths: () => [] },
       { ...baseOpts(), rpc: makeFakeRpc({ configPatch: configPatchEmpty }) },
@@ -1127,7 +1153,7 @@ describe("applyConfigPatch — replacePaths threading (OC destructive-array guar
     const configPatch = vi.fn(async () => {
       throw guardError;
     });
-    const sleep = vi.fn(async () => {});
+    const sleep = vi.fn(async (_ms: number) => {});
     const logs: string[] = [];
 
     await expect(

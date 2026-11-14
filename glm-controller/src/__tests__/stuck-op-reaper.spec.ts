@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import type { PlatformStateStore } from "@octogee/core/platform-state";
 import { createJournalFixtureStore, fixtureDocumentsAt, journalRowsAtPaths } from "@octogee/core/testing/journal-store";
 import { MIGRATION_TRANSFER_LEASE_MS } from "@octogee/shared/types/fleet-controller";
+import type { Operation, OperationAttemptRecord, OperationStep, SchedulerHandoffState } from "@octogee/shared/types/glm";
 import { recoverControllerOrphanedOperations, runStuckOpReaperTick } from "../stuck-op-reaper.js";
 import { decideOperationClaim } from "../operation-queue.js";
 
@@ -22,13 +23,14 @@ interface FakeOpDoc {
     steps?: Array<{ name: string; status: string; error?: string }>;
     cutoverCommittedAt?: number;
     schedulerHandoffReleased?: boolean;
-    schedulerHandoff?: Record<string, unknown>;
+    schedulerHandoff?: SchedulerHandoffState;
     completedAt?: number;
     error?: unknown;
     attempts?: number;
     rolledBack?: boolean;
-    attemptHistory?: unknown[];
+    attemptHistory?: Partial<OperationAttemptRecord>[];
     cancellationRequestedAt?: number;
+    nextAttemptAt?: Operation["nextAttemptAt"];
   };
   updated?: FakeOpDoc["data"];
 }
@@ -222,7 +224,7 @@ describe("runStuckOpReaperTick", () => {
     expect(op.data.schedulerHandoffReleased).toBe(false);
     expect(assignment.state).toBe(phase === "quiescing" ? "quiescing" : "serving");
   });
-  it.each([
+  it.each<{ held: boolean; retry: boolean; legacyQueued: boolean; steps: OperationStep[] }>([
     { held: true, retry: false, legacyQueued: false, steps: [{ name: "keys-sync-state", status: "done" }, { name: "quiesce-source", status: "done" }, { name: "final-sync-state", status: "failed" }] },
     { held: false, retry: false, legacyQueued: false, steps: [{ name: "keys-sync-state", status: "failed" }] },
     { held: true, retry: true, legacyQueued: false, steps: [{ name: "keys-sync-state", status: "done" }, { name: "quiesce-source", status: "done" }, { name: "final-sync-state", status: "failed" }, { name: "rollback:unmount-target", status: "failed" }] },

@@ -1,0 +1,20 @@
+{
+  "id": "octogee-workspace-tools",
+  "name": "Octogee Workspace Tools",
+  "version": "0.1.0",
+  "description": "Commit + push the user's workspace on demand — exec-free, for agents without direct terminal access.",
+  "contracts": {
+    "tools": ["workspace_commit"]
+  },
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "controlUrl": {
+        "type": "string",
+        "description": "Base URL of the in-pod gateway-edge service. Defaults to http://127.0.0.1:3001."
+      }
+    }
+  }
+}

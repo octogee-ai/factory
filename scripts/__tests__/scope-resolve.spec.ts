@@ -117,11 +117,27 @@ describe("resolveScope — ownership", () => {
     );
   });
 
-  it("octogee-chat-tools resolves to its own job and the extension specs (sibling extension dir)", () => {
+  it.each([
+    ["octogee-chat-tools", "chat-client.ts"],
+    ["octogee-web-tools", "web-client.ts"],
+    ["octogee-workspace-tools", "commit-client.ts"],
+    ["octogee-status-tools", "status-client.ts"],
+  ])("%s resolves to its own job and the extension specs", (name, file) => {
+    expectJobs([`platform/infra/gateway/extensions/platform/${name}/${file}`], [name, "tests"]);
+    expect(UNIT_PACKAGES.find(pkg => pkg.name === name)).toEqual({
+      name,
+      dir: `platform/infra/gateway/extensions/platform/${name}`,
+      typecheck: `echo "${name} — no tsconfig; vitest is the gate"`,
+    });
+  });
+
+  it("octogee-voice-tools resolves to its behavioral suite and the extension specs", () => {
     expectJobs(
-      ["product/infra/gateway/extensions/octogee-chat-tools/src/tools.ts"],
-      ["octogee-chat-tools", "tests"],
+      ["platform/infra/gateway/extensions/platform/octogee-voice-tools/bridge.ts"],
+      ["octogee-voice-tools", "tests"],
     );
+    expect(UNIT_PACKAGES.find(pkg => pkg.name === "octogee-voice-tools")?.dir)
+      .toBe("platform/infra/gateway/extensions/platform/octogee-voice-tools");
   });
 
   it("octogee-access-tools resolves to its own job and the extension specs", () => {
@@ -133,13 +149,13 @@ describe("resolveScope — ownership", () => {
 
   it("octogee-activity-tools resolves to its behavioral suite and the extension specs", () => {
     expectJobs(
-      ["product/infra/gateway/extensions/octogee-activity-tools/plugin-runtime-native.ts"],
+      ["platform/infra/gateway/extensions/platform/octogee-activity-tools/plugin-runtime-native.ts"],
       ["octogee-activity-tools", "tests"],
     );
     const unitPackage = UNIT_PACKAGES.find(({ name }) => name === "octogee-activity-tools");
     expect(unitPackage).toEqual({
       name: "octogee-activity-tools",
-      dir: "product/infra/gateway/extensions/octogee-activity-tools",
+      dir: "platform/infra/gateway/extensions/platform/octogee-activity-tools",
       typecheck: "npm run typecheck --silent",
     });
   });
@@ -148,13 +164,6 @@ describe("resolveScope — ownership", () => {
     expectJobs(
       ["product/infra/gateway/extensions/octogee-connector-tools/connector-client.ts"],
       ["octogee-connector-tools", "tests"],
-    );
-  });
-
-  it("octogee-web-tools resolves to its own job and the extension specs", () => {
-    expectJobs(
-      ["product/infra/gateway/extensions/octogee-web-tools/web-client.ts"],
-      ["octogee-web-tools", "tests"],
     );
   });
 

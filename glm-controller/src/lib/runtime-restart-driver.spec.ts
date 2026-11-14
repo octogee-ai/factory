@@ -1,11 +1,12 @@
 import { spawnSync } from 'node:child_process';
 import { Script } from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
+import type { RestartDriverDeps } from '@octogee/core/gateway-restart-probe';
 import { proveRuntimeRestart, runtimeRestartDriverSource, proveManagementHealth, managementHealthDriverSource } from './runtime-restart-driver.js';
 function harness(boots = ['boot-a', 'boot-b']) {
  let now=0,index=0;
- const connections=boots.map(bootId=>({bootId,request:vi.fn(async()=>({ok:true,status:'scheduled',restart:{ok:true}})),close:vi.fn(),alive:()=>true}));
- const deps={connect:vi.fn(async()=>connections[Math.min(index++,connections.length-1)]!),ready:vi.fn(async()=>true),now:()=>now,wait:vi.fn(async()=>{now+=1000;})};
+ const connections=boots.map(bootId=>({bootId,request:vi.fn(async()=>({ok:true,status:'scheduled',restart:{ok:true}})),close:vi.fn(),alive:():boolean=>true}));
+ const deps={connect:vi.fn(async()=>connections[Math.min(index++,connections.length-1)]!),ready:vi.fn<RestartDriverDeps['ready']>(async()=>true),now:()=>now,wait:vi.fn(async()=>{now+=1000;})};
  return {deps,connections};
 }
 describe('runtime restart completion proof',()=>{

@@ -1,13 +1,14 @@
 import {describe,expect,it,vi} from 'vitest';
 import {createDocumentFixtureStore} from '@octogee/core/testing/journal-store';
+import type {SourceTransferFence} from '@octogee/core/platform-state';
 import type {UserMigrationV2State,Operation,SourceTransferExecution} from '@octogee/shared/types/glm';
 import {createRetainedSourceTransfer} from './retained-source-transfer.js';
 import {runGatewayRuntimeExclusive} from './gateway-runtime-mutation.js';
 
 function harness() {
  const state = {phase:'sourceQuiesced',operationId:'op-1',migrationId:'mig-1',uid:'uid-1',slug:'builder',sourceGatewayId:'shared-one',sourceEpoch:3,sourceRelease:1,targetRelease:2,sourceAssignmentMode:'assigned',targetGatewayId:'target'} as UserMigrationV2State;
- const op = {id:'op-1',kind:'migrate-user',status:'running',startedAt:100,input:{uid:'uid-1',fromGatewayId:'shared-one',toGatewayId:'target',sourceTransferMode:'retained-pod'},customerMigrationV2:state} as Operation;
- const user = {username:'builder',provisioning:{openclaw:{gatewayId:'shared-one'}}};
+ const op: Operation = {id:'op-1',kind:'migrate-user',status:'running',createdBy:'test',createdAt:90,startedAt:100,completedAt:null,steps:[],input:{uid:'uid-1',fromGatewayId:'shared-one',toGatewayId:'target',sourceTransferMode:'retained-pod'},customerMigrationV2:state};
+ const user: {username:string;provisioning:{openclaw:{gatewayId:string;sourceTransferFence?:SourceTransferFence}}} = {username:'builder',provisioning:{openclaw:{gatewayId:'shared-one'}}};
  const assignment={uid:'uid-1',slug:'builder',gatewayId:'shared-one',source:'onboarding',epoch:3,state:'quiescing',updatedByOperationId:'op-1'};
  const docs = new Map<string,Record<string,unknown>>([['glmOperations/op-1',structuredClone(op) as unknown as Record<string,unknown>],['users/uid-1',user],['gateways/shared-one/assignments/uid-1',assignment],['gateways/shared-one',{gatewayId:'shared-one',gatewayClass:'shared',desiredStatus:'running',desiredRelease:1,latestRelease:1,liveRelease:1}],['gateways/target',{gatewayId:'target',gatewayClass:'builder',desiredStatus:'running',desiredRelease:2,latestRelease:2,liveRelease:2}],['glmGateways/target',{docKind:'runtime',gatewayId:'target',release:2,lifecycle:'serving',runtime:'gce-vm',vm:{instanceId:'instance-2',instanceName:'target',internalIp:'10.0.0.2'}}]]);
  const store=createDocumentFixtureStore(docs);

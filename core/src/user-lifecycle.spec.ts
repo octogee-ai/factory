@@ -82,7 +82,9 @@ function deferredFlag(): { value: boolean } {
 }
 
 function makeAdapter(state: MockState): UserLifecycleAdapter {
-  const record = (name: string) => state.calls.push(name);
+  const record = (name: string): void => {
+    state.calls.push(name);
+  };
   const write = (field: string, value: unknown) => {
     record(`write:${field}`);
     state.writes.push({ field, value });
@@ -209,12 +211,12 @@ return "ssh-pubkey";
     },
     reassertByotForUser: async (userData) => {
       record("reassertByotForUser");
-      state.reassertByotUserData = userData;
+      state.reassertByotUserData = { ...userData };
       if (state.reassertByotShouldFail) throw new Error("byot reassert failed");
     },
     reassertConvergedContextFilesForUser: async (userData) => {
       record("reassertConvergedContextFilesForUser");
-      state.reassertContextFilesUserData = userData;
+      state.reassertContextFilesUserData = { ...userData };
       if (state.reassertContextFilesShouldFail) throw new Error("context-file reassert failed");
     },
 
@@ -278,6 +280,9 @@ return "ssh-pubkey";
     prepareImportDir: async () => "/tmp/import",
     prepareKeyImportDir: async () => "/tmp/import",
     activateImportedUser: async () => ({ appliedFingerprint: "fp-test" }),
+    schedulerMigration: async () => { throw new Error("user lifecycle tests do not migrate schedules"); },
+    schedulerReady: async () => { throw new Error("user lifecycle tests do not wait for the scheduler"); },
+    resumeUser: async () => { throw new Error("user lifecycle tests do not resume users"); },
   };
 }
 
@@ -2885,7 +2890,6 @@ const ADAPTER_REPO_TOUCHING: Record<keyof UserLifecycleAdapter, boolean> = {
     hasUserDir: false,
     hasWorkspaceGitDir: false,
     hasGitRemote: false,
-    repoHasCommits: false,
     ensureUserDirectories: false,
     writeUserTemplateFiles: false,
     removePartialWorkspace: false,
@@ -2913,6 +2917,38 @@ const ADAPTER_REPO_TOUCHING: Record<keyof UserLifecycleAdapter, boolean> = {
     prepareKeyImportDir: false,
     activateImportedUser: false,
     recordAppliedFingerprint: false,
+    isIsolatedGateway: false,
+    isConfiguredUser: false,
+    configuredUserOverlayPresent: false,
+    materializeBrokerProfiles: false,
+    userDefaultAgentWiredInOpenclawConfig: false,
+    hasUserAgentRuntime: false,
+    projectCheckoutScope: false,
+    listLocalUserSlugs: false,
+    listLocalUserDirs: false,
+    userMountMarked: false,
+    writeMountMarker: false,
+    userMigratingIn: false,
+    markUserMigratingIn: false,
+    clearUserMigratingIn: false,
+    listMigratingInSlugs: false,
+    seedUserSnapshotForMigration: false,
+    reassertByotForUser: false,
+    reassertConvergedContextFilesForUser: false,
+    seedDeferredProjectWorkspace: false,
+    reconcileConfiguredUserProjectAgents: false,
+    cancelPendingEviction: false,
+    clearMountMarker: false,
+    userContextRestoreHeld: false,
+    schedulerMigration: false,
+    schedulerReady: false,
+    resumeUser: false,
+    sourceMigrationIdentityCustody: false,
+    sourceMigrationAgentAnchors: false,
+    targetMigrationIdentityCustody: false,
+    exportOpenClawActivationManifest: false,
+    removeImportedUserBySlug: false,
+    releaseAgent: false,
   };
 
   const REPO_TOUCHING = (

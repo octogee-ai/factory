@@ -328,7 +328,7 @@ function failureCompletionContext(
 }
 
 function isTargetNotServingYet(error: string): boolean {
-  return /^placement rejected for \S+: (?:no-live-revision|revision-not-ready)$/.test(error) ||
+  return /^placement rejected for \S+: (?:no-live-revision|revision-not-ready)(?: \(.+\))?$/.test(error) ||
     /^target gateway \S+ is not migration-ready/.test(error);
 }
 

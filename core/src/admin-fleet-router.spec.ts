@@ -28,6 +28,19 @@ import type { PlatformStateTransaction } from "./platform-state/store.js";
 import { SPOT_PRICE_MULTIPLIER } from "@octogee/shared/types/cost-estimator";
 import { ACCOUNT_DELETION_RETENTION_MS } from "@octogee/shared/types/account-lifecycle";
 import { firestoreUserAccountReader } from "./user-account.js";
+import { isPlainObject, type PlainObject } from "./platform-state/documents/secrets.js";
+
+function storedProvisioning(user: PlainObject | undefined): PlainObject {
+  const provisioning = user?.provisioning;
+  if (!isPlainObject(provisioning)) throw new Error("stored user has no provisioning");
+  return provisioning;
+}
+
+function storedOpenclaw(user: PlainObject | undefined): PlainObject {
+  const openclaw = storedProvisioning(user).openclaw;
+  if (!isPlainObject(openclaw)) throw new Error("stored user has no provisioning.openclaw");
+  return openclaw;
+}
 
 describe("projectGatewayControl", () => {
   const root = {
@@ -1090,6 +1103,9 @@ describe("fleet gateway projection", () => {
           totalPods: 1,
           readyPods: 1,
           totalRestarts: 0,
+          spotPods: 0,
+          onDemandPods: 1,
+          unknownCapacityPods: 0,
           pods: [],
         },
         [targetGatewayId]: {
@@ -1097,6 +1113,9 @@ describe("fleet gateway projection", () => {
           totalPods: 0,
           readyPods: 0,
           totalRestarts: 0,
+          spotPods: 0,
+          onDemandPods: 0,
+          unknownCapacityPods: 0,
           pods: [],
         },
       },
@@ -1170,6 +1189,9 @@ describe("fleet gateway projection", () => {
           totalPods: 0,
           readyPods: 0,
           totalRestarts: 0,
+          spotPods: 0,
+          onDemandPods: 0,
+          unknownCapacityPods: 0,
           pods: [],
         },
       },
@@ -2285,19 +2307,19 @@ describe("account deletion revokes connector grants at the provider first", () =
       [path]: { uid: "u1", slug: "alice", gatewayId: "shared-1", source: "repair", state: "serving", epoch: 3 },
     });
     await request(app).patch("/users/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(200);
-    expect(remaining.u1.provisioning.openclaw.managedBy).toBe("operator");
-    expect(remaining.u1.provisioning.openclaw.gatewayId).toBeUndefined();
-    expect(remaining.u1.provisioning.openclaw.agentIds).toEqual(["octogee-alice-coach"]);
+    expect(storedOpenclaw(remaining.u1).managedBy).toBe("operator");
+    expect(storedOpenclaw(remaining.u1).gatewayId).toBeUndefined();
+    expect(storedOpenclaw(remaining.u1).agentIds).toEqual(["octogee-alice-coach"]);
     expect(otherDocs[path]).toBeUndefined();
     await request(app).patch("/users/u1/placement").send({ managedBy: "cowboy" }).expect(200);
-    expect(remaining.u1.provisioning.openclaw.managedBy).toBe("cowboy");
+    expect(storedOpenclaw(remaining.u1).managedBy).toBe("cowboy");
   });
 
   it("releases an old provisioned parked user through the current placement eligibility gate", async () => {
     const { app, remaining } = makeDeleteApp({ u1: { username: "alice", provisioning: { openclaw: { managedBy: "operator", status: "complete" } } } });
     await request(app).patch("/users/u1/placement").send({ managedBy: "cowboy" }).expect(200);
-    expect(remaining.u1.provisioning.status).toBe("complete");
-    expect(remaining.u1.provisioning.openclaw.managedBy).toBe("cowboy");
+    expect(storedProvisioning(remaining.u1).status).toBe("complete");
+    expect(storedOpenclaw(remaining.u1).managedBy).toBe("cowboy");
   });
 
   it("also pauses the user's dedicated gateway when parking it", async () => {
@@ -2319,8 +2341,8 @@ describe("account deletion revokes connector grants at the provider first", () =
     await request(app).patch("/users/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(200);
     expect(otherDocs["gateways/builder-alice"].desiredStatus).toBe("paused");
     expect(otherDocs["gateways/builder-alice/assignments/u1"]).toEqual(assignment);
-    expect(remaining.u1.provisioning.openclaw.activationLease).toEqual(lease);
-    expect(remaining.u1.provisioning.openclaw.gatewayId).toBe("builder-alice");
+    expect(storedOpenclaw(remaining.u1).activationLease).toEqual(lease);
+    expect(storedOpenclaw(remaining.u1).gatewayId).toBe("builder-alice");
     expect(calls).not.toContain("delete:gateways/builder-alice/assignments/u1");
     await request(app).patch("/users/u1/placement").send({ managedBy: "cowboy" }).expect(200);
     expect(otherDocs["gateways/builder-alice"].desiredStatus).toBe("running");
@@ -2330,7 +2352,7 @@ describe("account deletion revokes connector grants at the provider first", () =
     const lease = { leaseId: "parked", generation: 24, status: "parked", targetGatewayId: "builder-alice" };
     const { app, remaining } = makeDeleteApp({ u1: { username: "alice", provisioning: { openclaw: { gatewayId: "shared-1", activationLease: lease } } } });
     await request(app).patch("/users/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(200);
-    expect(remaining.u1.provisioning.openclaw.activationLease).toEqual(lease);
+    expect(storedOpenclaw(remaining.u1).activationLease).toEqual(lease);
   });
 
   it("parks a user whose activation is requested: the hold does not read the lease, and leaves it as it is", async () => {
@@ -2338,14 +2360,14 @@ describe("account deletion revokes connector grants at the provider first", () =
     const { app, remaining } = makeDeleteApp({ u1: user });
     const res = await request(app).patch("/users/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(200);
     expect(res.body).toMatchObject({ uid: "u1", parked: true, managedBy: "operator" });
-    expect(remaining.u1.provisioning.openclaw).toMatchObject({ managedBy: "operator", activationLease: user.provisioning.openclaw.activationLease });
+    expect(storedOpenclaw(remaining.u1)).toMatchObject({ managedBy: "operator", activationLease: user.provisioning.openclaw.activationLease });
   });
 
   it("parks a user while a lease has another gateway allocated for them, and leaves that gateway as it is", async () => {
     const user = { username: "alice", provisioning: { openclaw: { gatewayId: "shared-1", activationLease: { leaseId: "lease-4", status: "provisioning", generation: 4, targetGatewayId: "builder-alice" } } } };
     const { app, remaining, otherDocs } = makeDeleteApp({ u1: user }, { "gateways/builder-alice": durableGatewayRoot("builder-alice", { gatewayClass: "builder", ownerUid: "u1", desiredStatus: "running" }) });
     await request(app).patch("/users/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(200);
-    expect(remaining.u1.provisioning.openclaw).toMatchObject({ managedBy: "operator", activationLease: user.provisioning.openclaw.activationLease });
+    expect(storedOpenclaw(remaining.u1)).toMatchObject({ managedBy: "operator", activationLease: user.provisioning.openclaw.activationLease });
     expect(otherDocs["gateways/builder-alice"].desiredStatus).toBe("running");
   });
 

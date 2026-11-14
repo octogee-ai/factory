@@ -36,6 +36,7 @@ describe("syncModelCredentialsForUser", () => {
     const modelApply = vi.fn();
     const userData = {
       username: "mira",
+      planInputs: {},
       provisioning: { openclaw: { status: "complete" } },
       systemConfig: { modelCredential: { active: true } },
     };

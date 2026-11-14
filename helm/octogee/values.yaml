@@ -19,7 +19,7 @@ global:
     kubernetesApiHost: ""
     bridge:
       image:
-        repository: ""
+        repository: ghcr.io/octogee-ai/octogee-cloud/vm-bridge
         tag: ""
         digest: ""
     vmSpec: {}

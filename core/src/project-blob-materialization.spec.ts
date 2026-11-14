@@ -26,7 +26,7 @@ it.skipIf(process.platform !== "linux").each(["equal", "different", "identity", 
   const before = await fs.stat(file, { bigint: true });
   // eslint-disable-next-line sonarjs/hashing -- fixture matches the GCS integrity checksum
   const checksum = createHash("md5").update(remote).digest("base64");
-  const client = { workspaceManifestReadUrl: vi.fn(), blobMaterializationReadUrl: vi.fn(async () => ({
+  const client = { workspaceManifestReadUrl: vi.fn(), blobMaterializationReadUrl: vi.fn<ProjectBlobHydrationClient["blobMaterializationReadUrl"]>(async () => ({
     generation: "17", size: remote.length, md5Hash: checksum,
     download: { method: "GET", url: "https://signed.test/avatar", gcsPath: scenario === "identity" ? "customers/other/avatar.png" : entry.gcsPath, expiresAt: "later" },
   })) } satisfies ProjectBlobHydrationClient;

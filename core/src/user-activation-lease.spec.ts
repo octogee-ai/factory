@@ -60,7 +60,10 @@ describe("Isolated runtime demand refusal", () => {
 
   function store() {
     const docs = new Map<string, Record<string, unknown>>([
-      ["config/orchestrator", { sizingProfiles: FIXTURE_SIZING_PROFILES }],
+      ["config/orchestrator", { sizingProfiles: {
+        ...FIXTURE_SIZING_PROFILES,
+        pod: { isolation: "isolated", sizingTier: "xs", fallbackStorageGb: null, computer: { runtime: "cluster", homeSizeGiB: 10 } },
+      } }],
       ["users/uid-alice", {
         accountLifecycle: { status: "active" },
         provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
@@ -72,10 +75,10 @@ describe("Isolated runtime demand refusal", () => {
     return { docs, store: createDocumentFixtureStore(docs) };
   }
 
-  const request = (state: ReturnType<typeof store>, refuse: (user: { uid: string }) => typeof refusal | null) =>
+  const request = (state: ReturnType<typeof store>, refuse: (user: { uid: string }) => typeof refusal | null, sizingKey = "pro") =>
     requestUserActivationLease({
       store: state.store,
-      readSizingKey: async () => "pro",
+      readSizingKey: async () => sizingKey,
       uid: "uid-alice",
       reportingGatewayId: "default",
       assignmentEpoch: 7,
@@ -91,6 +94,16 @@ describe("Isolated runtime demand refusal", () => {
     const seen: string[] = [];
     await expect(request(state, (user) => { seen.push(user.uid); return refusal; })).resolves.toBe(refusal);
     expect(seen).toEqual(["uid-alice"]);
+    expect(state.docs.get("users/uid-alice")).not.toHaveProperty("provisioning.openclaw.activationLease");
+  });
+
+  it("refuses an entitlement whose isolated profile runs as a pod, which only an operator can give", async () => {
+    const state = store();
+
+    await expect(request(state, () => null, "pod")).resolves.toMatchObject({
+      statusCode: 409,
+      body: { code: "builder-runtime-not-vm", entitlementTier: "pod" },
+    });
     expect(state.docs.get("users/uid-alice")).not.toHaveProperty("provisioning.openclaw.activationLease");
   });
 
