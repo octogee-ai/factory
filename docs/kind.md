@@ -486,8 +486,7 @@ setting stays on the cluster, and later runs of `up` keep it. Without
   with `gvisor`.
 - An isolated gateway that runs as a pod is in the same namespace as every
   other gateway. What sets it apart from other users' gateways is its own
-  service account and home claim, plus its per-gateway network policy where
-  the cluster's network plugin enforces one.
+  service account and home claim.
 - The kind node carries the `topology.kubernetes.io/zone` and
   `topology.kubernetes.io/region` labels that the gateway's topology spread
   needs.
@@ -495,7 +494,12 @@ setting stays on the cluster, and later runs of `up` keep it. Without
   only. The chart pins that platform's manifest, and kind's values let it
   schedule on any node, so on an arm64 machine it runs under the container
   runtime's amd64 emulation, which Docker Desktop provides.
-- The gateway fleet's network policies are off.
+- Gateways have no network policies: neither the fleet's nor each gateway's
+  own. A cloud cluster lets an isolated gateway reach the Kubernetes API
+  server through its own egress policy, which only adds to the fleet's
+  gateway egress policy. kind's network plugin enforces network policies, so
+  that egress policy alone would leave the gateway able to reach the API server
+  and nothing else, not even DNS or the platform API.
 
 ## Remove everything
 
@@ -540,7 +544,13 @@ at the same time:
 The job reads the identity markers only while the gateway's container is
 running. It fails at once if they can't be read three times in a row while the
 container runs. If the identities never become ready, the job prints the
-gateway's last `Workspace identity initialization failed` log line.
+gateway's last `Workspace identity initialization failed` log line. When any
+step after the gateway is created fails, the job adds the gateway's pod and
+container states, the events of its Deployment, ReplicaSets, pods and home
+claim, the network policies that select its pod, and the last 40 lines of its
+gateway container's log, and of the previous container's log when the container
+restarted. Tokens, keys, passwords and URL credentials are redacted from
+everything the job prints when it fails.
 
 Both jobs run in the `agent-round-trip` environment, which only `main` can use;
 the installer stores the environment's `OPENROUTER_API_KEY` secret in the

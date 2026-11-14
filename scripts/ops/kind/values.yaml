@@ -115,6 +115,8 @@ glm-controller:
     podAntiAffinity: preferred
     pdb:
       enabled: false
+    networkPolicy:
+      enabled: false
     env:
       gcloudProject: kind
       firebaseProjectId: kind
