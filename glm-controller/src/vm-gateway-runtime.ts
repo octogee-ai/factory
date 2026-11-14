@@ -65,7 +65,7 @@ export interface VmGatewayRuntimeDeps {
   log: (msg: string) => void;
 }
 
-async function findGatewayVmPolicy(
+export async function findGatewayVmPolicy(
   store: Pick<PlatformStateStore, "config">,
   tier: SizingTier,
 ): Promise<GatewayComputerProfile | null> {
@@ -206,12 +206,7 @@ async function newGatewayVmPolicy(
 ): Promise<GatewayVmProfile | null> {
   if (input.gatewayClass !== "builder" || hasObservedClusterPods(data) || hasPriorClusterDeployment(data, input.gatewayId)) return null;
   const policy = await resolveGatewayVmPolicy(input.store, input.sizingTier);
-  if (policy.runtime === "cluster") {
-    throw new Error(
-      `gateway ${input.gatewayId}: sizing tier ${input.sizingTier ?? "s"} names a pod computer, and this fleet controller cannot create its home claim`,
-    );
-  }
-  return policy;
+  return policy.runtime === "gce-vm" ? policy : null;
 }
 
 export async function stampGatewayRuntime(input: GatewayRuntimeStampInput): Promise<GatewayRuntime> {

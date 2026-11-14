@@ -7,7 +7,7 @@ import {
   createAdminFleetMutationRunner,
   respondToAdminFleetMutationError,
 } from "./admin-fleet-router.js";
-import { hasVmShape } from "./operator-isolated-gateway.js";
+import { hasComputerShape } from "./operator-isolated-gateway.js";
 import type { GatewayComputerProfile, GatewaySizingProfile } from "./platform-state/config.js";
 import { isGatewaySizingProfile } from "./platform-state/config.js";
 import type { PlatformStateStore } from "./platform-state/store.js";
@@ -75,7 +75,7 @@ function parseProfile(body: unknown): { profile: GatewaySizingProfile } | { refu
       "the body must be {\"isolation\":\"shared\"} or an isolated profile with sizingTier, computer and fallbackStorageGb, " +
       "with sizes in positive whole numbers and no other fields");
   }
-  if (body.isolation === "isolated" && !hasVmShape(body)) {
+  if (body.isolation === "isolated" && !hasComputerShape(body)) {
     return refusal(400, "sizing-profile-no-vm", "an isolated sizing profile needs a VM machine type, provisioning model and boot disk");
   }
   return { profile: body };

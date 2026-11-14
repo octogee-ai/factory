@@ -27,7 +27,7 @@ interface GivePlan extends NamedIsolatedSizingProfile {
     artifact: GatewayArtifact;
 }
 export declare function isolatedSizingProfileKeys(reader: Pick<PlatformStateRepositories, "config">): Promise<string[]>;
-export declare function hasVmShape(profile: IsolatedSizingProfile): boolean;
+export declare function hasComputerShape(profile: IsolatedSizingProfile): boolean;
 export declare function resolveIsolatedSizingProfile(reader: Pick<PlatformStateRepositories, "config">, named: unknown): Promise<NamedIsolatedSizingProfile | {
     refusal: OperatorIsolatedGatewayAnswer;
 }>;

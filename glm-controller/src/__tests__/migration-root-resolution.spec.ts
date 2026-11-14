@@ -96,6 +96,21 @@ describe("durable migration root resolution", () => {
     await expect(resolveLiveRevisionAsSource(db, "default")).resolves.toBeNull();
   });
 
+  it("names what blocks an isolated gateway that has not gone live", async () => {
+    const blocker = "the isolated gateway image is linux/amd64 only, and this cluster has no amd64 node";
+    const db = database({
+      "gateways/pod": durableGateway("pod", {
+        gatewayClass: "builder", imageProfile: "builder", sizingTier: "s", liveRelease: null, ownerUid: "uid-lin", builderSlug: "lin",
+      }),
+      "glmGateways/pod": servingRuntime("pod", { lifecycle: "provisioning", runtime: "cluster", lastError: { message: blocker, at: 5 } }),
+      "gateways/shared": durableGateway("shared", { liveRelease: null }),
+      "glmGateways/shared": servingRuntime("shared", { lifecycle: "provisioning", lastError: { message: "a shared gateway error", at: 5 } }),
+    });
+
+    await expect(resolveGatewayPlacement(db, "pod")).resolves.toEqual({ ok: false, reason: "no-live-revision", blocker });
+    await expect(resolveGatewayPlacement(db, "shared")).resolves.toEqual({ ok: false, reason: "no-live-revision" });
+  });
+
   it("binds an unassigned source to the exact stable live root generation", async () => {
     const db = database({
       "gateways/source": durableGateway("source", { updatedAt: 17 }),
