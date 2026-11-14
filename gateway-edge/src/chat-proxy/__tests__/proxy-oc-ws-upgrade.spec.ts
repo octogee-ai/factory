@@ -4,18 +4,10 @@ import { EventEmitter } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { WebSocket as WsClient } from 'ws';
 import type { OpenClawRuntimeBroker } from '../openclaw/runtime-broker.js';
-import {
-  getAdminDb,
-  requireEmulator,
-  resetEmulator,
-} from "@octogee/test-helpers/firestore-emulator";
-import { TICKETS_COLLECTION } from './helpers/collections.js';
 
 process.env.NODE_ENV = 'test';
 process.env.GATEWAY_ID = 'gw-1';
 process.env.MM_INTERNAL_URL = 'http://mattermost.octogee-test.svc.cluster.local:8065';
-
-requireEmulator();
 
 const TICKET = '11111111-2222-3333-4444-555555555555';
 
@@ -159,15 +151,15 @@ const {
   chatProxyMetricsRegistry,
 } = await import('../proxy');
 
+const tickets = new Map<string, Record<string, unknown>>();
+
 const runtimeBroker = {
   async redeemOpenClawWs(ticketId: string) {
-    const ref = getAdminDb().collection(TICKETS_COLLECTION).doc(ticketId);
-    const snap = await ref.get();
-    const data = snap.data();
-    if (!snap.exists || typeof data?.uid !== 'string' || Number(data.expiresAt) <= Date.now()) {
+    const data = tickets.get(ticketId);
+    if (data === undefined || typeof data.uid !== 'string' || Number(data.expiresAt) <= Date.now()) {
       return { kind: 'unauthorized' as const };
     }
-    await ref.delete();
+    tickets.delete(ticketId);
     try {
       const resolved = h.ctl.resolve();
       return {
@@ -210,24 +202,23 @@ afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
-async function seedTicket(opts: { expiresAt?: number; uid?: string | null } = {}): Promise<void> {
+function seedTicket(opts: { expiresAt?: number; uid?: string | null } = {}): void {
   const data: Record<string, unknown> = {
     expiresAt: opts.expiresAt ?? Date.now() + 60_000,
     purpose: "openclaw-ws",
     gatewayId: "",
   };
   if (opts.uid !== undefined && opts.uid !== null) data.uid = opts.uid;
-  await getAdminDb().collection(TICKETS_COLLECTION).doc(TICKET).set(data);
+  tickets.set(TICKET, data);
 }
 
-async function ticketExists(): Promise<boolean> {
-  const snap = await getAdminDb().collection(TICKETS_COLLECTION).doc(TICKET).get();
-  return snap.exists;
+function ticketExists(): boolean {
+  return tickets.has(TICKET);
 }
 
 beforeEach(async () => {
-  await resetEmulator();
-  await seedTicket({ uid: 'uid-1' });
+  tickets.clear();
+  seedTicket({ uid: 'uid-1' });
   h.ctl.originAllowed = true;
   h.ctl.resolve = () => ({
     url: 'ws://gw.internal:18789',
@@ -305,19 +296,19 @@ describe('OC WS upgrade — refusal decision table (security boundary)', () => {
   });
 
   it('rejects a ticket that does not exist with 401', async () => {
-    await getAdminDb().collection(TICKETS_COLLECTION).doc(TICKET).delete();
+    tickets.delete(TICKET);
     const r = await connect();
     expect(r).toEqual({ kind: 'rejected', status: 401 });
   });
 
   it('rejects an expired ticket with 401', async () => {
-    await seedTicket({ expiresAt: Date.now() - 1, uid: 'uid-1' });
+    seedTicket({ expiresAt: Date.now() - 1, uid: 'uid-1' });
     const r = await connect();
     expect(r).toEqual({ kind: 'rejected', status: 401 });
   });
 
   it('rejects a ticket with no claimant uid with 401', async () => {
-    await seedTicket({ uid: null });
+    seedTicket({ uid: null });
     const r = await connect();
     expect(r).toEqual({ kind: 'rejected', status: 401 });
   });
@@ -422,7 +413,7 @@ describe('OC WS upgrade — happy path frame proxying & teardown', () => {
   it('consumes the ticket exactly once and upgrades the connection', async () => {
     const r = await connect();
     expect(r.kind).toBe('open');
-    expect(await ticketExists()).toBe(false);
+    expect(ticketExists()).toBe(false);
     await settle(r);
   });
 

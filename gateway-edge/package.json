@@ -16,11 +16,6 @@
     "test": "vitest run --exclude 'src/**/__tests__/**/*.emulator.spec.ts'",
     "pretest:watch": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "test:watch": "vitest --exclude 'src/**/__tests__/**/*.emulator.spec.ts'",
-    "pretest:emulator": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
-    "test:emulator": "node ../scripts/ops/run-emulator-vitest.mjs --only firestore,auth --project demo-platform --config vitest.emulator.config.ts --env GCLOUD_PROJECT=demo-platform",
-    "pretest:emulator:one": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
-    "test:emulator:one": "node ../scripts/ops/run-emulator-vitest.mjs --only firestore,auth --project demo-platform --config vitest.emulator.config.ts --env GCLOUD_PROJECT=demo-platform",
-    "test:all": "npm test && npm run test:emulator",
     "pretest:coverage": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "test:coverage": "vitest run --coverage",
     "pretypecheck": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
@@ -53,7 +48,6 @@
     "ws": "^8.21.3"
   },
   "devDependencies": {
-    "@octogee/test-helpers": "file:../test-helpers",
     "@types/busboy": "^1.5.5",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
@@ -61,7 +55,6 @@
     "@types/supertest": "^7.2.1",
     "@types/ws": "^8.18.1",
     "@vitest/coverage-v8": "^5.1.0",
-    "firebase-tools": "^15.35.0",
     "supertest": "^7.2.2",
     "tsc-alias": "^1.9.10",
     "tsx": "^4.23.15",
@@ -81,10 +74,6 @@
     "brace-expansion@>=5.0.0 <6.0.0": "5.0.12",
     "fast-xml-builder": "^1.1.7",
     "fast-uri": "^3.1.6",
-    "firebase-tools": {
-      "ws": "^7.5.11",
-      "csv-parse": "^7.0.2"
-    },
     "glob": "14.0.3",
     "ip-address": "^10.2.1",
     "protobufjs": "^7.6.3",

@@ -47,7 +47,7 @@ Every package is named `@octogee/<name>` (one consistent scope).
 
 ## Internal package directory dependencies
 
-`core/`, `shared/`, and `test-helpers/` commit deterministic `dist/` interfaces.
+`core/` and `shared/` commit deterministic `dist/` interfaces.
 Consumers declare them as `file:../<package>` dependencies and own an
 `install-links=true` `.npmrc`. npm then packs the directory into a real installed
 package on `npm ci`; it does not create a source symlink or build on install.

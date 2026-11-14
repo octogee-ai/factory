@@ -5,11 +5,7 @@ import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../index.js";
-import { db } from "../lib/db.js";
-import {
-  getIdTokenForUid,
-  setupEmulatorTest,
-} from "@octogee/test-helpers/firestore-emulator";
+import { installBearerUids } from "./helpers/user-bearer.js";
 
 const OWNER_UID = "automations-owner";
 const GATEWAY_ID = "gw-automations";
@@ -19,7 +15,13 @@ const originalBrokerUrl = process.env.AUTOMATIONS_BROKER_URL;
 const originalTokenPath = process.env.OCTOGEE_API_SA_TOKEN_PATH;
 let tokenDirectory: string;
 
-setupEmulatorTest();
+installBearerUids(
+  async (token) => {
+    if (!token.startsWith("token-")) throw new Error("unknown bearer");
+    return token.slice("token-".length);
+  },
+  () => ({ accountLifecycle: { status: "active" } }),
+);
 
 beforeEach(async () => {
   tokenDirectory = await mkdtemp(join(tmpdir(), "octogee-automations-"));
@@ -41,14 +43,8 @@ afterEach(async () => {
   else process.env.OCTOGEE_API_SA_TOKEN_PATH = originalTokenPath;
 });
 
-async function authHeader(uid: string): Promise<{ Authorization: string }> {
-  return { Authorization: `Bearer ${await getIdTokenForUid(uid)}` };
-}
-
-async function seedActiveUser(uid: string): Promise<void> {
-  await db.collection("users").doc(uid).set({
-    accountLifecycle: { status: "active" },
-  });
+function authHeader(uid: string): { Authorization: string } {
+  return { Authorization: `Bearer token-${uid}` };
 }
 
 describe("POST /api/g/:gatewayId/automations/rpc", () => {
@@ -61,8 +57,7 @@ describe("POST /api/g/:gatewayId/automations/rpc", () => {
   });
 
   it("propagates an authorization broker rejection", async () => {
-    await seedActiveUser("automations-member");
-    const authorization = await authHeader("automations-member");
+    const authorization = authHeader("automations-member");
     vi.stubGlobal("fetch", vi.fn(async () => new Response(
       JSON.stringify({ error: "forbidden" }),
       { status: 403, headers: { "content-type": "application/json" } },
@@ -78,8 +73,7 @@ describe("POST /api/g/:gatewayId/automations/rpc", () => {
   });
 
   it("rejects an authorized owner request outside the automation allowlist", async () => {
-    await seedActiveUser(OWNER_UID);
-    const authorization = await authHeader(OWNER_UID);
+    const authorization = authHeader(OWNER_UID);
     vi.stubGlobal("fetch", vi.fn(async () => new Response(
       JSON.stringify({
         slug: WORKSPACE_SLUG,

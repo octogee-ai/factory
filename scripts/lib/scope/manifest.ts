@@ -77,8 +77,8 @@ export const UNIT_PACKAGES: readonly UnitPackage[] = [
   },
   {
     name: JOBS.testHelpers,
-    dir: "platform/test-helpers",
-    typecheck: COMMITTED_DIST_TYPECHECK,
+    dir: "product/test-helpers",
+    typecheck: PRODUCT_COMMITTED_DIST_TYPECHECK,
   },
   { name: JOBS.gatewayEdge, dir: "platform/gateway-edge", typecheck: TYPECHECK },
   {
@@ -183,7 +183,6 @@ export interface Ownership {
 
 export const OWNERSHIP: readonly Ownership[] = [
   { dir: "platform/core/", jobs: [JOBS.core] },
-  { dir: "platform/test-helpers/", jobs: [JOBS.testHelpers] },
   { dir: "platform/gateway-edge/", jobs: [JOBS.gatewayEdge, JOBS.gatewayEdgeEmulator] },
   { dir: "platform/octogee-api/", jobs: [JOBS.octogeeApi, JOBS.octogeeApiEmulator] },
   {
@@ -248,6 +247,7 @@ export const OWNERSHIP: readonly Ownership[] = [
   { dir: "platform/shared/", jobs: [JOBS.shared] },
   { dir: "product/core/", jobs: [JOBS.productCore] },
   { dir: "product/shared/", jobs: [JOBS.productShared] },
+  { dir: "product/test-helpers/", jobs: [JOBS.testHelpers] },
   { dir: "artifact-worker/", jobs: [JOBS.artifactWorker] },
   { dir: "platform/infra/gateway/", jobs: [JOBS.scripts, JOBS.tests, JOBS.platformTests, JOBS.octogeeApi, JOBS.gatewayEdge, JOBS.core, JOBS.acceptance] },
   { dir: "platform/infra/desktop/", jobs: [JOBS.scripts, JOBS.tests, JOBS.glmController] },
@@ -303,7 +303,7 @@ export const EDGES: readonly ScopeEdge[] = [
       JOBS.glmControllerEmulator,
       JOBS.octogeeApiEmulator,
     ],
-    reason: "the shared Firebase emulator runner launches every package emulator suite",
+    reason: "the product's Firebase emulator runner, overlaid at this path, launches every package emulator suite",
   },
   {
     when: "platform/core/",
@@ -323,7 +323,7 @@ export const EDGES: readonly ScopeEdge[] = [
       "@octogee/core is consumed by scripts + octogee-api (via scripts/lib re-export shims) + gateway-edge + glm-controller (direct package import); tests/specs' readSrc() helpers (model-credential-materializer, byot-sync-apply, gateway-rpc-local-exceptions specs) also fall back to reading core/src directly for logic that moved out of scripts/lib",
   },
   {
-    when: "platform/test-helpers/",
+    when: "product/test-helpers/",
     jobs: [
       JOBS.gatewayEdge,
       JOBS.gatewayEdgeEmulator,
@@ -332,7 +332,6 @@ export const EDGES: readonly ScopeEdge[] = [
       JOBS.functions,
       JOBS.functionsEmulator,
       JOBS.tests,
-      JOBS.platformTests,
     ],
     reason:
       "@octogee/test-helpers (firestore-emulator) is consumed by the gateway-edge + octogee-api + functions emulator specs; test-helpers/package.json's firebase-admin range is also swept by tests/specs/firebase-admin-major-alignment.spec.ts",

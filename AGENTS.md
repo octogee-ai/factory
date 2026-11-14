@@ -29,7 +29,6 @@ lockfile, and installs, typechecks and tests on its own.
 ```
 core/            @octogee/core: shared runtime (platform state, secret store, chat and git hosts)
 shared/          @octogee/shared: types and small server helpers
-test-helpers/    @octogee/test-helpers
 glm-controller/  the fleet controller and its Admin API: placement, migration, gateway rollout
 octogee-api/     the platform API, plus the LLM broker and npm cache proxy apps
 gateway-edge/    sidecar in each gateway pod; also runs as the gateway router and the Mattermost callback router
@@ -43,7 +42,7 @@ install.sh, deploy/  the foundation installer: one stock OpenClaw gateway with c
 docs/            start at docs/getting-started.md
 ```
 
-`core`, `shared` and `test-helpers` commit their built `dist/`. Other packages
+`core` and `shared` commit their built `dist/`. Other packages
 install them as `file:` dependencies, so build and commit `dist/` with any
 change to their source. The OpenClaw build the gateway image uses is pinned in
 `infra/gateway/openclaw-tarball/current.json`.
@@ -86,9 +85,9 @@ checkout or copies the published ones.
 - **PostgreSQL.** `node scripts/ci/core-postgres.mjs` starts a throwaway
   PostgreSQL 16 server and runs core's integration suite against it. It expects
   PostgreSQL 16 and pgvector under `/usr/lib/postgresql/16`, as on the CI runner.
-- **Emulator specs.** `*.emulator.spec.ts` files need the Firestore emulator and
-  a Firebase configuration this repository does not have, so CI here does not
-  run them.
+- **Emulator specs.** The platform has none. `npm test` excludes
+  `*.emulator.spec.ts`, so a product that overlays a package can add its own.
+  CI runs them only for an overlay that supplies a `test-emulator.mjs`.
 - **Coverage gaps.** `npm run --prefix scripts audit-coverage` follows the
   import graph, counting `.spec.ts` and `.test.ts` files and resolving the `@/`
   and `@shared` aliases. Never use a `*.spec.ts` glob, which flags false gaps.

@@ -3,7 +3,6 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { configDefaults } from "vitest/config";
 import unitConfig from "../vitest.config.js";
-import emulatorConfig from "../vitest.emulator.config.js";
 
 interface ScriptsVitestConfig {
   resolve?: { alias?: Record<string, string> };
@@ -66,15 +65,5 @@ describe("scripts vitest configs", () => {
 
     expect(inside).toContain("__tests__/firebase-reach.spec.ts");
     expect(standalone).not.toContain("__tests__/firebase-reach.spec.ts");
-  });
-
-  it("runs emulator specs serially with the longer timeout", () => {
-    const cfg = emulatorConfig as ScriptsVitestConfig;
-    const alias = cfg.resolve?.alias as Record<string, string>;
-
-    expect(alias["@shared"]).toBe(path.resolve(__dirname, "../../shared"));
-    expect(cfg.test?.include).toEqual(["__tests__/**/*.emulator.spec.ts"]);
-    expect(cfg.test?.fileParallelism).toBe(false);
-    expect(cfg.test?.testTimeout).toBe(15_000);
   });
 });

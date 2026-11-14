@@ -103,7 +103,7 @@ describe("verify-committed-dist", () => {
     ]);
   });
 
-  it.each(["core", "shared", "test-helpers"])(
+  it.each(["core", "shared"])(
     "tracks %s dist and permits future build output",
     (packageName) => {
       const tracked = git(REPO_ROOT, ["ls-files", `${packageName}/dist`])

@@ -16,8 +16,11 @@ export interface CheckJob {
 }
 
 const emulatorDirectories: Partial<Record<JobKey, string>> = {
-  [JOBS.userLifecycleEmulator]: "platform/scripts",
   [JOBS.functionsEmulator]: "functions",
+};
+
+const productEmulatorDirectories: Partial<Record<JobKey, string>> = {
+  [JOBS.userLifecycleEmulator]: "platform/scripts",
   [JOBS.gatewayEdgeEmulator]: "platform/gateway-edge",
   [JOBS.glmControllerEmulator]: "platform/glm-controller",
   [JOBS.octogeeApiEmulator]: "platform/octogee-api",
@@ -134,6 +137,8 @@ function testJob(name: JobKey): CheckJob {
   };
   const directory = emulatorDirectories[name];
   if (directory) return { name, directory, nodeVersion: packageNodeVersion(directory), installs: installsFor(directory), commands: ["npm run test:emulator"] };
+  const productDirectory = productEmulatorDirectories[name];
+  if (productDirectory) return { name, directory: productDirectory, nodeVersion: packageNodeVersion(productDirectory), installs: installsFor(productDirectory), commands: [`node ${PRODUCT_EMULATOR_ENTRY}`] };
   if (name === JOBS.app) return { name, directory: "app", nodeVersion: DEFAULT_NODE_VERSION, installs: installsFor("app"), commands: ["npm run typecheck", "npm test"] };
   if (name === JOBS.firestoreRules) return { name, directory: "firestore-rules-tests", nodeVersion: DEFAULT_NODE_VERSION, installs: ["firestore-rules-tests"], commands: ["npm test"] };
   if (name === JOBS.desktopPackage) return {
@@ -183,6 +188,7 @@ function qualityJobs(paths: string[], full: boolean): CheckJob[] {
 
 export const OVERLAY_COMMAND = "node platform/scripts/ops/overlay.mjs platform product .overlay";
 export const PRODUCT_TYPECHECK_CONFIG = "tsconfig.product.json";
+export const PRODUCT_EMULATOR_ENTRY = "test-emulator.mjs";
 const PRODUCT_TYPECHECK = `npx tsc --noEmit -p ${PRODUCT_TYPECHECK_CONFIG}`;
 const OVERLAY_DEPENDENCY_SYNC = "platform/scripts/ops/sync-local-file-deps.mjs";
 
@@ -193,11 +199,10 @@ export function overlayPackages(productRoot: string): Set<string> {
     .map(entry => entry.name));
 }
 
-function productOverlay(job: CheckJob, products: ReadonlySet<string>, productTypecheckConfigs: ReadonlySet<string>): CheckJob[] {
-  const overlaid = (directory: string) => {
-    const name = directory.startsWith("platform/") ? directory.slice("platform/".length) : "";
-    return products.has(name) ? `.overlay/${name}` : directory;
-  };
+function productOverlay(job: CheckJob, products: ReadonlySet<string>, productTypecheckConfigs: ReadonlySet<string>, productEmulators: ReadonlySet<string>): CheckJob[] {
+  const packageName = (directory: string) => (directory.startsWith("platform/") ? directory.slice("platform/".length) : "");
+  const overlaid = (directory: string) => (products.has(packageName(directory)) ? `.overlay/${packageName(directory)}` : directory);
+  if (job.commands.includes(`node ${PRODUCT_EMULATOR_ENTRY}`) && !productEmulators.has(packageName(job.directory))) return [];
   if (overlaid(job.directory) === job.directory) return [job];
   const directory = overlaid(job.directory);
   const installs = job.installs.map(overlaid);
@@ -206,7 +211,7 @@ function productOverlay(job: CheckJob, products: ReadonlySet<string>, productTyp
   const overlay = { ...job, directory, setup: [OVERLAY_COMMAND], installs, commands: [packLibraries, ...job.commands] };
   if (job.name.endsWith("-emulator")) return [overlay];
   const platformTypecheck = UNIT_PACKAGES.find(pkg => pkg.dir === job.directory)?.typecheck;
-  const productTypecheck = productTypecheckConfigs.has(job.directory.slice("platform/".length));
+  const productTypecheck = productTypecheckConfigs.has(packageName(job.directory));
   const commands = [packLibraries, ...(productTypecheck ? job.commands.map(command => (command === platformTypecheck ? PRODUCT_TYPECHECK : command)) : job.commands)];
   return [job, { ...overlay, name: `${job.name}${PRODUCT_SUFFIX}`, commands }];
 }
@@ -215,13 +220,14 @@ export interface PlanTree {
   deleted?: ReadonlySet<string>;
   products?: ReadonlySet<string>;
   productTypecheckConfigs?: ReadonlySet<string>;
+  productEmulators?: ReadonlySet<string>;
 }
 
-export function checkPlan(paths: string[], group: "tests" | "quality" | "all" = "all", desktopPackage = false, full = false, { deleted = new Set(), products = new Set(), productTypecheckConfigs = new Set() }: PlanTree = {}): CheckJob[] {
+export function checkPlan(paths: string[], group: "tests" | "quality" | "all" = "all", desktopPackage = false, full = false, { deleted = new Set(), products = new Set(), productTypecheckConfigs = new Set(), productEmulators = new Set() }: PlanTree = {}): CheckJob[] {
   const scope = full ? { jobs: [...ALL_JOBS], everything: true } : resolveScope(paths, deleted);
   const result = group === "quality" ? [] : scope.jobs.filter(name => desktopPackage || name !== JOBS.desktopPackage).map(testJob).flatMap(job => (job.name === JOBS.app ? appShards(job) : [job]));
   if (group !== "quality" && desktopPackage && !result.some(job => job.name === JOBS.desktopPackage)) result.push(testJob(JOBS.desktopPackage));
-  const tests = result.flatMap(job => productOverlay(job, products, productTypecheckConfigs));
+  const tests = result.flatMap(job => productOverlay(job, products, productTypecheckConfigs, productEmulators));
   if (group === "tests") return tests;
   return [...tests, ...qualityJobs(paths, scope.everything)];
 }

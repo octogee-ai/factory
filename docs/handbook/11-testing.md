@@ -80,9 +80,11 @@ npm ci --prefix firestore-rules-tests
 npm test --prefix firestore-rules-tests
 ```
 
-Service suites use `npm run test:emulator --prefix <package>` where that script
-exists. For example, `octogee-api` uses Node 24+ and Functions uses Node 22.
-Install dependencies in the package before running it. First use can download
+The platform packages have no emulator suites of their own. A product overlay
+that adds `*.emulator.spec.ts` files to a package also supplies that package's
+`test-emulator.mjs`; run it with `node test-emulator.mjs` from the package's
+`.overlay/` directory. Functions keeps `npm run test:emulator --prefix functions`
+on Node 22. Install dependencies in the package before running it. First use can download
 emulator binaries. Local project IDs in emulator scripts are fixture labels;
 the test helper requires the emulator host for emulator-backed database access.
 
@@ -206,7 +208,7 @@ point itself.
   `setupEmulatorTest()` (fail-loud `requireEmulator()` + per-test reset),
   `useAuthToken(uid)` / `getIdTokenForUid(uid)` mint a REAL emulator ID token
   — covers Auth-gated routes too, not just Firestore reads.
-- Run via `npm run test:emulator` (glob `src/__tests__/**/*.emulator.spec.ts`).
+- Run via the package's `test-emulator.mjs` (glob `src/__tests__/**/*.emulator.spec.ts`).
   Plain `npm test` **excludes** emulator specs; a bare `npx vitest run`
   does **not** exclude them and will hang waiting for a real emulator.
   Placing an `.emulator.spec.ts` outside `src/__tests__/**` means it silently

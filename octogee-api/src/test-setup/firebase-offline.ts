@@ -6,7 +6,7 @@ import { vi } from "vitest";
 // the forks pool — bleeds across sibling files. Mock the module inert globally
 // (specs that declare their own vi.mock for it still win, so seeded fakes are
 // unaffected); the offline env is a backstop so a stray direct firebase-admin
-// call fails fast instead of hanging on ADC. vitest.emulator.config.ts doesn't load
+// call fails fast instead of hanging on ADC. An emulator config doesn't load
 // this setup, so real-emulator specs are unaffected.
 vi.mock("../../../gateway-edge/src/lib/db", () => {
   const inertDoc: Record<string, unknown> = {};
