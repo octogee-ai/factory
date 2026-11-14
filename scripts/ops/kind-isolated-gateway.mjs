@@ -131,6 +131,10 @@ export async function run(deps, options) {
 
   deps.fleet(["user", "migrate", options.user, `--to=${options.gateway}`, "--apply"]);
   await waitForUserMount(deps, options, options.gateway, BOOT_TIMEOUT_MS);
+  await waitFor(() => {
+    const gateway = (deps.fleet(["gateway", "ls"]).gateways ?? []).find(entry => entry.gatewayId === gatewayId);
+    return Array.isArray(gateway?.mountedUsers) && gateway.mountedUsers.length === 0;
+  }, { timeoutMs: 300_000, intervalMs: 10_000, label: `${gatewayId}'s heartbeat to report no mounted users after the return` }, clock);
   deps.fleet(["gateway", "retire", gatewayId, "--apply"]);
   await waitFor(() => deps.gatewayPodCount(gatewayId) === 0 && deps.homeClaimPhase(gatewayId) === null,
     { timeoutMs: 600_000, intervalMs: 5_000, label: `${gatewayId}'s pod and home claim to be deleted after retire` }, clock);

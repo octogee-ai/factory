@@ -26,6 +26,8 @@ function cluster(scenario: Scenario = {}) {
   const events: string[] = [];
   const sql: Array<{ sql: string; variables: Record<string, string> }> = [];
   let mounted = "shared-a";
+  let isolatedMounted: string[] = [];
+  let staleHeartbeats = 0;
   let pods = 0;
   let claim: string | null = null;
   let boots = 0;
@@ -40,6 +42,7 @@ function cluster(scenario: Scenario = {}) {
     home.set(BOOT_FILE, `boot-${boots}`);
     home.set(READY_FILE, scenario.identityReadyAfterBoot === false ? `boot-${boots - 1}` : `boot-${boots}`);
     mounted = ISOLATED;
+    isolatedMounted = ["lin"];
   };
 
   const deps = {
@@ -49,9 +52,13 @@ function cluster(scenario: Scenario = {}) {
       events.push(args.slice(0, 3).join(" "));
       const [noun, verb] = args;
       if (noun === "gateway" && verb === "ls") {
+        if (staleHeartbeats > 0 && --staleHeartbeats === 0) isolatedMounted = [];
         return { gateways: [
-          { gatewayId: "shared-a", status: "ready" },
-          ...(claim === null && boots > 0 ? [] : [{ gatewayId: ISOLATED, status: "starting", lastError: { message: scenario.lastError ?? null, at: null } }]),
+          { gatewayId: "shared-a", status: "ready", mountedUsers: mounted === "shared-a" ? ["lin"] : [] },
+          ...(claim === null && boots > 0 ? [] : [{
+            gatewayId: ISOLATED, status: "starting", mountedUsers: isolatedMounted,
+            lastError: { message: scenario.lastError ?? null, at: null },
+          }]),
         ] };
       }
       if (noun === "user" && verb === "ls") return { users: [{ id: "uid-1", name: "lin", assignedGatewayId: "shared-a" }] };
@@ -62,13 +69,24 @@ function cluster(scenario: Scenario = {}) {
         boot();
         return { dryRun: false, response: { uid: "uid-1", gatewayId: ISOLATED, operationId: "op-1" } };
       }
-      if (noun === "user" && verb === "migrate" && args[3] === "--to=shared-a") { mounted = "shared-a"; return { dryRun: false, response: {} }; }
+      if (noun === "user" && verb === "migrate" && args[3] === "--to=shared-a") {
+        mounted = "shared-a";
+        staleHeartbeats = 2;
+        return { dryRun: false, response: {} };
+      }
       if (noun === "user" && verb === "issue-passwords") {
         return { dryRun: false, response: { chat: { username: "lin", password: "chat-pass" }, git: { username: "ws-lin", password: "git" } } };
       }
       if (noun === "gateway" && verb === "park") { pods = 0; mounted = "none"; return { dryRun: false, response: {} }; }
       if (noun === "gateway" && verb === "resume") { boot(); return { dryRun: false, response: {} }; }
-      if (noun === "gateway" && verb === "retire") { pods = 0; claim = null; return { dryRun: false, response: {} }; }
+      if (noun === "gateway" && verb === "retire") {
+        if (isolatedMounted.length > 0) {
+          throw new Error(`octogee-fleet --env=kind gateway retire ${ISOLATED} --apply exited with 1: gateway ${ISOLATED} still has mounted users: ${isolatedMounted.join(", ")}`);
+        }
+        pods = 0;
+        claim = null;
+        return { dryRun: false, response: {} };
+      }
       throw new Error(`unexpected fleet call ${args.join(" ")}`);
     },
     sql: (query: string, variables: Record<string, string>) => {
