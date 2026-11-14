@@ -17,7 +17,7 @@ import {
 } from "../../../gateway-edge/src/middleware/auth.js";
 import { SIDECAR_BROKER_ROUTES } from "../app.js";
 import { createTenantEnforcementMiddleware, NO_PRODUCT_TENANT_ROUTES } from "../middleware/tenant-enforcement.js";
-import { userIdentityBrokerHandlers } from "./user-identity-broker.js";
+import { USER_IDENTITY_GATEWAY_REQUEST_LIMIT, userIdentityBrokerHandlers } from "./user-identity-broker.js";
 
 const ADA = { username: "ada", accountLifecycle: { status: "active" } };
 
@@ -35,7 +35,8 @@ function api(opts: { bound?: boolean } = {}) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    if (opts.bound !== false) req.boundTenant = { kind: "gateway", gatewayId: "walter", saName: "octogee-gw-walter", podUid: "pod-1", podName: "pod-1" };
+    const gatewayId = req.get("x-bound-gateway") ?? "walter";
+    if (opts.bound !== false) req.boundTenant = { kind: "gateway", gatewayId, saName: `octogee-gw-${gatewayId}`, podUid: "pod-1", podName: "pod-1" };
     next();
   });
   app.use(createTenantEnforcementMiddleware({
@@ -49,15 +50,18 @@ function api(opts: { bound?: boolean } = {}) {
   return app;
 }
 
-function verify(app: express.Express, opts: { bearer?: string; gatewayId?: string } = {}) {
+function verify(app: Parameters<typeof request>[0], opts: { bearer?: string; gatewayId?: string; boundTo?: string } = {}) {
+  const boundTo = opts.boundTo ?? "walter";
   return request(app)
     .post(USER_IDENTITY_BROKER_PATH)
     .set("authorization", `Bearer ${opts.bearer ?? "ada-session"}`)
-    .send({ gatewayId: opts.gatewayId ?? "walter" });
+    .set("x-bound-gateway", boundTo)
+    .send({ gatewayId: opts.gatewayId ?? boundTo });
 }
 
 beforeEach(() => {
   logged.error.mockClear();
+  logged.warn.mockClear();
   installUserIdentityProvider(identity());
 });
 
@@ -97,6 +101,26 @@ describe("the user identity broker for gateway sidecars", () => {
       expect((await verify(app, { bearer: "garbage" })).status).toBe(401);
     }
     expect((await verify(app)).status).toBe(200);
+  }, 60_000);
+
+  it("refuses a gateway's verify calls past its cap before authenticating them, and logs the gateway once", async () => {
+    const server = api().listen();
+    try {
+      for (let sent = 0; sent < USER_IDENTITY_GATEWAY_REQUEST_LIMIT; sent += 50) {
+        const batch = Math.min(50, USER_IDENTITY_GATEWAY_REQUEST_LIMIT - sent);
+        const statuses = await Promise.all(Array.from({ length: batch }, () => verify(server, { bearer: "garbage" }).then(response => response.status)));
+        expect(new Set(statuses)).toEqual(new Set([401]));
+      }
+
+      expect((await verify(server)).status).toBe(429);
+      expect((await verify(server)).status).toBe(429);
+      const refusals = logged.warn.mock.calls.filter(([message]) => message === "[broker-request-limit] refused a tenant over its limit");
+      expect(refusals).toEqual([["[broker-request-limit] refused a tenant over its limit", expect.objectContaining({ gatewayId: "walter", scope: "gateway", limit: USER_IDENTITY_GATEWAY_REQUEST_LIMIT })]]);
+
+      expect((await verify(server, { boundTo: "harriet" })).status).toBe(200);
+    } finally {
+      server.close();
+    }
   }, 60_000);
 
   it("refuses a request that names another gateway", async () => {
