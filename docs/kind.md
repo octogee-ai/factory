@@ -292,11 +292,14 @@ octogee-fleet --env=kind sizing set pod-s --file=pod-s.json --apply
 ```
 
 Move the user to a new isolated gateway of that profile. The command prints the
-new gateway's id. Wait until `user inspect` shows the user mounted on it:
+new gateway's id and the migration's operation id. Wait until `ops inspect`
+shows the migration succeeded. The user is mounted on the new gateway before the
+migration finishes, and the Admin API refuses to park or retire a gateway while
+a migration to or from it is in flight:
 
 ```bash
 octogee-fleet --env=kind user migrate lin --to-isolated=pod-s --apply
-octogee-fleet --env=kind user inspect lin
+octogee-fleet --env=kind ops inspect <operation>
 ```
 
 The fleet controller creates the home claim `octogee-gateway-<id>-data` before
@@ -308,7 +311,7 @@ or no amd64 node.
 - `gateway park <id> --apply` stops the pod and keeps the claim, and
   `gateway resume <id> --apply` starts it again on the same home.
 - `user migrate lin --to=shared-a --apply` returns the user to the shared
-  gateway.
+  gateway. Wait for that migration to succeed too.
 - `gateway retire <id> --apply` then deletes the gateway, its claim and its
   service account.
 
@@ -533,24 +536,27 @@ at the same time:
 
 1. It gives the user an isolated gateway that runs as a pod.
 2. It requires the gateway to mark its workspace identities ready for its
-   boot (`workspace-identity-ready`). Then it runs a Coach round trip whose
-   broker call the ledger records from that gateway.
+   boot (`workspace-identity-ready`), and the migration to succeed. Then it
+   runs a Coach round trip whose broker call the ledger records from that
+   gateway.
 3. It writes a file to the gateway's home, then parks and resumes the gateway.
    It requires the resumed boot, not the one before park, to mark its
    identities ready, and then checks the file.
-4. It returns the user to the shared gateway, retires the isolated one, and
-   checks its home claim is gone.
+4. It returns the user to the shared gateway, waits for that migration to
+   succeed, retires the isolated one, and checks its home claim is gone.
 
 The job reads the identity markers only while the gateway's container is
 running. It fails at once if they can't be read three times in a row while the
 container runs. If the identities never become ready, the job prints the
-gateway's last `Workspace identity initialization failed` log line. When any
-step after the gateway is created fails, the job adds the gateway's pod and
-container states, the events of its Deployment, ReplicaSets, pods and home
-claim, the network policies that select its pod, and the last 40 lines of its
-gateway container's log, and of the previous container's log when the container
-restarted. Tokens, keys, passwords and URL credentials are redacted from
-everything the job prints when it fails.
+gateway's last `Workspace identity initialization failed` log line. If a
+migration ends in any state but succeeded, or is still in flight after 10
+minutes, the job names its status, the step it stopped on and that step's
+error. When any step after the gateway is created fails, the job adds the
+gateway's pod and container states, the events of its Deployment, ReplicaSets,
+pods and home claim, the network policies that select its pod, and the last 40
+lines of its gateway container's log, and of the previous container's log when
+the container restarted. Tokens, keys, passwords and URL credentials are
+redacted from everything the job prints when it fails.
 
 Both jobs run in the `agent-round-trip` environment, which only `main` can use;
 the installer stores the environment's `OPENROUTER_API_KEY` secret in the

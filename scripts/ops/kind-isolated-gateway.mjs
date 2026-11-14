@@ -28,6 +28,8 @@ const IDENTITY_BOOT = "/home/node/.openclaw/workspace-identity-boot";
 const IDENTITY_READY = "/home/node/.openclaw/workspace-identity-ready";
 const HOME_MARKER = "/home/node/kind-isolated-gateway-marker";
 const BOOT_TIMEOUT_MS = 900_000;
+const MIGRATION_TIMEOUT_MS = 600_000;
+const MIGRATION_IN_FLIGHT = new Set(["pending", "running"]);
 const MARKER_READ_FAILURE_LIMIT = 3;
 const LOG_TAIL_LINES = 40;
 const EVENT_LIMIT = 20;
@@ -104,6 +106,39 @@ export async function waitForWorkspaceIdentities(deps, gatewayId, bootBeforePark
     throw new Error(notes.filter(Boolean).join(". "));
   }
   deps.log(`${gatewayId} marked its workspace identities ready for this boot`);
+}
+
+function fieldText(value) {
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function migrationState(operation) {
+  const steps = operation.steps ?? [];
+  const step = steps.find(entry => entry.status === "failed") ?? steps.findLast(entry => entry.status === "running");
+  const error = step?.error ?? operation.error;
+  return `${operation.status}${step ? ` at step ${step.name}` : ""}${error ? `: ${fieldText(error)}` : ""}`;
+}
+
+function migrationOperationId(response, what) {
+  const operationId = response?.operationId;
+  if (typeof operationId !== "string" || operationId === "") throw new Error(`${what} answered without an operation id`);
+  return operationId;
+}
+
+export async function waitForMigration(deps, operationId, gatewayId) {
+  const migration = `migration ${operationId} to ${gatewayId}`;
+  let operation = null;
+  try {
+    await waitFor(() => {
+      operation = deps.fleet(["ops", "inspect", operationId]).operation;
+      if (typeof operation?.status !== "string") throw new Error(`ops inspect ${operationId} answered without an operation status`);
+      return !MIGRATION_IN_FLIGHT.has(operation.status);
+    }, { timeoutMs: MIGRATION_TIMEOUT_MS, intervalMs: 5_000, label: `${migration} to finish` }, deps.clock);
+  } catch (error) {
+    throw new Error(operation ? `${error.message}; it is ${migrationState(operation)}` : error.message);
+  }
+  if (operation.status !== "succeeded") throw new Error(`${migration} ended ${migrationState(operation)}`);
+  deps.log(`${migration} succeeded`);
 }
 
 export function redactSecrets(text) {
@@ -222,23 +257,24 @@ export async function run(deps, options) {
 
   deps.setSizingProfile(POD_SIZING_PROFILE, POD_PROFILE);
   log(`Set sizing profile ${POD_SIZING_PROFILE} to a pod with a ${POD_PROFILE.computer.homeSizeGiB} GiB home`);
+  const giving = `user migrate --to-isolated=${POD_SIZING_PROFILE}`;
   const given = deps.fleet(["user", "migrate", options.user, `--to-isolated=${POD_SIZING_PROFILE}`, "--apply"]).response;
   const gatewayId = given?.gatewayId;
-  if (typeof gatewayId !== "string" || gatewayId === "") {
-    throw new Error(`user migrate --to-isolated=${POD_SIZING_PROFILE} answered without a gateway id`);
-  }
-  log(`Gave ${options.user} isolated gateway ${gatewayId}`);
+  if (typeof gatewayId !== "string" || gatewayId === "") throw new Error(`${giving} answered without a gateway id`);
+  const operationId = migrationOperationId(given, giving);
+  log(`Gave ${options.user} isolated gateway ${gatewayId} in migration ${operationId}`);
   try {
-    return await serveParkResumeAndRetire(deps, options, gatewayId);
+    return await serveParkResumeAndRetire(deps, options, gatewayId, operationId);
   } catch (error) {
     throw new Error(redactSecrets(`${error.message}\n${gatewayDiagnostics(deps, gatewayId)}`));
   }
 }
 
-async function serveParkResumeAndRetire(deps, options, gatewayId) {
+async function serveParkResumeAndRetire(deps, options, gatewayId, operationId) {
   const { log, clock } = deps;
   await waitForWorkspaceIdentities(deps, gatewayId);
   await waitForUserMount(deps, options, gatewayId);
+  await waitForMigration(deps, operationId, gatewayId);
   requireBoundHome(deps, gatewayId);
   const roundTrip = await coachRoundTrip(deps, options,
     { sql: GATEWAY_LEDGER_SQL, variables: { gateway: gatewayId }, caller: `isolated gateway ${gatewayId}` });
@@ -260,7 +296,8 @@ async function serveParkResumeAndRetire(deps, options, gatewayId) {
   }
   log(`Resumed ${gatewayId} with its home intact`);
 
-  deps.fleet(["user", "migrate", options.user, `--to=${options.gateway}`, "--apply"]);
+  const returning = deps.fleet(["user", "migrate", options.user, `--to=${options.gateway}`, "--apply"]).response;
+  await waitForMigration(deps, migrationOperationId(returning, `user migrate --to=${options.gateway}`), options.gateway);
   await waitForUserMount(deps, options, options.gateway, BOOT_TIMEOUT_MS);
   await waitFor(() => {
     const gateway = (deps.fleet(["gateway", "ls"]).gateways ?? []).find(entry => entry.gatewayId === gatewayId);
