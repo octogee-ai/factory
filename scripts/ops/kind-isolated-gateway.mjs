@@ -32,7 +32,7 @@ const MARKER_READ_FAILURE_LIMIT = 3;
 const LOG_TAIL_LINES = 40;
 const EVENT_LIMIT = 20;
 const SECRET_PATTERNS = [
-  [/\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+/gi, "$1 [redacted]"],
+  [/\b(bearer|basic)\s+[a-z0-9._~+/=-]+/gi, "$1 [redacted]"],
   [/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "[redacted]"],
   [/\b(?:sk|ghp|gho|ghs|ghu|github_pat)[-_][A-Za-z0-9_-]{16,}/g, "[redacted]"],
   [/(\/\/)[^\s/:@]+:[^\s/@]+@/g, "$1[redacted]@"],
@@ -175,9 +175,18 @@ function section(title, read) {
 
 export function gatewayDiagnostics(deps, gatewayId) {
   let pods = [];
+  let podReadError = null;
+  try {
+    pods = deps.gatewayPods(gatewayId);
+  } catch (error) {
+    podReadError = error;
+  }
   const lines = [
     `Diagnostics for ${gatewayId}, with secrets redacted:`,
-    ...section("Its pods", () => podLines(pods = deps.gatewayPods(gatewayId))),
+    ...section("Its pods", () => {
+      if (podReadError) throw podReadError;
+      return podLines(pods);
+    }),
     ...section("Its events, oldest first", () => eventLines(deps.gatewayEvents(gatewayId))),
     ...section("Network policies that select its pod", () => policyLines(deps.networkPolicies(), pods)),
     ...section(`The last ${LOG_TAIL_LINES} lines of its gateway container's log`, () => tail(deps.gatewayLog(gatewayId))),
