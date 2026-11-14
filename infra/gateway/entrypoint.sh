@@ -214,6 +214,9 @@ else
   export OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$OPENCLAW_DIR/openclaw.json}"
 fi
 
+# ── Gateway lock records of an earlier gateway container in this pod ────────
+GATEWAY_CLASS="$GATEWAY_CLASS_EFFECTIVE" "$TSX" /octogee/scripts/entrypoints/recover-restarted-gateway-container-locks.ts
+
 # ── Owner-bound runtime system_config restore ───────────────────────────────
 # Isolated gateways run the tracked Gitea checkout as OpenClaw's active
 # regular config file. Restore includes the idempotent schema migration
