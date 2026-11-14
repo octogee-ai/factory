@@ -1,10 +1,11 @@
 import { isUserActivateOperationIdFor } from "@octogee/core/user-activation-lease";
 import { isolatedRuntimeMutationFenced } from "@octogee/core/gateway-retirement-claim";
-import type { PlatformUserRecord, GatewayAssignment, OperationPatch, PlatformStateStore, Stored } from "@octogee/core/platform-state";
+import type { PlatformUserRecord, GatewayAssignment, OperationPatch, PlatformStateStore, PlatformStateTransaction, Stored } from "@octogee/core/platform-state";
 import { readSchedulerMigrationIdentity, type Operation, type SchedulerHandoffState } from "@octogee/shared/types/glm";
 import { readWorkspaceMigrationMarker } from "@octogee/shared/types/workspace-migration";
 import { userActivationRecoveryTargetMatches } from "@octogee/core/fleet-state";
 import { classifyOperationFailure, retryBackoffMs } from "./operation-retry.js";
+import { RETIRE_GATEWAY_KIND } from "./operation-kinds.js";
 
 function handoffAttemptEvidence(operation: Partial<Operation>) {
   const handoff = operation.schedulerHandoff;
@@ -65,12 +66,15 @@ export function releasedUserActivationSourceRecovery(operation: Partial<Operatio
   ].every(Boolean);
 }
 
-function failedPreSyncCleanup(operation: Operation): boolean {
-  const steps = handoffAttemptEvidence(operation)?.steps;
+function preSyncFailedWithUnconfirmedUnmount(steps: Operation["steps"] | undefined): boolean {
   return steps?.length === 3 &&
     steps[0]?.name === "keys-sync-state" && steps[0].status === "done" &&
     steps[1]?.name === "pre-sync-state" && steps[1].status === "failed" &&
     steps[2]?.name === "rollback:unmount-target" && steps[2].status === "failed";
+}
+
+function failedPreSyncCleanup(operation: Operation): boolean {
+  return preSyncFailedWithUnconfirmedUnmount(handoffAttemptEvidence(operation)?.steps);
 }
 
 function incompleteNativeCleanup(error: unknown): boolean {
@@ -212,12 +216,84 @@ export async function rearmOwnedLegacyMigration(input: {
   });
 }
 
+function preparationAwaitingTargetUnmount(operation: Operation & { cancellationRequestedAt?: number }): boolean {
+  return [
+    operation.kind === "migrate-user", operation.status === "failed",
+    operation.input?.source !== "builder-activation-lease",
+    operation.cutoverCommittedAt === undefined, operation.customerMigrationV2 === undefined,
+    operation.cancellationRequestedAt === undefined,
+    operation.schedulerHandoff === undefined || operation.schedulerHandoffReleased === true,
+    preSyncFailedWithUnconfirmedUnmount(operation.steps),
+  ].every(Boolean);
+}
+
+type MigrationEndpoints = { uid: string; fromGatewayId: string; toGatewayId: string };
+
+function migrationEndpoints(operation: Operation): MigrationEndpoints | null {
+  const { uid, fromGatewayId, toGatewayId } = operation.input as Partial<Record<keyof MigrationEndpoints, unknown>>;
+  if (typeof uid !== "string" || typeof fromGatewayId !== "string" || typeof toGatewayId !== "string") return null;
+  return uid && fromGatewayId && toGatewayId && fromGatewayId !== toGatewayId ? { uid, fromGatewayId, toGatewayId } : null;
+}
+
+function preparationHeldAtSource(
+  operationId: string,
+  endpoints: MigrationEndpoints,
+  owner: Stored<PlatformUserRecord>,
+  source: Stored<GatewayAssignment> | null,
+  target: Stored<GatewayAssignment> | null,
+): boolean {
+  const marker = readWorkspaceMigrationMarker({ migration: owner.fences.migration });
+  return [
+    marker?.operationId === operationId, marker?.state === "preparing", marker?.phase === "preparing",
+    owner.gateway?.gatewayId === endpoints.fromGatewayId,
+    owner.fences.restoreFence === undefined, owner.fences.sourceTransferFence === undefined,
+    source?.uid === endpoints.uid, source?.state === "serving", target === null,
+  ].every(Boolean);
+}
+
+async function targetRetired(tx: PlatformStateTransaction, gatewayId: string): Promise<boolean> {
+  const root = await tx.gateways.roots.get(gatewayId);
+  if (root === null) return true;
+  const claim = root.retirementClaim as { operationId?: unknown } | null | undefined;
+  if (root.desiredStatus !== "retired" || typeof claim?.operationId !== "string") return false;
+  const retirement = await tx.journal.operations.get(claim.operationId);
+  return retirement?.kind === RETIRE_GATEWAY_KIND && retirement.status === "succeeded" && retirement.input?.gatewayId === gatewayId;
+}
+
+async function releaseRetiredTargetPreparation(
+  store: PlatformStateStore,
+  operationId: string,
+): Promise<{ uid: string; targetGatewayId: string } | null> {
+  return store.transaction({ label: "legacy-migration-recovery.release-retired-target-preparation" }, async (tx) => {
+    const operation = await tx.journal.operations.get(operationId);
+    const endpoints = operation && preparationAwaitingTargetUnmount(operation) ? migrationEndpoints(operation) : null;
+    if (!operation || !endpoints) return null;
+    const { uid, fromGatewayId, toGatewayId } = endpoints;
+    const [owner, source, target] = await Promise.all([
+      tx.users.records.get(uid),
+      tx.gateways.assignments.get(fromGatewayId, uid),
+      tx.gateways.assignments.get(toGatewayId, uid),
+    ]);
+    if (!owner || !preparationHeldAtSource(operation.id, endpoints, owner, source, target) ||
+        !await targetRetired(tx, toGatewayId)) return null;
+    await tx.users.records.setFence(uid, "migration", CLEAR, owner.fences.migration ?? "absent");
+    return { uid, targetGatewayId: toGatewayId };
+  });
+}
+
 export async function recoverFailedLegacyMigrations(deps: { store: PlatformStateStore; log: (message: string) => void; now: () => number }): Promise<void> {
   const failed = await deps.store.journal.operations.listByStatus(["failed"]);
   for (const operation of failed) {
     try {
       const rearmed = await rearmOwnedLegacyMigration({ store: deps.store, operationId: operation.id, now: deps.now(), admitted: failedRecoveryAdmitted });
-      if (rearmed) deps.log(`[migration-recovery] queued native source recovery for ${operation.id}; assignment and marker remain held`);
+      if (rearmed) {
+        deps.log(`[migration-recovery] queued native source recovery for ${operation.id}; assignment and marker remain held`);
+        continue;
+      }
+      const released = preparationAwaitingTargetUnmount(operation) && await releaseRetiredTargetPreparation(deps.store, operation.id);
+      if (released) {
+        deps.log(`[migration-recovery] released ${operation.id}'s preparation marker for ${released.uid}: target ${released.targetGatewayId} retired before its unmount was confirmed`);
+      }
     } catch (error) {
       deps.log(`[migration-recovery] ${operation.id} recovery admission failed: ${String(error)}`);
     }
