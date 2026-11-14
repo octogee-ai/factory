@@ -1,6 +1,8 @@
 name: Stock OpenClaw
 
 on:
+  push:
+    branches: [stock-openclaw-lane-trial]
   workflow_call:
     inputs:
       image-manifest:
