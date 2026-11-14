@@ -3,9 +3,6 @@ import http from "node:http";
 import * as fs from "node:fs";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, WebSocket } from "ws";
-import { getApps, initializeApp } from "firebase-admin/app";
-import { getAuth } from "firebase-admin/auth";
-import { getFirestore } from "firebase-admin/firestore";
 import { Registry, Counter, Gauge } from "prom-client";
 import { WsUpgradeRouter } from "@octogee/core/ws/upgrade-router";
 import { publicAppOriginsFromEnv } from "@octogee/core/public-app-origins";
@@ -42,7 +39,6 @@ import {
   listLocalDefaultAgentWiredSlugs,
   readOpenclawConfig,
 } from "@octogee/core/local-default-agent-wired";
-import { accountActiveInStore } from "../lib/user-platform-state.js";
 
 import { attachMmWsBridge, createMmWsRegistry } from "./mm-proxy/ws.js";
 import {
@@ -81,7 +77,6 @@ if (process.env.NODE_ENV !== "test") {
 }
 const MM_INTERNAL_URL = process.env.MM_INTERNAL_URL || "https://mm-test.invalid";
 const DEFAULT_OPENCLAW_GATEWAY_URL = "http://127.0.0.1:18789";
-const FIREBASE_PROJECT = process.env.FIREBASE_PROJECT || "octogee";
 const DEFAULT_AGENT_RECONCILE_USERS_DIR = process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers";
 const DEFAULT_AGENT_RECONCILE_OPENCLAW_CONFIG = process.env.OPENCLAW_CONFIG || "/home/node/.openclaw/openclaw.json";
 const DEFAULT_AGENT_RECONCILE_INTERVAL_MS = 60_000;
@@ -357,44 +352,6 @@ function watchBrokerGatewayIdChange(
   }, intervalMs);
   timer.unref?.();
   return () => clearInterval(timer);
-}
-
-if (!getApps().length) {
-  initializeApp({ projectId: FIREBASE_PROJECT });
-  logger.info(`[chat-proxy] Using ADC for project: ${FIREBASE_PROJECT}`);
-}
-const db = getFirestore();
-
-function proxyAuthToken(req: http.IncomingMessage): string | null {
-  const authHeader = req.headers.authorization;
-  if (authHeader?.startsWith("Bearer ") || authHeader?.startsWith("BEARER ")) {
-    return authHeader.slice(7);
-  }
-  return authHeader?.startsWith("Token ") ? authHeader.slice(6) : null;
-}
-
-function authFailureMessage(error: unknown): string {
-  if (typeof error === "object" && error !== null) {
-    const code = (error as { code?: unknown }).code;
-    if (typeof code === "string" && code.length > 0) return code;
-  }
-  return error instanceof Error ? error.message : String(error);
-}
-
-export async function verifyAuth(req: http.IncomingMessage): Promise<string | null> {
-  const token = proxyAuthToken(req);
-  if (!token) return null;
-
-  try {
-    const decoded = await getAuth().verifyIdToken(token, true);
-    const userSnap = await db.collection("users").doc(decoded.uid).get();
-    return userSnap.exists && await accountActiveInStore(decoded.uid)
-      ? decoded.uid
-      : null;
-  } catch (error) {
-    logger.error(`[proxy] auth failed: ${authFailureMessage(error)}`);
-    return null;
-  }
 }
 
 const ALLOWED_ORIGINS = new Set(publicAppOriginsFromEnv());

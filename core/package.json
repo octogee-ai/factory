@@ -365,6 +365,10 @@
       "types": "./dist/firebase.d.ts",
       "default": "./dist/firebase.js"
     },
+    "./lazy-instance": {
+      "types": "./dist/lazy-instance.d.ts",
+      "default": "./dist/lazy-instance.js"
+    },
     "./gateway": {
       "types": "./dist/gateway.d.ts",
       "default": "./dist/gateway.js"

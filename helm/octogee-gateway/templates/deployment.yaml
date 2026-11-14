@@ -632,8 +632,6 @@ spec:
               value: {{ required "env.mmInternalUrl is required (in-cluster MM URL — the folded chat-proxy WS bridge + Activity sink use it)" .Values.env.mmInternalUrl | quote }}
             - name: MM_PUBLIC_URL
               value: {{ .Values.env.mmInternalUrl | quote }}
-            - name: FIREBASE_PROJECT
-              value: {{ .Values.env.firebaseProjectId | quote }}
             - name: OPENCLAW_RUNTIME_BROKER_URL
               value: "http://octogee-api.{{ .Release.Namespace }}.svc.cluster.local:3001"
             - name: CONNECTOR_TOKEN_BROKER_URL

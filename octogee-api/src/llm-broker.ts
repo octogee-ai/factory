@@ -1,7 +1,7 @@
+import { lazyInstance } from "@octogee/core/lazy-instance";
 import { createPostgresModelBrokerUsageLedger } from "@octogee/core/model-broker-usage-ledger";
 import {
   createPlatformStatePool,
-  lazyPlatformStateStore,
   platformDatabaseSettingsFromEnvironment,
   platformStateStoreFromEnvironment,
 } from "@octogee/core/platform-state";
@@ -18,7 +18,7 @@ const databaseLogger = {
   error: (message: string, detail: Readonly<Record<string, unknown>>) => logger.error(message, { ...detail }),
 };
 
-const state = lazyPlatformStateStore(() =>
+const state = lazyInstance(() =>
   platformStateStoreFromEnvironment({ applicationName: "llm-broker", logger: databaseLogger }));
 const usagePool = createPlatformStatePool(platformDatabaseSettingsFromEnvironment(process.env), {
   applicationName: "llm-broker-usage",

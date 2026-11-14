@@ -92,12 +92,13 @@ function owningPackageDir(fromFile: string, repoRoot: string): string | null {
 
 const localPackages = new Map<string, Map<string, string>>();
 
-function localPackageDir(name: string, repoRoot: string): string | undefined {
+function localPackageDir(name: string, repoRoot: string, platformDir: string): string | undefined {
   const root = realpathSync(repoRoot);
-  let packages = localPackages.get(root);
+  const key = join(root, platformDir);
+  let packages = localPackages.get(key);
   if (!packages) {
     packages = new Map();
-    for (const parent of [root, join(root, PLATFORM_DIR), join(root, PRODUCT_ROOT)]) {
+    for (const parent of new Set([root, join(root, platformDir), join(root, PRODUCT_ROOT)])) {
       if (!existsSync(parent)) continue;
       for (const entry of readdirSync(parent, { withFileTypes: true })) {
         const packageDir = join(parent, entry.name);
@@ -106,7 +107,7 @@ function localPackageDir(name: string, repoRoot: string): string | undefined {
         if (packageName) packages.set(packageName, packageDir);
       }
     }
-    localPackages.set(root, packages);
+    localPackages.set(key, packages);
   }
   return packages.get(name);
 }
@@ -119,51 +120,51 @@ function declaredPackageDir(name: string, fromFile: string, repoRoot: string): s
   return spec?.startsWith(FILE_PROTOCOL) ? resolve(consumer, spec.slice(FILE_PROTOCOL.length)) : undefined;
 }
 
-function resolveLocalPackageImport(specifier: string, fromFile: string, repoRoot: string): string | null {
+function resolveLocalPackageImport(specifier: string, fromFile: string, repoRoot: string, platformDir: string): string | null {
   const match = /^(@octogee\/[^/]+)\/(.+)$/u.exec(specifier);
   if (!match) return null;
-  const packageDir = declaredPackageDir(match[1]!, fromFile, repoRoot) ?? localPackageDir(match[1]!, repoRoot);
+  const packageDir = declaredPackageDir(match[1]!, fromFile, repoRoot) ?? localPackageDir(match[1]!, repoRoot, platformDir);
   if (!packageDir) return null;
   const built = readPackageManifest(packageDir).exports?.[`./${match[2]}`]?.default?.replace(/^\.\/dist\//u, "");
   if (built === undefined) return null;
   return resolveSourceFile(join(packageDir, "src", built)) ?? resolveSourceFile(join(packageDir, built));
 }
 
-export function resolveImport(specifier: string, fromFile: string, repoRoot: string): string | null {
+export function resolveImport(specifier: string, fromFile: string, repoRoot: string, platformDir = PLATFORM_DIR): string | null {
   if (specifier.startsWith(".")) return resolveSourceFile(resolve(dirname(fromFile), specifier));
   if (specifier.startsWith("@octogee/core/")) {
-    return resolveSourceFile(join(repoRoot, PLATFORM_DIR, "core/src", specifier.slice("@octogee/core/".length)));
+    return resolveSourceFile(join(repoRoot, platformDir, "core/src", specifier.slice("@octogee/core/".length)));
   }
   if (specifier.startsWith("@octogee/shared/")) {
-    return resolveSourceFile(join(repoRoot, PLATFORM_DIR, "shared", specifier.slice("@octogee/shared/".length)));
+    return resolveSourceFile(join(repoRoot, platformDir, "shared", specifier.slice("@octogee/shared/".length)));
   }
   if (specifier.startsWith("@shared/")) {
-    return resolveSourceFile(join(repoRoot, PLATFORM_DIR, "shared", specifier.slice("@shared/".length)));
+    return resolveSourceFile(join(repoRoot, platformDir, "shared", specifier.slice("@shared/".length)));
   }
   if (specifier.startsWith("@/")) {
     const segments = relative(realpathSync(repoRoot), fromFile).split("/");
-    const pkg = segments[0] === "platform" ? segments.slice(0, 2).join("/") : segments[0]!;
+    const pkg = platformDir !== "" && `${segments[0]}/` === platformDir ? segments.slice(0, 2).join("/") : segments[0]!;
     return resolveSourceFile(join(repoRoot, pkg, "src", specifier.slice(2)));
   }
-  return resolveLocalPackageImport(specifier, fromFile, repoRoot);
+  return resolveLocalPackageImport(specifier, fromFile, repoRoot, platformDir);
 }
 
-export function importsOf(file: string, repoRoot: string): string[] {
-  return importsOfSource(readFileSync(file, "utf8"), file, repoRoot);
+export function importsOf(file: string, repoRoot: string, platformDir = PLATFORM_DIR): string[] {
+  return importsOfSource(readFileSync(file, "utf8"), file, repoRoot, platformDir);
 }
 
-export function importsOfSource(source: string, file: string, repoRoot: string): string[] {
+export function importsOfSource(source: string, file: string, repoRoot: string, platformDir = PLATFORM_DIR): string[] {
   const targets = new Set<string>();
   for (const pattern of SPECIFIER_RES) {
     for (const match of source.matchAll(pattern)) {
-      const resolved = resolveImport(match[1]!, file, repoRoot);
+      const resolved = resolveImport(match[1]!, file, repoRoot, platformDir);
       if (resolved) targets.add(resolved);
     }
   }
   return [...targets];
 }
 
-export function reachableSources(entrypoints: readonly string[], repoRoot: string): Set<string> {
+export function reachableSources(entrypoints: readonly string[], repoRoot: string, platformDir = PLATFORM_DIR): Set<string> {
   const root = realpathSync(repoRoot);
   const seen = new Set<string>();
   for (const entry of entrypoints) {
@@ -174,7 +175,7 @@ export function reachableSources(entrypoints: readonly string[], repoRoot: strin
     const file = queue.pop()!;
     if (seen.has(file)) continue;
     seen.add(file);
-    for (const target of importsOf(file, repoRoot)) {
+    for (const target of importsOf(file, repoRoot, platformDir)) {
       if (!seen.has(target)) queue.push(target);
     }
   }
