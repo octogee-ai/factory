@@ -111,6 +111,12 @@ describe("sizing a Google Cloud install", () => {
     expect(call("sql instances create")).toContain("--availability-type=REGIONAL");
   });
 
+  it("reaches the control plane through its DNS endpoint", () => {
+    expect(host.run("deploy/cloud/gcp.sh", [], { env: SETTINGS }).status).toBe(0);
+    expect(call("clusters create")).toContain("--enable-dns-access");
+    expect(call("clusters get-credentials")).toContain("--dns-endpoint");
+  });
+
   it("starts small in one zone when asked", () => {
     const env = { ...SETTINGS, GCP_ZONE: "us-central1-a", SQL_AVAILABILITY: "ZONAL" };
     expect(host.run("deploy/cloud/gcp.sh", [], { env }).status).toBe(0);
