@@ -23,7 +23,7 @@ const ACTION_CLAIM_ID = columnFor(OPERATION_AUDITS_TABLE, operationKey(""), "act
 const ACTION_STARTED_AT = columnFor(OPERATION_AUDITS_TABLE, operationKey(""), "actionStartedAt");
 export function decodeOperation(row) {
     const operation = decodeStored(OPERATIONS_TABLE, row);
-    return { ...operation, input: operationInputFromStored(operation.input) };
+    return operation.input === undefined ? operation : { ...operation, input: operationInputFromStored(operation.input) };
 }
 export function decodeOperationAudit(row) {
     const audit = decodeStored(OPERATION_AUDITS_TABLE, row);
