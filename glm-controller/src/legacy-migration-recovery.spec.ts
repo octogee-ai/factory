@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import type { Operation } from "@octogee/shared/types/glm";
-import { attemptNeverHeldSource, rearmOwnedLegacyMigration } from "./legacy-migration-recovery.js";
+import { attemptNeverHeldSource, rearmOwnedLegacyMigration, recoverFailedLegacyMigrations } from "./legacy-migration-recovery.js";
 
 function fixture(migrationId: string, operationId = "op-1") {
   const steps = [{ name: "keys-sync-state", status: "failed" as const, error: "request timed out" }];
@@ -67,4 +67,60 @@ describe("released forward-only user activation recovery admission", () => {
       schedulerHandoff: { forwardRecovery: { targetReleased: true }, sourceRecovery: { sourceEpoch: 4, steps: h.operation.steps } } });
     else expect(h.stored()).toBeUndefined();
   });
+});
+
+describe("failed preparation whose target unmount was never confirmed", () => {
+  const target = "alice-xs-12345678";
+  const retirementId = `placement-retire-alice-${target}-g1`;
+  type Scenario = "gone" | "retired" | "running" | "retirement-failed" | "target-assigned" | "unmount-done" | "committed" |
+    "source-moved" | "other-marker" | "activation" | "handoff-held";
+
+  function unconfirmedUnmount(scenario: Scenario) {
+    const h = fixture("mig-op-1:scheduler:1:claim:1000");
+    Object.assign(h.operation, {
+      error: "pre import failed — rollback:unmount-target: transport failed: fetch failed",
+      steps: [
+        { name: "keys-sync-state", status: "done" },
+        { name: "pre-sync-state", status: "failed", error: "Isolated target did not finish normal startup before import; source retained" },
+        { name: "rollback:unmount-target", status: scenario === "unmount-done" ? "done" : "failed", error: "transport failed: fetch failed" },
+      ],
+      schedulerHandoffReleased: scenario !== "handoff-held",
+      ...(scenario === "committed" ? { cutoverCommittedAt: 1_500 } : {}),
+    });
+    Object.assign(h.operation.input, { source: scenario === "activation" ? "builder-activation-lease" : "operator-isolated-gateway", builderSlug: "alice", toGatewayId: target });
+    Object.assign(h.operation.schedulerHandoff!, { toGatewayId: target, stageAfterCutover: true });
+    h.records["users/alice"] = { provisioning: { openclaw: { gatewayId: scenario === "source-moved" ? "shared-b" : "shared-a",
+      migration: { state: "preparing", phase: "preparing", startedAt: 1_000, operationId: scenario === "other-marker" ? "op-2" : "op-1" } } } };
+    if (scenario !== "gone") {
+      h.records[`gateways/${target}`] = { gatewayId: target, desiredRelease: 1, latestRelease: 1, gatewayClass: "builder", ownerUid: "alice",
+        desiredStatus: scenario === "running" ? "running" : "retired", retirementClaim: { operationId: retirementId, version: 1 } };
+      h.records[`glmOperations/${retirementId}`] = { id: retirementId, kind: "retire-gateway", status: scenario === "retirement-failed" ? "failed" : "succeeded",
+        createdBy: "test", createdAt: 2_100, input: { uid: "alice", gatewayId: target } };
+    }
+    if (scenario === "target-assigned") {
+      h.records[`gateways/${target}/assignments/alice`] = { uid: "alice", slug: "alice", gatewayId: target, source: "migrate-user", state: "migrating", epoch: 0,
+        createdAt: 1_200, updatedAt: 1_200, updatedByOperationId: "op-1" };
+    }
+    const logs: string[] = [];
+    const sweep = () => recoverFailedLegacyMigrations({ store: createDocumentFixtureStore(h.records), log: (line) => logs.push(line), now: () => 3_000 });
+    const marker = () => (h.records["users/alice"]?.provisioning as { openclaw?: { migration?: unknown } } | undefined)?.openclaw?.migration;
+    return { ...h, logs, sweep, marker };
+  }
+
+  it.each(["gone", "retired"] as const)("releases the marker once the target is retired (%s)", async (scenario) => {
+    const h = unconfirmedUnmount(scenario);
+    await h.sweep();
+    expect(h.marker()).toBeUndefined();
+    expect(h.stored()).toBeUndefined();
+    expect(h.logs).toEqual([`[migration-recovery] released op-1's preparation marker for alice: target ${target} retired before its unmount was confirmed`]);
+  });
+
+  it.each(["running", "retirement-failed", "target-assigned", "unmount-done", "committed", "source-moved", "other-marker", "activation", "handoff-held"] as const)(
+    "keeps the marker while the target may still hold the user or the operation owns no preparation: %s", async (scenario) => {
+      const h = unconfirmedUnmount(scenario);
+      const before = h.marker();
+      await h.sweep();
+      expect(h.marker()).toEqual(before);
+      expect(h.logs).toEqual([]);
+    });
 });
