@@ -5,26 +5,18 @@ order: 0
 part: Orientation
 audience: [ops, agent]
 description: What this handbook is, who it serves, and how the chapters are organized.
-updated: 2026-07-27
+updated: 2026-11-13
 ---
 
-# Octogee Handbook
+# Handbook
 
-This is the **single source of truth** for operating Octogee **and** for the
-agentic development workflow. It serves two audiences from one set of chapters:
+These chapters cover how to work in this repository: how we write reliable
+code, the PR and effort workflow, testing, repo conventions and docs. They are
+written for contributors, human or agent. Each chapter is a focused file with
+frontmatter, so an agent can load only the one it needs.
 
-- **Operators** (human or agent) running the platform — deploy, verify, rotate
-  credentials, provision environments, troubleshoot, recover.
-- **Coding agents** working in this repo — how we write reliable code, the
-  PR/effort workflow, testing rules, repo conventions.
-
-It replaces the old monolith `docs/operations/RUNBOOK.md`. A monolith is bad for
-both audiences: a human can't find anything, and an agent can't load just the
-slice it needs without dragging in 2,000 irrelevant lines. Each chapter is a
-focused, independently-loadable file with frontmatter.
-
-This handbook carries the Dev Workflow chapters. Operations chapters for a
-hosted deployment live with that deployment.
+Installing and running the platform is covered in `docs/`, starting at
+[getting started](../getting-started.md).
 
 ## How to use it
 
@@ -33,9 +25,7 @@ hosted deployment live with that deployment.
   covers. Treat chapter content as authoritative over training-time assumptions;
   verify against live code/cluster before asserting (see
   [Engineering Principles](10-engineering-principles.md)).
-- **Humans:** browse the chapter map below. (The former Admin → Handbook
-  surface is retired — the handbook lives in the repo, read via the Playbook
-  surface like any workspace's docs.)
+- **Humans:** browse the chapter map below.
 
 ## Conventions
 
@@ -51,5 +41,5 @@ hosted deployment live with that deployment.
 - [10 — Engineering Principles](10-engineering-principles.md) — behavior-first tests, no silent failures, fix root cause, greenfield, no narrative comments.
 - [11 — Testing](11-testing.md) — test layout, Vitest-only, the coverage-audit tool, the scripts/ test-gate nuance.
 - [12 — PR & Effort Workflow](12-pr-and-effort-workflow.md) — small coherent PRs, proportional validation, and explicit merge authority.
-- [13 — Repo Conventions](13-repo-conventions.md) — no npm workspaces, per-package build, lint ratchet, fix-code-not-rules.
+- [13 — Repo Conventions](13-repo-conventions.md) — no npm workspaces, per-package build, internal `dist/` packages, lint, the platform boundary.
 - [14 — Docs & Curation](14-docs-and-curation.md) — the doc taxonomy and delete-stale-work lifecycle.
