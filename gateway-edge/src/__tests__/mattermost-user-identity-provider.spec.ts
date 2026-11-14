@@ -17,6 +17,7 @@ vi.mock("../middleware/logging", () => ({
 }));
 
 const { installUserIdentityProvider, requireAdmin, requireAuth } = await import("../middleware/auth.js");
+const { authenticationFailureLimit } = await import("../middleware/authenticated-request-limit.js");
 const { mattermostUserIdentityProvider, platformStateUserLoader } = await import("../lib/mattermost-user-identity-provider.js");
 const { platformStateStore } = await import("../lib/platform-state.js");
 
@@ -49,10 +50,10 @@ function appWith(fetch: ReturnType<typeof mattermostKnowing>) {
     fetch: fetch as unknown as typeof globalThis.fetch,
   }));
   const app = express();
-  app.get("/me", requireAuth, (req, res) => {
+  app.get("/me", authenticationFailureLimit, requireAuth, (req, res) => {
     res.json({ uid: req.uid, user: req.user, workspaceSlug: req.workspaceSlug, isAdmin: req.isAdmin });
   });
-  app.get("/admin", requireAdmin, (_req, res) => {
+  app.get("/admin", authenticationFailureLimit, requireAdmin, (_req, res) => {
     res.json({ ok: true });
   });
   return app;

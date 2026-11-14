@@ -1,7 +1,9 @@
-import { Router, type Request, type Response } from "express";
+import { Router, type Request, type RequestHandler, type Response } from "express";
 import type { UserDocument } from "@octogee/core/user-identity-provider";
 
+import { requireAuthenticatedUid } from "../../../gateway-edge/src/middleware/auth.js";
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
+import { brokerRequestLimit } from "../middleware/broker-request-limit.js";
 
 function boundGatewayId(req: Request): string | null {
   const bound = req.boundTenant;
@@ -31,4 +33,10 @@ export function createUserIdentityBrokerRoutes(opts: {
   });
 
   return router;
+}
+
+export function userIdentityBrokerHandlers(opts: {
+  loadUser: (uid: string) => Promise<UserDocument | null>;
+}): RequestHandler[] {
+  return [requireAuthenticatedUid, brokerRequestLimit(120, "user"), createUserIdentityBrokerRoutes(opts)];
 }

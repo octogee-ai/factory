@@ -14,11 +14,10 @@ import { USER_IDENTITY_BROKER_PATH } from "../../../gateway-edge/src/lib/brokere
 import {
   installUserIdentityProvider,
   loadUserWithInstalledProvider,
-  requireAuthenticatedUid,
 } from "../../../gateway-edge/src/middleware/auth.js";
 import { SIDECAR_BROKER_ROUTES } from "../app.js";
 import { createTenantEnforcementMiddleware, NO_PRODUCT_TENANT_ROUTES } from "../middleware/tenant-enforcement.js";
-import { createUserIdentityBrokerRoutes } from "./user-identity-broker.js";
+import { userIdentityBrokerHandlers } from "./user-identity-broker.js";
 
 const ADA = { username: "ada", accountLifecycle: { status: "active" } };
 
@@ -46,7 +45,7 @@ function api(opts: { bound?: boolean } = {}) {
     store: createDocumentFixtureStore(new Map()),
     productRoutes: NO_PRODUCT_TENANT_ROUTES,
   }));
-  app.use("/internal/user-identity", requireAuthenticatedUid, createUserIdentityBrokerRoutes({ loadUser: loadUserWithInstalledProvider }));
+  app.use("/internal/user-identity", ...userIdentityBrokerHandlers({ loadUser: loadUserWithInstalledProvider }));
   return app;
 }
 
@@ -90,6 +89,15 @@ describe("the user identity broker for gateway sidecars", () => {
     expect(response.status).toBe(401);
     expect(response.body).toEqual({ error: "Invalid token" });
   });
+
+  it("keeps verifying a gateway's users after many rejected bearers arrive through it", async () => {
+    const app = api();
+
+    for (let attempt = 0; attempt < 1_201; attempt++) {
+      expect((await verify(app, { bearer: "garbage" })).status).toBe(401);
+    }
+    expect((await verify(app)).status).toBe(200);
+  }, 60_000);
 
   it("refuses a request that names another gateway", async () => {
     const response = await verify(api(), { gatewayId: "other" });

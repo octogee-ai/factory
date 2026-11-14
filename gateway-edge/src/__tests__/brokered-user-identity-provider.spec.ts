@@ -12,6 +12,7 @@ vi.mock("../lib/platform-state.js", async () => {
 });
 
 const { installUserIdentityProvider, loadUserWithInstalledProvider, requireAuth } = await import("../middleware/auth.js");
+const { authenticationFailureLimit } = await import("../middleware/authenticated-request-limit.js");
 const {
   brokeredUserIdentityProvider,
   installBrokeredUserIdentity,
@@ -47,7 +48,7 @@ function provider(fetch: ReturnType<typeof broker>, now = () => 0) {
 function sidecar(identity: ReturnType<typeof provider>) {
   installUserIdentityProvider(identity);
   const app = express();
-  app.get("/me", requireAuth, (req, res) => {
+  app.get("/me", authenticationFailureLimit, requireAuth, (req, res) => {
     res.json({ uid: req.uid, user: req.user, workspaceSlug: req.workspaceSlug });
   });
   return app;

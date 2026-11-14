@@ -35,7 +35,7 @@ import { createFleetBrokerRoutes, type ProvisionedUserReport } from "./routes/fl
 import { createOpenClawControlBrokerRoutes } from "./routes/openclaw-control-broker.js";
 import { createAutomationAuthorizationBrokerRoutes } from "./routes/automation-authorization-broker.js";
 import { createWorkspaceGitAuthorizationBrokerRoutes } from "./routes/workspace-git-authorization-broker.js";
-import { createUserIdentityBrokerRoutes } from "./routes/user-identity-broker.js";
+import { userIdentityBrokerHandlers } from "./routes/user-identity-broker.js";
 import { USER_IDENTITY_BROKER_PATH } from "../../gateway-edge/src/lib/brokered-user-identity-provider.js";
 import { createChannelReadinessAuthorizationBrokerRoutes } from "./routes/channel-agent-readiness-authorization-broker.js";
 import { createVoiceConversationRoutes } from "./routes/voice-conversation.js";
@@ -605,11 +605,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   app.use("/internal/openclaw-control", createToolConversationRoutes({ store: platformStateStore, readSizingKey }));
   app.use("/internal/openclaw-control/workspace-access", authenticationFailureLimit, requireAuthenticatedUid, brokerRequestLimit(360, "user"));
   app.use("/internal/openclaw-control", createWorkspaceNativeAccessRoutes({ store: platformStateStore, readSizingKey }));
-  app.use(
-    "/internal/user-identity",
-    authenticationFailureLimit, requireAuthenticatedUid, brokerRequestLimit(120, "user"),
-    createUserIdentityBrokerRoutes({ loadUser: loadUserWithInstalledProvider }),
-  );
+  app.use("/internal/user-identity", ...userIdentityBrokerHandlers({ loadUser: loadUserWithInstalledProvider }));
   app.use("/internal/workspace-git", authenticationFailureLimit, requireAuthenticatedUid, brokerRequestLimit(360, "user"), requireActiveAccount, createWorkspaceGitAuthorizationBrokerRoutes({ store: platformStateStore }));
   app.use("/internal/channel-agent-readiness", authenticationFailureLimit, requireAuthenticatedUid, brokerRequestLimit(360, "user"), requireActiveAccount, createChannelReadinessAuthorizationBrokerRoutes({ store: platformStateStore }));
   app.use(
