@@ -10,21 +10,19 @@ vi.mock("../lib/firebase.js", () => ({
 import { applyGatewayDefaults } from "@octogee/core/gateway";
 
 describe("advisory mode removal", () => {
-  const libDir = path.resolve(__dirname, "..", "lib");
+  const sourceDirs = [path.resolve(__dirname, "..", "lib"), path.resolve(__dirname, "..", "..", "core", "src")];
+  const sourceFiles = sourceDirs.flatMap(dir => fs.readdirSync(dir).filter(f => f.endsWith(".ts")).map(f => path.join(dir, f)));
 
   it("no isAdvisoryMode function exists in any module", () => {
-    const files = fs.readdirSync(libDir).filter(f => f.endsWith(".ts"));
-    for (const file of files) {
-      const content = fs.readFileSync(path.join(libDir, file), "utf-8");
-      expect(content).not.toContain("isAdvisoryMode");
+    expect(sourceFiles.some(file => file.endsWith(path.join("core", "src", "gateway.ts")))).toBe(true);
+    for (const file of sourceFiles) {
+      expect(fs.readFileSync(file, "utf-8"), file).not.toContain("isAdvisoryMode");
     }
   });
 
   it("no syncAdvisorySlugs function exists in any module", () => {
-    const files = fs.readdirSync(libDir).filter(f => f.endsWith(".ts"));
-    for (const file of files) {
-      const content = fs.readFileSync(path.join(libDir, file), "utf-8");
-      expect(content).not.toContain("syncAdvisorySlugs");
+    for (const file of sourceFiles) {
+      expect(fs.readFileSync(file, "utf-8"), file).not.toContain("syncAdvisorySlugs");
     }
   });
 
